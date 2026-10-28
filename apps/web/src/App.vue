@@ -1,18 +1,27 @@
 <script setup lang="ts">
 import Toolbar from "./components/Toolbar.vue";
-import LayersPanel from "./components/LayersPanel.vue";
+import PagesPanel from "./components/PagesPanel.vue";
 import InspectorPanel from "./components/InspectorPanel.vue";
 import CanvasView from "./components/CanvasView.vue";
 import ChatPanel from "./components/ChatPanel.vue";
+import { ui } from "./store";
 </script>
 
 <template>
   <div class="app">
     <CanvasView />
     <Toolbar class="float toolbar rise-in" />
-    <aside class="float left glass rise-in" style="animation-delay: 40ms"><LayersPanel /></aside>
+    <aside class="float left glass rise-in" style="animation-delay: 40ms">
+      <div class="tabs">
+        <button :class="{ on: ui.tab === 'pages' }" @click="ui.tab = 'pages'">页面</button>
+        <button :class="{ on: ui.tab === 'chat' }" @click="ui.tab = 'chat'">对话 <kbd>⌘K</kbd></button>
+      </div>
+      <div class="tab-body">
+        <PagesPanel v-show="ui.tab === 'pages'" />
+        <ChatPanel v-show="ui.tab === 'chat'" />
+      </div>
+    </aside>
     <aside class="float right glass rise-in" style="animation-delay: 80ms"><InspectorPanel /></aside>
-    <ChatPanel class="float chat rise-in" style="animation-delay: 140ms" />
   </div>
 </template>
 
@@ -42,8 +51,70 @@ import ChatPanel from "./components/ChatPanel.vue";
   top: 14px;
   bottom: 14px;
   left: 14px;
-  width: 232px;
-  overflow: auto;
+  width: 300px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.tabs {
+  display: flex;
+  gap: 2px;
+  margin: 10px 10px 0;
+  padding: 2px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+}
+
+.tabs button {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: none;
+  background: transparent;
+  color: var(--text-dim);
+  border-radius: var(--radius-pill);
+  padding: 4px 10px;
+  font-size: 11.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.tabs button:hover {
+  color: var(--text);
+}
+
+.tabs button.on {
+  background: var(--glass-strong);
+  color: var(--text);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong);
+}
+
+.tabs kbd {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--text-faint);
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  padding: 0 3px;
+}
+
+.tab-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.tab-body > * {
+  flex: 1;
+  min-height: 0;
 }
 
 .right {
@@ -52,12 +123,5 @@ import ChatPanel from "./components/ChatPanel.vue";
   right: 14px;
   width: 276px;
   overflow: auto;
-}
-
-.chat {
-  left: 50%;
-  bottom: 14px;
-  translate: -50% 0;
-  z-index: 20;
 }
 </style>

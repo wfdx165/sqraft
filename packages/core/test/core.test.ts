@@ -53,7 +53,7 @@ describe("命令系统", () => {
         { type: "node.create", params: { nodes: [a], parentId: pageId } },
         { type: "node.create", params: { nodes: [b], parentId: pageId } },
         { type: "node.update", params: { nodeId: "a", patch: { x: 10 } } },
-        { type: "token.define", params: { path: "color/accent", tokenType: "color", values: { light: "#f00" } } },
+        { type: "token.define", params: { path: "color/accent", tokenType: "color", value: "#f00" } },
       ]);
       return JSON.stringify({ nodes: store.doc.nodes, tokens: store.doc.tokens });
     };
@@ -120,11 +120,10 @@ describe("布局求解器（golden）", () => {
 });
 
 describe("Token 解析", () => {
-  it("按当前模式解析引用", () => {
+  it("解析引用与字面量；缺失 Token 以示警色返回", () => {
     const doc = createEmptyDoc();
     expect(resolvePaint(doc, { token: "color/primary" })).toBe("#3366ff");
-    doc.activeMode = "dark";
-    expect(resolvePaint(doc, { token: "color/primary" })).toBe("#5b8cff");
     expect(resolvePaint(doc, { value: "#123456" })).toBe("#123456");
+    expect(resolvePaint(doc, { token: "color/missing" })).toBe("#ff00ff");
   });
 });

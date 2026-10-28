@@ -14,6 +14,8 @@ let dirty = true;
 let drag: { pointerId: number; mode: "pan" | "create" | "move"; startX: number; startY: number; startWX: number; startWY: number; offsetX: number; offsetY: number } | null = null;
 let preview: { x: number; y: number; w: number; h: number } | null = null;
 const spaceDown = ref(false);
+const PULSE_MS = 620;
+let pulse: { id: NodeId; start: number } | null = null;
 
 const TOOL_NAMES: Record<string, string> = { frame: "画板", rect: "矩形", ellipse: "椭圆", line: "直线", text: "文本" };
 
@@ -118,11 +120,51 @@ function draw() {
     ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
     ctx.setLineDash([]);
   }
+
+  // 图层面板点击触发的定位脉冲
+  if (pulse) {
+    const n = docStore.doc.nodes[pulse.id];
+    const t = (performance.now() - pulse.start) / PULSE_MS;
+    if (!n || t >= 1) {
+      pulse = null;
+    } else {
+      const a = worldToScreen(vp, n.x, n.y);
+      const b = worldToScreen(vp, n.x + n.width, n.y + n.height);
+      const ease = 1 - (1 - t) * (1 - t);
+      ctx.strokeStyle = `rgba(139, 141, 245, ${(1 - t) * 0.95})`;
+      ctx.lineWidth = 2.5;
+      ctx.shadowColor = "rgba(124, 127, 242, 0.8)";
+      ctx.shadowBlur = 18 * (1 - t);
+      const grow = ease * 6;
+      ctx.strokeRect(a.x - grow, a.y - grow, b.x - a.x + grow * 2, b.y - a.y + grow * 2);
+      ctx.shadowBlur = 0;
+    }
+  }
+
   ctx.restore();
 }
 
+/** 图层面板点击：确保可见（必要时平移居中）并触发脉冲标记。 */
+function focusNode(id: NodeId) {
+  const n = docStore.doc.nodes[id];
+  if (!n) return;
+  const pad = 48;
+  const vx0 = vp.x;
+  const vy0 = vp.y;
+  const vx1 = vp.x + vp.width / vp.zoom;
+  const vy1 = vp.y + vp.height / vp.zoom;
+  const fullyVisible =
+    n.x >= vx0 + pad && n.x + n.width <= vx1 - pad && n.y >= vy0 + pad && n.y + n.height <= vy1 - pad;
+  if (!fullyVisible) {
+    vp.x = n.x + n.width / 2 - vp.width / (2 * vp.zoom);
+    vp.y = n.y + n.height / 2 - vp.height / (2 * vp.zoom);
+  }
+  pulse = { id, start: performance.now() };
+  markDirty();
+}
+
 function loop() {
-  if (dirty) {
+  if (dirty || (pulse && performance.now() - pulse.start < PULSE_MS)) {
     dirty = false;
     draw();
   }
@@ -275,6 +317,8 @@ onMounted(() => {
   ctx = canvasRef.value!.getContext("2d");
   backend = new Canvas2DBackend(ctx!);
   hooks.getScreenshot = async () => canvasRef.value!.toDataURL("image/png");
+  hooks.focusNode = focusNode;
+  hooks.requestRedraw = markDirty;
   unsub = docStore.subscribe(markDirty);
   ro = new ResizeObserver(resize);
   ro.observe(canvasRef.value!.parentElement!);

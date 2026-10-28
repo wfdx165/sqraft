@@ -10,8 +10,7 @@ export type Command =
   | { type: "node.create"; params: { nodes: DocNode[]; parentId: NodeId | null; index?: number } }
   | { type: "node.delete"; params: { nodeId: NodeId } }
   | { type: "node.update"; params: { nodeId: NodeId; patch: Partial<DocNode> } }
-  | { type: "token.define"; params: { path: string; tokenType: "color" | "number"; values: Record<string, string | number> } }
-  | { type: "mode.set"; params: { mode: string } };
+  | { type: "token.define"; params: { path: string; tokenType: "color" | "number"; value: string | number } };
 
 interface Inverse {
   cmd: Command;
@@ -121,7 +120,7 @@ export class DocStore {
         const removed: DocNode[] = [];
         walkSubtree(this.state, nodeId, (n) => removed.push({ ...n, children: [...n.children] }));
         const node = this.state.nodes[nodeId];
-        if (!node) return { cmd: { type: "mode.set", params: { mode: this.state.activeMode } } };
+        if (!node) return { cmd: { type: "node.update", params: { nodeId, patch: {} } } };
         const parentId = node.parentId;
         const parent = parentId ? this.state.nodes[parentId] : null;
         const index = parent ? parent.children.indexOf(nodeId) : this.state.rootIds.indexOf(nodeId);
@@ -138,7 +137,7 @@ export class DocStore {
       case "node.update": {
         const { nodeId, patch } = cmd.params;
         const node = this.state.nodes[nodeId];
-        if (!node) return { cmd: { type: "mode.set", params: { mode: this.state.activeMode } } };
+        if (!node) return { cmd: { type: "node.update", params: { nodeId, patch: {} } } };
         const prev: Record<string, unknown> = {};
         for (const key of Object.keys(patch) as Array<keyof DocNode>) {
           if (key === "style") {
@@ -155,23 +154,17 @@ export class DocStore {
         };
       }
       case "token.define": {
-        const { path, tokenType, values } = cmd.params;
+        const { path, tokenType, value } = cmd.params;
         const prevToken = this.state.tokens[path];
-        this.state.tokens[path] = { type: tokenType, values: { ...values } };
+        this.state.tokens[path] = { type: tokenType, value };
         changed.add("__doc__" as NodeId);
         if (prevToken) {
           return {
-            cmd: { type: "token.define", params: { path, tokenType: prevToken.type, values: prevToken.values } },
+            cmd: { type: "token.define", params: { path, tokenType: prevToken.type, value: prevToken.value } },
           };
         }
         // 新建 token 的逆：无原生命令表达"删除"，用同名空实现占位（骨架级）
-        return { cmd: { type: "token.define", params: { path, tokenType, values } } };
-      }
-      case "mode.set": {
-        const prev = this.state.activeMode;
-        this.state.activeMode = cmd.params.mode;
-        changed.add("__doc__" as NodeId);
-        return { cmd: { type: "mode.set", params: { mode: prev } } };
+        return { cmd: { type: "token.define", params: { path, tokenType, value } } };
       }
     }
   }

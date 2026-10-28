@@ -21,6 +21,7 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、Web 优先）。文档
 6. AI 能力只经 `packages/ai-tools` 的工具定义落地（对话与 MCP 共用同一份）；样式颜色只接受 Token 引用（`fillToken`），`assertToken` 会拒绝字面量色值
 7. 渲染只经 `RenderBackend` 接口；例外是 `CanvasView.vue` 里的选中框/拖拽预览叠加层（UI 局部）
 8. 坐标相对父容器内容区左上角；旋转绕自身中心
+9. 页面 = `DocState.rootIds` 中的 `page` 节点；"当前页面"是 UI 状态（`ui.activePageId`），不是命令的一部分
 
 ## 术语与文档
 

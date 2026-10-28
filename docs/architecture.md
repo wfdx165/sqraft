@@ -126,9 +126,8 @@ interface RenderBackend {
 
 ## 8. Token 系统
 
-- Token 按集合组织：`{ path: "color/primary", type: "color", values: { light: "#3366ff", dark: "#4477ff" } }`；
-- v1 全局模式切换器（light/dark/品牌）；按画板模式覆盖留 v1.5；
-- 节点样式存**Token 引用** `{ token: "color/primary" }`，渲染前解析为具体值（解析缓存按 (token, mode) 键控）；
+- Token：`{ path: "color/primary", type: "color", value: "#3366ff" }` —— 单一取值，不引入模式/主题维度（见 ADR-0006）；
+- 节点样式存**Token 引用** `{ token: "color/primary" }`，渲染前解析为具体值（解析结果按 token 键控缓存）；
 - 导出：W3C DTCG 格式 JSON + 一键生成 CSS 变量；
 - **Agent 纪律**：工具 schema 中样式参数只接受 Token 引用，字面量色值在工具层直接拒绝——这是让 AI 产出可控、可维护的核心手段。
 
@@ -172,7 +171,7 @@ assets/            图片、嵌入字体
 | 工具 | 读/写 | 说明 |
 |---|---|---|
 | `read_document` | 读 | 返回页面/节点树的紧凑摘要 |
-| `get_tokens` | 读 | Token 集合与当前模式取值 |
+| `get_tokens` | 读 | Token 集合与取值 |
 | `create_page / create_node` | 写 | 建页面/节点（样式仅接受 Token 引用） |
 | `update_node` | 写 | 改属性（同上约束） |
 | `delete_node / move_node` | 写 | 结构操作 |

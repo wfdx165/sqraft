@@ -14,11 +14,6 @@ const tokenNames = computed(() => {
   return Object.keys(docStore.doc.tokens);
 });
 
-const activeMode = computed(() => {
-  void ui.version;
-  return docStore.doc.activeMode;
-});
-
 function num(e: Event): number {
   return Number((e.target as HTMLInputElement).value);
 }
@@ -59,10 +54,6 @@ function setFontSize(e: Event) {
   );
 }
 
-function setMode(mode: string) {
-  dispatch({ type: "mode.set", params: { mode } }, "mode");
-}
-
 function setLayout(patch: Record<string, unknown>) {
   if (!node.value || node.value.type !== "frame") return;
   const layout = {
@@ -80,12 +71,6 @@ function fillTokenOf(n: DocNode): string {
 <template>
   <div class="panel">
     <header><span class="micro-label">检查器</span></header>
-
-    <section class="block">
-      <div class="seg">
-        <button v-for="m in docStore.doc.modes" :key="m" :class="{ on: activeMode === m }" @click="setMode(m)">{{ m }}</button>
-      </div>
-    </section>
 
     <template v-if="node && node.type !== 'page'">
       <section class="block">

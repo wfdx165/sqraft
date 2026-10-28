@@ -1,11 +1,11 @@
 <script setup lang="ts">
 /**
- * 对话面板（BYOK）：悬浮胶囊 ⇄ 玻璃卡片，⌘K 切换。
+ * 左栏「对话」模块（BYOK，纯手填接入点）。
  * 与 MCP 共用 packages/ai-tools 的工具定义（ADR-0004）。
  */
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import { makeExecutor, toOpenAITools } from "@sqraft/ai-tools";
-import { docStore, hooks } from "../store";
+import { currentPageId, docStore, hooks, ui } from "../store";
 import Icon from "./Icon.vue";
 
 interface ChatMessage {
@@ -20,11 +20,10 @@ interface ToolCall {
   function: { name: string; arguments: string };
 }
 
-const open = ref(false);
 const cfg = ref({
-  baseUrl: localStorage.getItem("sqraft.baseUrl") ?? "https://api.deepseek.com",
+  baseUrl: localStorage.getItem("sqraft.baseUrl") ?? "https://opencode.ai/zen/go/v1",
   apiKey: localStorage.getItem("sqraft.apiKey") ?? "",
-  model: localStorage.getItem("sqraft.model") ?? "deepseek-chat",
+  model: localStorage.getItem("sqraft.model") ?? "glm-5.3",
 });
 const input = ref("");
 const busy = ref(false);
@@ -39,7 +38,7 @@ const messages: ChatMessage[] = [
   },
 ];
 
-const executor = makeExecutor(docStore, () => hooks.getScreenshot());
+const executor = makeExecutor(docStore, () => hooks.getScreenshot(), () => currentPageId());
 
 function saveCfg() {
   localStorage.setItem("sqraft.baseUrl", cfg.value.baseUrl);
@@ -57,9 +56,11 @@ async function send() {
   busy.value = true;
   try {
     for (let round = 0; round < 8; round++) {
+      const headers: Record<string, string> = { "Content-Type": "application/json" };
+      if (cfg.value.apiKey) headers.Authorization = `Bearer ${cfg.value.apiKey}`;
       const resp = await fetch(`${cfg.value.baseUrl.replace(/\/$/, "")}/chat/completions`, {
         method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${cfg.value.apiKey}` },
+        headers,
         body: JSON.stringify({ model: cfg.value.model, messages, tools: toOpenAITools() }),
       });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}: ${(await resp.text()).slice(0, 200)}`);
@@ -75,7 +76,7 @@ async function send() {
           } catch {
             /* 参数解析失败按空处理，由工具层报错 */
           }
-          log.value.push({ who: "tool", text: `▸ ${tc.function.name} ${JSON.stringify(args).slice(0, 72)}` });
+          log.value.push({ who: "tool", text: `▸ ${tc.function.name} ${JSON.stringify(args).slice(0, 64)}` });
           let result: string;
           try {
             result = await executor(tc.function.name, args);
@@ -99,9 +100,7 @@ async function send() {
 function onKeydown(e: KeyboardEvent) {
   if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
     e.preventDefault();
-    open.value = !open.value;
-  } else if (e.key === "Escape" && open.value) {
-    open.value = false;
+    ui.tab = "chat";
   }
 }
 
@@ -110,26 +109,21 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 </script>
 
 <template>
-  <!-- 收起态：悬浮胶囊 -->
-  <button v-if="!open" class="capsule glass" @click="open = true">
-    <Icon name="send" :size="13" />
-    <span>Ask Sqraft…</span>
-    <kbd>⌘K</kbd>
-  </button>
-
-  <!-- 展开态：玻璃卡片 -->
-  <section v-else class="card glass">
-    <header>
-      <span class="micro-label">AI 助手</span>
-      <span class="dot" />
-      <span class="hint">BYOK · OpenAI 兼容</span>
-      <button class="close" title="收起 (Esc)" @click="open = false"><Icon name="close" :size="13" /></button>
-    </header>
-
+  <div class="chat">
     <div class="cfg">
-      <input v-model="cfg.baseUrl" placeholder="Base URL" />
-      <input v-model="cfg.model" placeholder="model" />
-      <input v-model="cfg.apiKey" type="password" placeholder="API Key（仅存本地）" />
+      <label>
+        <span>接入点</span>
+        <input v-model="cfg.baseUrl" placeholder="https://opencode.ai/zen/go/v1" />
+      </label>
+      <label>
+        <span>模型</span>
+        <input v-model="cfg.model" placeholder="glm-5.3" />
+      </label>
+      <label>
+        <span>API Key</span>
+        <input v-model="cfg.apiKey" type="password" placeholder="可选（key 仅存本地）" />
+      </label>
+      <p class="hint">OpenAI 兼容接口。示例：OpenCode Go / DeepSeek / 本地 Ollama（http://localhost:11434/v1）</p>
     </div>
 
     <div class="log">
@@ -151,115 +145,41 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
         :disabled="busy"
         @keydown.enter.prevent="send"
       />
-      <button class="send" :disabled="busy || !input.trim()" @click="send" title="发送">
+      <button class="send" :disabled="busy || !input.trim()" title="发送" @click="send">
         <span class="ring"><Icon name="send" :size="12" /></span>
       </button>
     </div>
-  </section>
+  </div>
 </template>
 
 <style scoped>
-/* 收起态 */
-.capsule {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 16px;
-  border-radius: var(--radius-pill);
-  color: var(--text-dim);
-  font-size: 12.5px;
-  font-family: inherit;
-  cursor: pointer;
-  transition:
-    transform var(--dur-med) var(--ease),
-    color var(--dur-fast) var(--ease),
-    border-color var(--dur-fast) var(--ease);
-}
-
-.capsule:hover {
-  color: var(--text);
-  border-color: var(--hairline-strong);
-  transform: translateY(-1px);
-}
-
-.capsule:active {
-  transform: scale(0.98);
-}
-
-.capsule kbd {
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--text-faint);
-  border: 1px solid var(--hairline);
-  border-radius: 5px;
-  padding: 1px 5px;
-}
-
-/* 展开态 */
-.card {
-  width: 620px;
-  max-width: calc(100vw - 48px);
+.chat {
   display: flex;
   flex-direction: column;
-  padding: 12px 14px 14px;
+  height: 100%;
   box-sizing: border-box;
-  animation: card-in 420ms var(--ease) both;
-}
-
-@keyframes card-in {
-  from {
-    opacity: 0;
-    transform: translateY(14px) scale(0.98);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0) scale(1);
-  }
-}
-
-header {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding-bottom: 10px;
-}
-
-.dot {
-  width: 4px;
-  height: 4px;
-  border-radius: 50%;
-  background: var(--accent);
-  box-shadow: 0 0 8px var(--accent);
-}
-
-.hint {
-  font-size: 10.5px;
-  color: var(--text-faint);
-}
-
-.close {
-  margin-left: auto;
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  border: none;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-faint);
-  cursor: pointer;
-  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
-}
-
-.close:hover {
-  background: var(--glass-strong);
-  color: var(--text);
+  padding: 4px 10px 10px;
 }
 
 .cfg {
   display: flex;
-  gap: 8px;
+  flex-direction: column;
+  gap: 6px;
   padding-bottom: 10px;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.cfg label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cfg label span {
+  flex: none;
+  width: 44px;
+  font-size: 10.5px;
+  color: var(--text-faint);
 }
 
 .cfg input {
@@ -269,11 +189,13 @@ header {
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   color: var(--text);
-  padding: 5px 9px;
-  font-size: 11.5px;
+  padding: 5px 8px;
+  font-size: 11px;
   font-family: var(--mono);
   outline: none;
-  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
 }
 
 .cfg input:focus {
@@ -281,11 +203,16 @@ header {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+.hint {
+  margin: 0;
+  font-size: 10px;
+  line-height: 1.5;
+  color: var(--text-faint);
+}
+
 .log {
-  height: 168px;
+  flex: 1;
   overflow: auto;
-  border-top: 1px solid var(--hairline);
-  border-bottom: 1px solid var(--hairline);
   padding: 10px 2px;
   display: flex;
   flex-direction: column;
@@ -300,25 +227,26 @@ header {
 
 .empty p {
   margin: 0 0 4px;
-  font-size: 12.5px;
+  font-size: 12px;
   color: var(--text-dim);
 }
 
 .empty span {
-  font-size: 11px;
+  font-size: 10.5px;
+  line-height: 1.6;
 }
 
 .msg {
   display: flex;
-  gap: 10px;
-  font-size: 12px;
+  gap: 8px;
+  font-size: 11.5px;
   line-height: 1.55;
 }
 
 .who {
   flex: none;
-  width: 26px;
-  font-size: 10px;
+  width: 24px;
+  font-size: 9.5px;
   color: var(--text-faint);
   padding-top: 2px;
 }
@@ -330,7 +258,7 @@ header {
 .msg.tool .text {
   color: var(--text-faint);
   font-family: var(--mono);
-  font-size: 10.5px;
+  font-size: 10px;
 }
 
 .text {
@@ -346,21 +274,25 @@ header {
 
 .input-row {
   display: flex;
-  gap: 8px;
-  padding-top: 10px;
+  gap: 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--hairline);
 }
 
 .msg-input {
   flex: 1;
+  min-width: 0;
   background: rgba(255, 255, 255, 0.045);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-pill);
   color: var(--text);
-  padding: 8px 14px;
-  font-size: 12.5px;
+  padding: 7px 12px;
+  font-size: 12px;
   font-family: inherit;
   outline: none;
-  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
 }
 
 .msg-input:focus {
@@ -371,15 +303,15 @@ header {
 .send {
   display: grid;
   place-items: center;
-  padding: 6px;
+  padding: 5px;
   border: 1px solid var(--accent-line);
   background: var(--accent-soft);
   color: var(--text);
   border-radius: 50%;
-  font-size: 12px;
-  font-family: inherit;
   cursor: pointer;
-  transition: transform var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+  transition:
+    transform var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
 }
 
 .send:hover:not(:disabled) {

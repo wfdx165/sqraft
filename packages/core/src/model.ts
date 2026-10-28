@@ -59,17 +59,15 @@ export interface DocNode {
 
 export interface TokenEntry {
   type: "color" | "number";
-  values: Record<string, string | number>;
+  value: string | number;
 }
 
 export interface DocState {
   version: number;
   rootIds: NodeId[];
   nodes: Record<NodeId, DocNode>;
-  /** Token 表：key 形如 "color/primary" */
+  /** Token 表：key 形如 "color/primary"（单一取值，无模式） */
   tokens: Record<string, TokenEntry>;
-  modes: string[];
-  activeMode: string;
 }
 
 let idCounter = 0;
@@ -98,30 +96,27 @@ export function createNode(type: NodeType, patch: Partial<DocNode> = {}): DocNod
 }
 
 export function createEmptyDoc(): DocState {
-  const page = createNode("page", { name: "Page 1", width: 0, height: 0 });
+  const page = createNode("page", { name: "页面 1", width: 0, height: 0 });
   return {
     version: 1,
     rootIds: [page.id],
     nodes: { [page.id]: page },
     tokens: {
-      "color/primary": { type: "color", values: { light: "#3366ff", dark: "#5b8cff" } },
-      "color/surface": { type: "color", values: { light: "#ffffff", dark: "#1e1e24" } },
-      "color/text": { type: "color", values: { light: "#1a1a1a", dark: "#f0f0f5" } },
-      "radius/md": { type: "number", values: { light: 8 } },
+      "color/primary": { type: "color", value: "#3366ff" },
+      "color/surface": { type: "color", value: "#ffffff" },
+      "color/text": { type: "color", value: "#1a1a1a" },
+      "radius/md": { type: "number", value: 8 },
     },
-    modes: ["light", "dark"],
-    activeMode: "light",
   };
 }
 
-/** 解析 Paint → 具体 CSS 值（当前模式）。 */
+/** 解析 Paint → 具体 CSS 值。 */
 export function resolvePaint(state: DocState, paint: Paint | null | undefined): string | undefined {
   if (!paint) return undefined;
   if (paint.token) {
     const entry = state.tokens[paint.token];
     if (!entry) return "#ff00ff"; // 缺失 Token 用洋红示警
-    const v = entry.values[state.activeMode] ?? Object.values(entry.values)[0];
-    return String(v);
+    return String(entry.value);
   }
   return paint.value;
 }
@@ -136,4 +131,17 @@ export function walkSubtree(state: DocState, id: NodeId, visit: (n: DocNode) => 
 
 export function firstPageId(state: DocState): NodeId | null {
   return state.rootIds[0] ?? null;
+}
+
+/** 文档全部页面（rootIds 即页面）。 */
+export function getPages(state: DocState): DocNode[] {
+  return state.rootIds.map((id) => state.nodes[id]).filter(Boolean);
+}
+
+/** 生成不重复的页面默认名："页面 N"。 */
+export function nextPageName(state: DocState): string {
+  const used = new Set(getPages(state).map((p) => p.name));
+  let n = getPages(state).length + 1;
+  while (used.has(`页面 ${n}`)) n += 1;
+  return `页面 ${n}`;
 }

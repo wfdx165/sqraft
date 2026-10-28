@@ -103,20 +103,24 @@ export function assertToken(store: DocStore, token: string | undefined, field: s
   }
 }
 
-export function makeExecutor(store: DocStore, getScreenshot: () => Promise<string>): ToolExecutor {
+export function makeExecutor(
+  store: DocStore,
+  getScreenshot: () => Promise<string>,
+  getActivePageId?: () => NodeId | null,
+): ToolExecutor {
   return async (name, args) => {
     switch (name) {
       case "read_document": {
-        const pages = store.doc.rootIds.map((pid) => ({ pageId: pid, subtree: serializeSubtree(store, pid) }));
-        return JSON.stringify({ activeMode: store.doc.activeMode, pages });
+        const pages = store.doc.rootIds.map((pid) => ({ pageId: pid, name: store.doc.nodes[pid]?.name, subtree: serializeSubtree(store, pid) }));
+        return JSON.stringify({ pages });
       }
       case "get_tokens": {
-        return JSON.stringify({ activeMode: store.doc.activeMode, modes: store.doc.modes, tokens: store.doc.tokens });
+        return JSON.stringify({ tokens: store.doc.tokens });
       }
       case "create_node": {
         const kind = String(args.kind) as "frame" | "rect" | "ellipse" | "line" | "text";
         assertToken(store, args.fillToken as string | undefined, "fillToken");
-        const parentId = (args.parentId as NodeId | undefined) ?? firstPageId(store.doc);
+        const parentId = (args.parentId as NodeId | undefined) ?? getActivePageId?.() ?? firstPageId(store.doc);
         if (!parentId || !store.doc.nodes[parentId]) throw new Error("parentId 不存在");
         const style = args.fillToken ? { fill: { token: args.fillToken as string } } : {};
         const node = createNode(kind, {
