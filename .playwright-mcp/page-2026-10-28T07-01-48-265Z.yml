@@ -1,0 +1,39 @@
+- generic [ref=e3]:
+  - banner [ref=e4]:
+    - generic [ref=e5]: Sqraft
+    - button "选择V" [ref=e6] [cursor=pointer]
+    - button "画板F" [ref=e7] [cursor=pointer]
+    - button "矩形R" [ref=e8] [cursor=pointer]
+    - button "椭圆O" [ref=e9] [cursor=pointer]
+    - button "直线L" [ref=e10] [cursor=pointer]
+    - button "文本T" [ref=e11] [cursor=pointer]
+    - button "撤销" [disabled] [ref=e13]
+    - button "重做" [disabled] [ref=e14]
+    - button "打开" [ref=e15] [cursor=pointer]
+    - button "保存" [ref=e16] [cursor=pointer]
+  - generic [ref=e17]:
+    - complementary [ref=e18]:
+      - generic [ref=e19]:
+        - heading "图层" [level=3] [ref=e20]
+        - generic [ref=e21]: 画布为空，用工具栏画点什么
+    - main [ref=e22]
+    - complementary [ref=e24]:
+      - generic [ref=e25]:
+        - heading "检查器" [level=3] [ref=e26]
+        - generic [ref=e27]:
+          - generic [ref=e28]: 模式
+          - combobox [ref=e29]:
+            - option "light" [selected]
+            - option "dark"
+        - generic [ref=e30]: 选中节点后编辑属性
+  - generic [ref=e31]:
+    - generic [ref=e32]:
+      - generic [ref=e33]: AI 助手
+      - textbox "Base URL" [ref=e34]: https://api.deepseek.com
+      - textbox "model" [ref=e35]: deepseek-chat
+      - textbox "API Key（本地保存）" [ref=e36]
+      - generic [ref=e37]: BYOK · 兼容 OpenAI 接口（DeepSeek/OpenAI/本地 Ollama）
+    - generic [ref=e38]: 试试：帮我做一个登录页卡片，用自动布局
+    - generic [ref=e40]:
+      - textbox "描述你想要的设计…" [ref=e41]
+      - button "发送" [disabled] [ref=e42] [cursor=pointer]
