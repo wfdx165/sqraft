@@ -19,7 +19,7 @@ function drawNode(backend: RenderBackend, ctx: RenderContext, node: DocNode, isR
       backend.drawRect(node, fill, stroke, node.style.strokeWidth, node.style.cornerRadius ?? 0);
       break;
     case "frame":
-      backend.drawRect(node, "#ffffff", "rgba(0,0,0,0.15)", 1, node.style.cornerRadius ?? 0);
+      backend.drawRect(node, "#ffffff", "rgba(0,0,0,0.10)", 1, node.style.cornerRadius ?? 0, true);
       if (isRootChild) backend.drawFrameOutline(node);
       break;
     case "ellipse":
@@ -48,17 +48,12 @@ function drawNode(backend: RenderBackend, ctx: RenderContext, node: DocNode, isR
   }
 }
 
-export function renderDocument(
-  backend: RenderBackend,
-  doc: DocState,
-  vp: Viewport,
-  rootId: NodeId,
-): void {
+/** 绘制文档内容（不含帧生命周期，便于宿主插入背景网格）。 */
+export function drawDocument(backend: RenderBackend, doc: DocState, rootId: NodeId): void {
   const ctx: RenderContext = {
     doc,
     resolveColor: (p) => resolvePaint(doc, p),
   };
-  backend.beginFrame(vp);
   const root = doc.nodes[rootId];
   if (root) {
     for (const childId of root.children) {
@@ -66,5 +61,15 @@ export function renderDocument(
       if (child) drawNode(backend, ctx, child, true);
     }
   }
+}
+
+export function renderDocument(
+  backend: RenderBackend,
+  doc: DocState,
+  vp: Viewport,
+  rootId: NodeId,
+): void {
+  backend.beginFrame(vp);
+  drawDocument(backend, doc, rootId);
   backend.endFrame();
 }

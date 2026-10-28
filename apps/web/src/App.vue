@@ -8,31 +8,56 @@ import ChatPanel from "./components/ChatPanel.vue";
 
 <template>
   <div class="app">
-    <Toolbar />
-    <div class="body">
-      <aside class="left"><LayersPanel /></aside>
-      <main class="center"><CanvasView /></main>
-      <aside class="right"><InspectorPanel /></aside>
-    </div>
-    <ChatPanel />
+    <CanvasView />
+    <Toolbar class="float toolbar rise-in" />
+    <aside class="float left glass rise-in" style="animation-delay: 40ms"><LayersPanel /></aside>
+    <aside class="float right glass rise-in" style="animation-delay: 80ms"><InspectorPanel /></aside>
+    <ChatPanel class="float chat rise-in" style="animation-delay: 140ms" />
   </div>
 </template>
 
 <style scoped>
 .app {
-  display: flex;
-  flex-direction: column;
+  position: relative;
   height: 100%;
-  font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
-  background: #f5f5f7;
-  color: #1a1a1a;
+  overflow: hidden;
+  background:
+    radial-gradient(900px 480px at 18% -10%, var(--bg-glow), transparent 60%),
+    radial-gradient(700px 420px at 92% 108%, rgba(99, 102, 241, 0.05), transparent 60%),
+    var(--bg);
 }
-.body {
-  flex: 1;
-  display: flex;
-  min-height: 0;
+
+.float {
+  position: absolute;
+  z-index: 10;
 }
-.left { width: 220px; overflow: auto; border-right: 1px solid #e2e2e6; background: #fff; }
-.right { width: 260px; overflow: auto; border-left: 1px solid #e2e2e6; background: #fff; }
-.center { flex: 1; min-width: 0; position: relative; }
+
+.toolbar {
+  top: 14px;
+  left: 50%;
+  translate: -50% 0;
+}
+
+.left {
+  top: 14px;
+  bottom: 14px;
+  left: 14px;
+  width: 232px;
+  overflow: auto;
+}
+
+.right {
+  top: 14px;
+  bottom: 14px;
+  right: 14px;
+  width: 276px;
+  overflow: auto;
+}
+
+.chat {
+  left: 50%;
+  bottom: 14px;
+  translate: -50% 0;
+  z-index: 20;
+}
 </style>

@@ -23,7 +23,7 @@ export interface RenderContext {
 
 export interface RenderBackend {
   beginFrame(vp: Viewport): void;
-  drawRect(node: DocNode, fill?: string, stroke?: string, strokeWidth?: number, radius?: number): void;
+  drawRect(node: DocNode, fill?: string, stroke?: string, strokeWidth?: number, radius?: number, shadow?: boolean): void;
   drawEllipse(node: DocNode, fill?: string, stroke?: string, strokeWidth?: number): void;
   drawLine(node: DocNode, stroke?: string, strokeWidth?: number): void;
   drawText(node: DocNode, fill?: string): void;

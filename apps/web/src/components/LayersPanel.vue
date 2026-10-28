@@ -2,6 +2,7 @@
 import { computed } from "vue";
 import type { DocNode, NodeId } from "@sqraft/core";
 import { currentPageId, dispatch, docStore, select, ui } from "../store";
+import Icon from "./Icon.vue";
 
 interface Row {
   node: DocNode;
@@ -23,6 +24,17 @@ const rows = computed<Row[]>(() => {
   return out;
 });
 
+const iconOf: Record<string, string> = {
+  frame: "frame",
+  rect: "rect",
+  ellipse: "ellipse",
+  line: "line",
+  text: "text",
+  group: "group",
+  component: "rect",
+  instance: "rect",
+};
+
 function onClick(row: Row, e: MouseEvent) {
   if (e.shiftKey) {
     const set = new Set(ui.selection);
@@ -37,49 +49,140 @@ function onDelete(id: NodeId) {
   dispatch({ type: "node.delete", params: { nodeId: id } }, "delete");
   select(ui.selection.filter((s) => s !== id));
 }
-
-const typeLabel: Record<string, string> = {
-  frame: "画板", rect: "矩形", ellipse: "椭圆", line: "直线", text: "文本",
-  group: "分组", component: "组件", instance: "实例",
-};
 </script>
 
 <template>
   <div class="panel">
-    <h3>图层</h3>
-    <div v-if="rows.length === 0" class="empty">画布为空，用工具栏画点什么</div>
+    <header>
+      <span class="micro-label">图层</span>
+      <span class="count">{{ rows.length }}</span>
+    </header>
+    <div v-if="rows.length === 0" class="empty">
+      <Icon name="rect" :size="22" />
+      <p>画布为空</p>
+      <span>用工具栏画点什么，或让 AI 生成</span>
+    </div>
     <div
       v-for="row in rows"
       :key="row.node.id"
       class="row"
       :class="{ selected: ui.selection.includes(row.node.id) }"
-      :style="{ paddingLeft: 8 + row.depth * 14 + 'px' }"
+      :style="{ paddingLeft: 6 + row.depth * 12 + 'px' }"
       @click="onClick(row, $event)"
     >
-      <span class="type">{{ typeLabel[row.node.type] ?? row.node.type }}</span>
+      <Icon class="type" :name="iconOf[row.node.type] ?? 'rect'" :size="14" />
       <span class="name">{{ row.node.name }}</span>
-      <button class="del" title="删除" @click.stop="onDelete(row.node.id)">×</button>
+      <button class="act" title="删除" @click.stop="onDelete(row.node.id)"><Icon name="close" :size="12" /></button>
     </div>
   </div>
 </template>
 
 <style scoped>
-.panel { padding: 8px 0; }
-h3 { font-size: 12px; margin: 0 0 6px 10px; color: #666; font-weight: 600; }
-.empty { padding: 10px; font-size: 12px; color: #999; }
+.panel {
+  padding: 12px 6px 10px;
+  height: 100%;
+  box-sizing: border-box;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 8px 10px;
+}
+
+.count {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  background: var(--glass-strong);
+  border-radius: var(--radius-pill);
+  padding: 1px 7px;
+}
+
 .row {
   display: flex;
   align-items: center;
-  gap: 6px;
-  padding: 3px 8px;
+  gap: 8px;
+  height: 28px;
+  padding-right: 6px;
+  border-radius: var(--radius-sm);
   font-size: 12px;
-  cursor: pointer;
-  border-radius: 0;
+  color: var(--text-dim);
+  cursor: default;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
 }
-.row:hover { background: #f0f0f3; }
-.row.selected { background: #e8eeff; }
-.type { color: #888; font-size: 10px; min-width: 26px; }
-.name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.del { visibility: none; border: none; background: none; color: #aaa; cursor: pointer; font-size: 12px; }
-.row:hover .del { visibility: visible; color: #d33; }
+
+.row:hover {
+  background: var(--glass-strong);
+  color: var(--text);
+}
+
+.row.selected {
+  background: var(--accent-soft);
+  color: var(--text);
+  box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.type {
+  flex: none;
+  color: var(--text-faint);
+}
+
+.row.selected .type {
+  color: var(--accent);
+}
+
+.name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.act {
+  display: grid;
+  place-items: center;
+  width: 20px;
+  height: 20px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.row:hover .act {
+  opacity: 1;
+}
+
+.act:hover {
+  color: var(--danger);
+  background: rgba(242, 109, 109, 0.1);
+}
+
+.empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 44px 16px;
+  color: var(--text-faint);
+  text-align: center;
+}
+
+.empty p {
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.empty span {
+  font-size: 11px;
+  line-height: 1.6;
+}
 </style>

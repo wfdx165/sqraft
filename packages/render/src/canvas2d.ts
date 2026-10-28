@@ -37,7 +37,7 @@ export class Canvas2DBackend implements RenderBackend {
     }
   }
 
-  drawRect(node: DocNode, fill?: string, stroke?: string, strokeWidth = 1, radius = 0): void {
+  drawRect(node: DocNode, fill?: string, stroke?: string, strokeWidth = 1, radius = 0, shadow = false): void {
     const ctx = this.ctx;
     ctx.save();
     this.applyRotation(node);
@@ -48,8 +48,16 @@ export class Canvas2DBackend implements RenderBackend {
       ctx.rect(node.x, node.y, node.width, node.height);
     }
     if (fill) {
+      if (shadow) {
+        ctx.shadowColor = "rgba(0, 0, 0, 0.5)";
+        ctx.shadowBlur = 40;
+        ctx.shadowOffsetY = 14;
+      }
       ctx.fillStyle = fill;
       ctx.fill();
+      ctx.shadowColor = "transparent";
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetY = 0;
     }
     if (stroke) {
       ctx.strokeStyle = stroke;

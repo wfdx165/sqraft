@@ -1,11 +1,12 @@
 <script setup lang="ts">
 /**
- * 对话面板（BYOK）：OpenAI 兼容接口 + 工具调用循环。
+ * 对话面板（BYOK）：悬浮胶囊 ⇄ 玻璃卡片，⌘K 切换。
  * 与 MCP 共用 packages/ai-tools 的工具定义（ADR-0004）。
  */
-import { ref } from "vue";
+import { onBeforeUnmount, onMounted, ref } from "vue";
 import { makeExecutor, toOpenAITools } from "@sqraft/ai-tools";
 import { docStore, hooks } from "../store";
+import Icon from "./Icon.vue";
 
 interface ChatMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -19,6 +20,7 @@ interface ToolCall {
   function: { name: string; arguments: string };
 }
 
+const open = ref(false);
 const cfg = ref({
   baseUrl: localStorage.getItem("sqraft.baseUrl") ?? "https://api.deepseek.com",
   apiKey: localStorage.getItem("sqraft.apiKey") ?? "",
@@ -73,7 +75,7 @@ async function send() {
           } catch {
             /* 参数解析失败按空处理，由工具层报错 */
           }
-          log.value.push({ who: "tool", text: `▸ ${tc.function.name} ${JSON.stringify(args).slice(0, 80)}` });
+          log.value.push({ who: "tool", text: `▸ ${tc.function.name} ${JSON.stringify(args).slice(0, 72)}` });
           let result: string;
           try {
             result = await executor(tc.function.name, args);
@@ -93,24 +95,54 @@ async function send() {
     busy.value = false;
   }
 }
+
+function onKeydown(e: KeyboardEvent) {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    open.value = !open.value;
+  } else if (e.key === "Escape" && open.value) {
+    open.value = false;
+  }
+}
+
+onMounted(() => window.addEventListener("keydown", onKeydown));
+onBeforeUnmount(() => window.removeEventListener("keydown", onKeydown));
 </script>
 
 <template>
-  <section class="chat">
-    <div class="head">
-      <span class="title">AI 助手</span>
-      <input v-model="cfg.baseUrl" class="cfg wide" placeholder="Base URL" />
-      <input v-model="cfg.model" class="cfg" placeholder="model" />
-      <input v-model="cfg.apiKey" class="cfg wide" placeholder="API Key（本地保存）" type="password" />
-      <span class="hint">BYOK · 兼容 OpenAI 接口（DeepSeek/OpenAI/本地 Ollama）</span>
+  <!-- 收起态：悬浮胶囊 -->
+  <button v-if="!open" class="capsule glass" @click="open = true">
+    <Icon name="send" :size="13" />
+    <span>Ask Sqraft…</span>
+    <kbd>⌘K</kbd>
+  </button>
+
+  <!-- 展开态：玻璃卡片 -->
+  <section v-else class="card glass">
+    <header>
+      <span class="micro-label">AI 助手</span>
+      <span class="dot" />
+      <span class="hint">BYOK · OpenAI 兼容</span>
+      <button class="close" title="收起 (Esc)" @click="open = false"><Icon name="close" :size="13" /></button>
+    </header>
+
+    <div class="cfg">
+      <input v-model="cfg.baseUrl" placeholder="Base URL" />
+      <input v-model="cfg.model" placeholder="model" />
+      <input v-model="cfg.apiKey" type="password" placeholder="API Key（仅存本地）" />
     </div>
+
     <div class="log">
-      <div v-if="log.length === 0" class="empty">试试：帮我做一个登录页卡片，用自动布局</div>
+      <div v-if="log.length === 0" class="empty">
+        <p>描述你要的设计，我来画。</p>
+        <span>试试：「做一个登录卡片，用自动布局和 Token 配色」</span>
+      </div>
       <div v-for="(m, i) in log" :key="i" class="msg" :class="m.who">
         <span class="who">{{ m.who === "user" ? "你" : m.who === "tool" ? "工具" : "AI" }}</span>
         <span class="text">{{ m.text }}</span>
       </div>
     </div>
+
     <div class="input-row">
       <input
         v-model="input"
@@ -119,34 +151,261 @@ async function send() {
         :disabled="busy"
         @keydown.enter.prevent="send"
       />
-      <button :disabled="busy || !input.trim()" @click="send">{{ busy ? "…" : "发送" }}</button>
+      <button class="send" :disabled="busy || !input.trim()" @click="send" title="发送">
+        <span class="ring"><Icon name="send" :size="12" /></span>
+      </button>
     </div>
   </section>
 </template>
 
 <style scoped>
-.chat {
-  height: 170px;
-  border-top: 1px solid #e2e2e6;
-  background: #fff;
+/* 收起态 */
+.capsule {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 16px;
+  border-radius: var(--radius-pill);
+  color: var(--text-dim);
+  font-size: 12.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    transform var(--dur-med) var(--ease),
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.capsule:hover {
+  color: var(--text);
+  border-color: var(--hairline-strong);
+  transform: translateY(-1px);
+}
+
+.capsule:active {
+  transform: scale(0.98);
+}
+
+.capsule kbd {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--text-faint);
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+
+/* 展开态 */
+.card {
+  width: 620px;
+  max-width: calc(100vw - 48px);
   display: flex;
   flex-direction: column;
-  padding: 6px 10px;
+  padding: 12px 14px 14px;
   box-sizing: border-box;
+  animation: card-in 420ms var(--ease) both;
 }
-.head { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
-.title { font-size: 12px; font-weight: 600; color: #666; margin-right: 4px; }
-.cfg { border: 1px solid #e2e2e6; border-radius: 4px; padding: 2px 6px; font-size: 11px; width: 120px; }
-.cfg.wide { width: 200px; }
-.hint { font-size: 10px; color: #aaa; margin-left: auto; }
-.log { flex: 1; overflow: auto; font-size: 12px; }
-.empty { color: #aaa; font-size: 12px; padding: 4px 0; }
-.msg { display: flex; gap: 6px; padding: 2px 0; }
-.who { min-width: 30px; color: #999; font-size: 11px; }
-.msg.ai .who { color: #3366ff; }
-.msg.tool .text { color: #888; font-family: ui-monospace, monospace; font-size: 11px; }
-.input-row { display: flex; gap: 6px; margin-top: 4px; }
-.msg-input { flex: 1; border: 1px solid #d5d5da; border-radius: 6px; padding: 4px 8px; font-size: 12px; }
-button { border: 1px solid #3366ff; background: #3366ff; color: #fff; border-radius: 6px; padding: 4px 12px; font-size: 12px; cursor: pointer; }
-button:disabled { opacity: 0.4; }
+
+@keyframes card-in {
+  from {
+    opacity: 0;
+    transform: translateY(14px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-bottom: 10px;
+}
+
+.dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 8px var(--accent);
+}
+
+.hint {
+  font-size: 10.5px;
+  color: var(--text-faint);
+}
+
+.close {
+  margin-left: auto;
+  display: grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease), color var(--dur-fast) var(--ease);
+}
+
+.close:hover {
+  background: var(--glass-strong);
+  color: var(--text);
+}
+
+.cfg {
+  display: flex;
+  gap: 8px;
+  padding-bottom: 10px;
+}
+
+.cfg input {
+  flex: 1;
+  min-width: 0;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 5px 9px;
+  font-size: 11.5px;
+  font-family: var(--mono);
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+
+.cfg input:focus {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.log {
+  height: 168px;
+  overflow: auto;
+  border-top: 1px solid var(--hairline);
+  border-bottom: 1px solid var(--hairline);
+  padding: 10px 2px;
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+}
+
+.empty {
+  margin: auto;
+  text-align: center;
+  color: var(--text-faint);
+}
+
+.empty p {
+  margin: 0 0 4px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.empty span {
+  font-size: 11px;
+}
+
+.msg {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.who {
+  flex: none;
+  width: 26px;
+  font-size: 10px;
+  color: var(--text-faint);
+  padding-top: 2px;
+}
+
+.msg.ai .who {
+  color: var(--accent);
+}
+
+.msg.tool .text {
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 10.5px;
+}
+
+.text {
+  flex: 1;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.msg.user .text {
+  color: var(--text);
+}
+
+.input-row {
+  display: flex;
+  gap: 8px;
+  padding-top: 10px;
+}
+
+.msg-input {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.045);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  color: var(--text);
+  padding: 8px 14px;
+  font-size: 12.5px;
+  font-family: inherit;
+  outline: none;
+  transition: border-color var(--dur-fast) var(--ease), box-shadow var(--dur-fast) var(--ease);
+}
+
+.msg-input:focus {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.send {
+  display: grid;
+  place-items: center;
+  padding: 6px;
+  border: 1px solid var(--accent-line);
+  background: var(--accent-soft);
+  color: var(--text);
+  border-radius: 50%;
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: transform var(--dur-fast) var(--ease), background var(--dur-fast) var(--ease);
+}
+
+.send:hover:not(:disabled) {
+  background: rgba(124, 127, 242, 0.24);
+}
+
+.send:active:not(:disabled) {
+  transform: scale(0.97);
+}
+
+.send:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.ring {
+  display: grid;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.send:hover:not(:disabled) .ring {
+  transform: translate(1px, -1px) scale(1.05);
+}
 </style>

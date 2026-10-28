@@ -1,0 +1,39 @@
+<script setup lang="ts">
+/** 超细线性图标集（1.25px 描边，自绘，不依赖图标库） */
+const props = withDefaults(defineProps<{ name: string; size?: number }>(), { size: 16 });
+
+const paths: Record<string, string> = {
+  select: "M5.5 3.5 18 11l-5.4 1.4L9.8 18z",
+  frame: "M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16",
+  rect: "M5 6.5h14v11H5z",
+  ellipse: "M12 5.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13z",
+  line: "M5.5 18.5 18.5 5.5",
+  text: "M6 5.5h12M12 5.5v13M9 18.5h6",
+  undo: "M8.5 5 4.5 9l4 4M4.5 9H13a5.5 5.5 0 0 1 0 11H9",
+  redo: "M15.5 5l4 4-4 4M19.5 9H11a5.5 5.5 0 0 0 0 11h4",
+  open: "M3.5 8V6a1.5 1.5 0 0 1 1.5-1.5h4L11 7h7.5A1.5 1.5 0 0 1 20 8.5V17a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17V8z",
+  save: "M12 4.5v9m0 0-3.5-3.5M12 13.5 15.5 10M4.5 16.5v2A1.5 1.5 0 0 0 6 20h12a1.5 1.5 0 0 0 1.5-1.5v-2",
+  send: "M6 18 18 6M18 6H9.5M18 6v8.5",
+  close: "M6 6l12 12M18 6 6 18",
+  plus: "M12 5v14M5 12h14",
+  chevron: "M7 10l5 5 5-5",
+  eye: "M2.5 12S6 6.5 12 6.5 21.5 12 21.5 12 18 17.5 12 17.5 2.5 12 2.5 12zM12 14.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z",
+  group: "M5 8V5.5h2.5M16.5 5.5H19V8M19 16v2.5h-2.5M7.5 18.5H5V16M9.5 9.5h5v5h-5z",
+};
+</script>
+
+<template>
+  <svg
+    :width="props.size"
+    :height="props.size"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="1.25"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path :d="paths[props.name] ?? paths.rect" />
+  </svg>
+</template>
