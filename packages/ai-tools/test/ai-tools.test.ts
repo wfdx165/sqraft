@@ -387,3 +387,74 @@ describe("AI 工具：属性 / 插槽 / 替换 / 脱离", () => {
     expect(flat.find((n) => n.id === cloneId)?.text).toBe("AI 覆盖");
   });
 });
+
+describe("AI 工具：自动布局与排版", () => {
+  it("create_node 的 layout 会立即参与求解", async () => {
+    const { store, run } = setup();
+    const frame = await call(run, "create_node", {
+      kind: "frame",
+      width: 300,
+      height: 100,
+      layout: { direction: "horizontal", gap: 10, padding: 5 },
+    });
+    const rect = await call(run, "create_node", {
+      kind: "rect",
+      parentId: frame.nodeId,
+      width: 50,
+      height: 20,
+    });
+    const child = store.doc.nodes[rect.nodeId as string];
+    expect(child).toMatchObject({ x: 5, y: 5 });
+  });
+
+  it("update_node 支持旋转、锁定与文本排版字段", async () => {
+    const { store, run } = setup();
+    const text = await call(run, "create_node", { kind: "text", text: "Hello" });
+    const id = text.nodeId as string;
+    await call(run, "update_node", {
+      nodeId: id,
+      rotation: 15,
+      opacity: 0.5,
+      fontSize: 24,
+      fontWeight: 700,
+      textAlignment: "center",
+      textAlign: "center",
+      lineHeight: 32,
+      lineHeightUnit: "px",
+      letterSpacing: 2,
+      textCase: "upper",
+      textDecoration: "underline",
+    });
+    expect(store.doc.nodes[id]).toMatchObject({ rotation: 15, opacity: 0.5 });
+    expect(store.doc.nodes[id].style).toMatchObject({
+      fontSize: 24,
+      fontWeight: 700,
+      textAlign: "center",
+      lineHeight: 32,
+      lineHeightUnit: "px",
+      letterSpacing: 2,
+      textCase: "upper",
+      textDecoration: "underline",
+    });
+  });
+
+  it("锁定后 update_node 与 delete_node 被拒绝", async () => {
+    const { store, run } = setup();
+    const rect = await call(run, "create_node", { kind: "rect" });
+    await call(run, "update_node", { nodeId: rect.nodeId, locked: true });
+    expect(store.doc.nodes[rect.nodeId as string].locked).toBe(true);
+    await expect(run("update_node", { nodeId: rect.nodeId, width: 10 })).rejects.toThrow(/锁定/);
+    await expect(run("delete_node", { nodeId: rect.nodeId })).rejects.toThrow(/锁定/);
+    await call(run, "update_node", { nodeId: rect.nodeId, locked: false });
+    await call(run, "update_node", { nodeId: rect.nodeId, width: 10 });
+    expect(store.doc.nodes[rect.nodeId as string].width).toBe(10);
+  });
+
+  it("文本自动尺寸使用宿主注入的测量函数", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = firstPageId(store.doc)!;
+    const run = makeExecutor(store, async () => "", () => pageId, () => ({ width: 123, height: 45 }));
+    const text = await call(run, "create_node", { kind: "text", text: "Hello" });
+    expect(store.doc.nodes[text.nodeId as string]).toMatchObject({ width: 123, height: 45 });
+  });
+});

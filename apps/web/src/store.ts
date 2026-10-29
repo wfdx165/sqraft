@@ -4,6 +4,7 @@
  */
 import { reactive } from "vue";
 import { DocStore, createEmptyDoc, firstPageId, type Command, type NodeId } from "@sqraft/core";
+import { textSizeOf } from "./text-metrics";
 
 export type ToolKind = "select" | "frame" | "rect" | "ellipse" | "triangle" | "line" | "path" | "text";
 export type PanelTab = "chat" | "pages" | "tokens" | "components";
@@ -39,7 +40,33 @@ docStore.subscribe(() => {
   }
   ui.selection = ui.selection.filter((id) => docStore.doc.nodes[id]);
   ui.instanceContext = ui.instanceContext.filter((id) => docStore.doc.nodes[id]?.type === "instance");
+  queueMicrotask(reflowAutoHeightText);
 });
+
+let reflowing = false;
+
+/**
+ * 自动高度文本：宽度由布局或用户决定，高度必须由测量得出。
+ * 测量在 UI 层完成，写回走 applyDerived（不进撤销栈）。
+ */
+function reflowAutoHeightText(): void {
+  if (reflowing) return;
+  const updates: Command[] = [];
+  for (const n of Object.values(docStore.doc.nodes)) {
+    if (n.type !== "text" || (n.textAutoResize ?? "auto-width") !== "auto-height") continue;
+    const size = textSizeOf(n, n.style, n.text ?? "");
+    if (Math.abs(size.height - n.height) > 0.5) {
+      updates.push({ type: "node.update", params: { nodeId: n.id, patch: { height: size.height } } });
+    }
+  }
+  if (updates.length === 0) return;
+  reflowing = true;
+  try {
+    docStore.applyDerived(updates);
+  } finally {
+    reflowing = false;
+  }
+}
 
 /** 切换模式：拖动模式清空选区（纯浏览）；编辑模式的取景由 CanvasView 负责。 */
 export function switchMode(mode: EditorMode): void {

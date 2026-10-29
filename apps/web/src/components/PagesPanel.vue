@@ -34,6 +34,8 @@ const rows = computed<Row[]>(() => {
     const node = docStore.doc.nodes[id];
     if (!node) return;
     if (node.type !== "page") out.push({ node, depth });
+    // 锁定整棵子树：后代在解锁前不可选
+    if (node.locked) return;
     // 实例默认折叠，展开后才显示内部图层
     if (node.type === "instance" && !ui.expandedLayers[node.id]) return;
     for (const c of node.children) visit(c, depth + 1);
@@ -58,6 +60,10 @@ const iconOf: Record<string, string> = {
   instance: "component",
   slot: "slot",
 };
+
+function toggleLayerLock(n: DocNode): void {
+  dispatch({ type: "node.update", params: { nodeId: n.id, patch: { locked: !n.locked } } }, "lock");
+}
 
 /* ---------- 页面操作 ---------- */
 
@@ -141,11 +147,21 @@ function deletePage(page: DocNode) {
 
 /* ---------- 图层操作 ---------- */
 
+/** 节点所属页面（嵌套图层的 parentId 不是页面）。 */
+function pageOf(node: DocNode): string | null {
+  let cur: DocNode | undefined = node;
+  while (cur && cur.type !== "page") {
+    cur = cur.parentId ? docStore.doc.nodes[cur.parentId] : undefined;
+  }
+  return cur?.id ?? null;
+}
+
 function onLayerClick(row: Row, e: MouseEvent) {
   // 编辑模式：点其它页的图层时先切换活动页，再选中（淡化只是提示，不是墙）
-  if (ui.mode === "edit" && row.node.parentId && row.node.parentId !== ui.activePageId) {
-    ui.activePageId = row.node.parentId;
-    ui.expandedPageId = row.node.parentId;
+  const pageId = pageOf(row.node);
+  if (ui.mode === "edit" && pageId && pageId !== ui.activePageId) {
+    ui.activePageId = pageId;
+    ui.expandedPageId = pageId;
   }
   if (e.shiftKey) {
     const set = new Set(ui.selection);
@@ -237,7 +253,14 @@ function onLayerDelete(id: NodeId) {
               {{ row.node.slotFilled ? "已填充" : row.node.children.length ? "默认" : "空插槽" }}
             </span>
             <span v-if="hasOverride(row.node)" class="ovr" title="有覆盖" />
-            <button class="act" title="删除" @click.stop="onLayerDelete(row.node.id)"><Icon name="close" :size="11" /></button>
+            <button
+              v-if="row.node.locked"
+              class="act lock"
+              title="解锁"
+              @click.stop="toggleLayerLock(row.node)"
+            >🔒</button>
+            <button v-else class="act lock ghost" title="锁定" @click.stop="toggleLayerLock(row.node)">🔓</button>
+            <button v-if="!row.node.locked" class="act" title="删除" @click.stop="onLayerDelete(row.node.id)"><Icon name="close" :size="11" /></button>
           </div>
         </div>
       </div>

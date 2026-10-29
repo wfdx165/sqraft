@@ -24,6 +24,7 @@ import {
   type SyncOp,
 } from "./component";
 import { normalizeVector, scaleVector, validateVector, vectorBounds, type VectorPath } from "./vector";
+import { collectLayoutContainers, solveContainer } from "./layout-pass";
 
 export type Command =
   | { type: "node.create"; params: { nodes: DocNode[]; parentId: NodeId | null; index?: number } }
@@ -894,6 +895,86 @@ export class DocStore {
     }
   }
 
+  /** 节点自身或任一祖先是否锁定。 */
+  private isLockedChain(nodeId: NodeId): boolean {
+    let cur: DocNode | undefined = this.state.nodes[nodeId];
+    while (cur) {
+      if (cur.locked) return true;
+      cur = cur.parentId ? this.state.nodes[cur.parentId] : undefined;
+    }
+    return false;
+  }
+
+  /**
+   * 锁定校验只作用于「用户命令入口」：系统同步、布局写回与撤销回放走 applyOne，不经过这里。
+   * 只允许对锁定节点修改 locked 本身。
+   */
+  private validateLocks(list: Command[]): void {
+    for (const cmd of list) {
+      switch (cmd.type) {
+        case "node.update": {
+          const node = this.state.nodes[cmd.params.nodeId];
+          if (!node) break;
+          const keys = Object.keys(cmd.params.patch);
+          if (keys.length === 0) break;
+          if (keys.every((k) => k === "locked")) break;
+          if (this.isLockedChain(node.id)) throw new Error(`节点「${node.name}」已锁定`);
+          break;
+        }
+        case "node.delete": {
+          const node = this.state.nodes[cmd.params.nodeId];
+          if (node && this.isLockedChain(node.id)) throw new Error(`节点「${node.name}」已锁定`);
+          break;
+        }
+        case "node.create": {
+          const parentId = cmd.params.parentId;
+          if (parentId && this.isLockedChain(parentId)) throw new Error("不能修改已锁定节点的内容");
+          break;
+        }
+        case "node.reparent": {
+          const { nodeId, parentId } = cmd.params;
+          if (this.isLockedChain(nodeId)) throw new Error("不能移动已锁定节点");
+          if (this.isLockedChain(parentId)) throw new Error("不能修改已锁定节点的内容");
+          break;
+        }
+        case "instance.create": {
+          if (this.isLockedChain(cmd.params.parentId)) throw new Error("不能修改已锁定节点的内容");
+          break;
+        }
+        default:
+          break;
+      }
+    }
+  }
+
+  /** 事务末尾的布局求解：结果写回与用户命令共用同一个撤销条目。 */
+  private runLayoutPass(changed: Set<NodeId>, inverses: Inverse[]): void {
+    const containers = collectLayoutContainers(this.state, changed);
+    for (const id of containers) {
+      const container = this.state.nodes[id];
+      if (!container?.layout) continue;
+      const solved = solveContainer(this.state, container);
+      if (!solved) continue;
+      for (const item of solved.items) {
+        const child = this.state.nodes[item.id];
+        if (!child) continue;
+        const patch: Partial<DocNode> = {};
+        for (const key of ["x", "y", "width", "height"] as const) {
+          if (Math.abs((child[key] as number) - item[key]) > 0.001) patch[key] = item[key];
+        }
+        if (Object.keys(patch).length > 0) {
+          inverses.unshift(this.applyOne({ type: "node.update", params: { nodeId: item.id, patch } }, changed));
+        }
+      }
+      const box: Partial<DocNode> = {};
+      if (Math.abs(container.width - solved.width) > 0.001) box.width = solved.width;
+      if (Math.abs(container.height - solved.height) > 0.001) box.height = solved.height;
+      if (Object.keys(box).length > 0) {
+        inverses.unshift(this.applyOne({ type: "node.update", params: { nodeId: container.id, patch: box } }, changed));
+      }
+    }
+  }
+
   /**
    * 批命令前置校验：applyOne 内会抛错的规则全部前移。
    * 保证「要么全成、要么全不成」——中途抛错不会留下已生效但没进撤销栈的改动。
@@ -973,6 +1054,7 @@ export class DocStore {
   /** 应用一条或一批命令（原子）；自动记录逆命令供撤销。 */
   apply(cmds: Command | Command[], label = "edit"): void {
     const list = this.expand(Array.isArray(cmds) ? cmds : [cmds]);
+    this.validateLocks(list);
     const affected = new Set<NodeId>();
     for (const cmd of list) this.collectAffected(cmd, affected);
     const pending = new Set<NodeId>();
@@ -989,6 +1071,7 @@ export class DocStore {
     this.cleanupDeletedProperties(cleanup, affected, changed, inverses);
     this.recordOverrides(list, affected, changed, inverses);
     this.syncComponents(affected, changed, inverses);
+    this.runLayoutPass(changed, inverses);
     if (inverses.length > 0) {
       this.undoStack.push({ label, inverses });
       this.redoStack = [];
@@ -1066,6 +1149,7 @@ export class DocStore {
           const at = index ?? parent.children.length;
           parent.children.splice(at, 0, rootId);
           storedNodes[0].parentId = parent.id;
+          changed.add(parent.id);
         } else {
           this.state.rootIds.push(rootId);
         }
@@ -1083,6 +1167,7 @@ export class DocStore {
         const index = parent ? parent.children.indexOf(nodeId) : this.state.rootIds.indexOf(nodeId);
         if (parent) parent.children.splice(parent.children.indexOf(nodeId), 1);
         else this.state.rootIds.splice(this.state.rootIds.indexOf(nodeId), 1);
+        if (parent) changed.add(parent.id);
         for (const n of removed) {
           delete this.state.nodes[n.id];
           changed.add(n.id);
@@ -1236,6 +1321,31 @@ export class DocStore {
     this.undoStack = [];
     this.redoStack = [];
     this.emit(new Set());
+  }
+
+  /** 派生几何允许写回的字段：只限几何，不允许借道改样式/文本/结构。 */
+  private static readonly DERIVED_KEYS = new Set(["x", "y", "width", "height"]);
+
+  /**
+   * 派生几何写回（如文本自动高度）：不进撤销栈，仍走同一套 applyOne 与布局 pass。
+   * 只允许由宿主在测量完成后调用，且只接受 `node.update` 的几何字段。
+   */
+  applyDerived(cmds: Command | Command[]): void {
+    const list = this.expand(Array.isArray(cmds) ? cmds : [cmds]);
+    for (const cmd of list) {
+      if (cmd.type !== "node.update") throw new Error("applyDerived 只接受 node.update");
+      const keys = Object.keys(cmd.params.patch);
+      if (keys.length === 0 || keys.some((key) => !DocStore.DERIVED_KEYS.has(key))) {
+        throw new Error("applyDerived 只允许写回 x / y / width / height");
+      }
+    }
+    const changed = new Set<NodeId>();
+    for (const cmd of list) this.applyOne(cmd, changed);
+    this.runLayoutPass(changed, []);
+    if (changed.size > 0) {
+      this.state.version += 1;
+      this.emit(changed);
+    }
   }
 
   snapshot(): DocState {

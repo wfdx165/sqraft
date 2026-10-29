@@ -1,527 +1,123 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
-import { findOuterOverrideOwner, findOverrideOwner, newId, type ComponentPropertyDef, type DocNode } from "@sqraft/core";
-import { DEFAULT_TEXT_FONT_SIZE, measureTextSize } from "../text-metrics";
-import { dispatch, docStore, hooks, ui } from "../store";
+import { useInspector } from "../inspector/useInspector";
+import { docStore, ui } from "../store";
 
-const node = computed<DocNode | null>(() => {
-  void ui.version;
-  const id = ui.selection[0];
-  return id ? docStore.doc.nodes[id] ?? null : null;
-});
-
-const tokenNames = computed(() => {
-  void ui.version;
-  return Object.keys(docStore.doc.tokens);
-});
-
-const instanceOwner = computed(() => {
-  void ui.version;
-  const current = node.value;
-  if (!current) return null;
-  const info = findOverrideOwner(docStore.doc, current.id);
-  if (!info) return null;
-  return {
-    instanceId: info.owner.id,
-    isRoot: info.owner.id === current.id,
-    count: Object.keys(info.owner.overrides ?? {}).length,
-  };
-});
-
-function componentAncestorId(id: string): string | null {
-  let cur = docStore.doc.nodes[id]?.parentId;
-  while (cur) {
-    const n = docStore.doc.nodes[cur];
-    if (!n) return null;
-    if (n.type === "component") return n.id;
-    cur = n.parentId;
-  }
-  return null;
-}
-
-function hasSlotAncestor(id: string): boolean {
-  let cur = docStore.doc.nodes[id]?.parentId;
-  while (cur) {
-    const n = docStore.doc.nodes[cur];
-    if (!n) return false;
-    if (n.type === "slot") return true;
-    cur = n.parentId;
-  }
-  return false;
-}
-
-/** 主组件里的画板/分组可以转成插槽；实例内部与已有插槽祖先不允许。 */
-const canMakeSlot = computed(() => {
-  void ui.version;
-  const n = node.value;
-  if (!n || (n.type !== "frame" && n.type !== "group")) return false;
-  if (!componentAncestorId(n.id)) return false;
-  if (hasSlotAncestor(n.id)) return false;
-  return !findOverrideOwner(docStore.doc, n.id);
-});
-
-function toSlot(): void {
-  if (!node.value) return;
-  try {
-    dispatch({ type: "slot.create", params: { nodeId: node.value.id } }, "slot");
-  } catch {
-    /* 不满足约束时不改文档 */
-  }
-}
-
-function clearSlot(): void {
-  if (!node.value || node.value.type !== "slot") return;
-  dispatch({ type: "slot.clear", params: { slotId: node.value.id } }, "slot-clear");
-}
-
-/* ---------- 组件属性 ---------- */
-
-/** 选中节点所在的组件与可绑定的目标图层。 */
-const componentContext = computed<{ component: DocNode; target: DocNode } | null>(() => {
-  void ui.version;
-  const current = node.value;
-  if (!current) return null;
-  if (current.type === "component") return { component: current, target: current };
-  let component: DocNode | null = null;
-  let cur = current.parentId ? docStore.doc.nodes[current.parentId] : undefined;
-  while (cur) {
-    if (cur.type === "component") {
-      component = cur;
-      break;
-    }
-    cur = cur.parentId ? docStore.doc.nodes[cur.parentId] : undefined;
-  }
-  if (!component) return null;
-  // 实例内部与嵌套实例内部没有稳定的属性目标
-  if (findOverrideOwner(docStore.doc, current.id)) return null;
-  if (current.mainId && current.type !== "instance") return null;
-  return { component, target: current };
-});
-
-function targetKey(target: DocNode): string {
-  return target.type === "instance" ? target.id : (target.mainId ?? target.id);
-}
-
-const targetProp = computed<ComponentPropertyDef | null>(() => {
-  const ctx = componentContext.value;
-  if (!ctx) return null;
-  return ctx.component.propertyDefs?.find((d) => d.targetMainId === targetKey(ctx.target)) ?? null;
-});
-
-const componentDefs = computed<ComponentPropertyDef[]>(() => {
-  void ui.version;
-  return node.value?.type === "component" ? (node.value.propertyDefs ?? []) : [];
-});
-
-const instanceProps = computed<{ instance: DocNode; defs: ComponentPropertyDef[] } | null>(() => {
-  void ui.version;
-  const current = node.value;
-  if (!current || current.type !== "instance" || !current.componentId) return null;
-  const component = docStore.doc.nodes[current.componentId];
-  if (!component || component.type !== "component") return null;
-  return { instance: current, defs: component.propertyDefs ?? [] };
-});
-
-const allComponents = computed(() => {
-  void ui.version;
-  return Object.values(docStore.doc.nodes)
-    .filter((n) => n.type === "component")
-    .map((n) => ({ id: n.id, name: n.name }));
-});
-
-function propTypeLabel(type: string): string {
-  return type === "text" ? "文本" : type === "boolean" ? "布尔" : "实例替换";
-}
-
-function defineProp(type: "text" | "boolean" | "instance"): void {
-  const ctx = componentContext.value;
-  if (!ctx) return;
-  try {
-    dispatch(
-      {
-        type: "property.define",
-        params: { componentId: ctx.component.id, targetMainId: ctx.target.id, id: newId(), type },
-      },
-      "property",
-    );
-  } catch {
-    /* 不满足约束时不改文档 */
-  }
-}
-
-function renameDef(def: ComponentPropertyDef, e: Event): void {
-  const ctx = componentContext.value;
-  if (!ctx) return;
-  const input = e.target as HTMLInputElement;
-  try {
-    dispatch(
-      { type: "property.rename", params: { componentId: ctx.component.id, propertyId: def.id, name: input.value } },
-      "property",
-    );
-  } catch {
-    input.value = def.name;
-  }
-}
-
-function deleteDef(def: ComponentPropertyDef): void {
-  const ctx = componentContext.value;
-  if (!ctx) return;
-  dispatch({ type: "property.delete", params: { componentId: ctx.component.id, propertyId: def.id } }, "property");
-}
-
-function propValue(def: ComponentPropertyDef): string | boolean {
-  const info = instanceProps.value;
-  if (!info) return "";
-  const value = info.instance.propValues?.[def.id];
-  if (value !== undefined) return value;
-  const master = docStore.doc.nodes[def.targetMainId];
-  if (def.type === "text") return master?.text ?? "";
-  if (def.type === "boolean") return master?.visible ?? true;
-  return master?.componentId ?? "";
-}
-
-function hasPropValue(def: ComponentPropertyDef): boolean {
-  const info = instanceProps.value;
-  return Boolean(info && info.instance.propValues?.[def.id] !== undefined);
-}
-
-function setProp(def: ComponentPropertyDef, value: string | boolean | null): void {
-  const info = instanceProps.value;
-  if (!info) return;
-  try {
-    dispatch(
-      { type: "property.set", params: { instanceId: info.instance.id, propertyId: def.id, value } },
-      "property",
-    );
-  } catch {
-    /* 非法值不改文档 */
-  }
-}
-
-function onTextProp(def: ComponentPropertyDef, e: Event): void {
-  setProp(def, (e.target as HTMLInputElement).value);
-}
-
-function onBoolProp(def: ComponentPropertyDef, e: Event): void {
-  setProp(def, (e.target as HTMLInputElement).checked);
-}
-
-function onSwapProp(def: ComponentPropertyDef, e: Event): void {
-  const value = (e.target as HTMLSelectElement).value;
-  setProp(def, value || null);
-}
-
-function onSwapComponent(e: Event): void {
-  const info = instanceProps.value;
-  if (!info) return;
-  const componentId = (e.target as HTMLSelectElement).value;
-  if (!componentId) return;
-  try {
-    dispatch(
-      { type: "instance.swap", params: { instanceId: info.instance.id, componentId } },
-      "instance-swap",
-    );
-  } catch {
-    (e.target as HTMLSelectElement).value = info.instance.componentId ?? "";
-  }
-}
-
-function gotoMaster(): void {
-  const componentId = instanceProps.value?.instance.componentId;
-  if (!componentId) return;
-  let cur = docStore.doc.nodes[componentId];
-  while (cur && cur.type !== "page") {
-    cur = cur.parentId ? docStore.doc.nodes[cur.parentId] : undefined;
-  }
-  if (cur) {
-    ui.activePageId = cur.id;
-    ui.expandedPageId = cur.id;
-  }
-  hooks.focusNode(componentId);
-}
-
-function detachInstance(): void {
-  const info = instanceProps.value;
-  if (!info) return;
-  dispatch({ type: "component.detach", params: { instanceId: info.instance.id } }, "detach");
-}
-
-const overrideView = computed(() => {
-  void ui.version;
-  const current = node.value;
-  if (!current) return null;
-  const info = findOverrideOwner(docStore.doc, current.id);
-  if (!info) return null;
-  const patch = info.owner.overrides?.[info.key];
-  if (!patch) return null;
-  const fields: string[] = [];
-  for (const [key, value] of Object.entries(patch)) {
-    if (key === "style") {
-      for (const sk of Object.keys(value ?? {})) fields.push(`style.${sk}`);
-    } else {
-      fields.push(key);
-    }
-  }
-  return fields.length ? { instanceId: info.owner.id, mainId: info.key, fields } : null;
-});
-
-const outerOverrideView = computed(() => {
-  void ui.version;
-  const current = node.value;
-  if (!current || current.type !== "instance") return null;
-  const info = findOuterOverrideOwner(docStore.doc, current.id);
-  if (!info) return null;
-  const patch = info.owner.overrides?.[info.key];
-  if (!patch) return null;
-  const fields = Object.keys(patch);
-  return fields.length ? { instanceId: info.owner.id, mainId: info.key, fields } : null;
-});
-
-const FIELD_LABELS: Record<string, string> = {
-  text: "文案",
-  name: "名称",
-  width: "宽",
-  height: "高",
-  x: "X",
-  y: "Y",
-  rotation: "旋转",
-  visible: "可见性",
-  locked: "锁定",
-  layout: "布局",
-  componentId: "组件",
-  sides: "边数",
-  vector: "路径",
-  "style.fill": "填充",
-  "style.stroke": "描边",
-  "style.strokeWidth": "线宽",
-  "style.cornerRadius": "圆角",
-  "style.fontSize": "字号",
-  "style.fontFamily": "字体",
-  "style.fontWeight": "字重",
-  "style.lineHeight": "行高",
-  "style.textAlign": "对齐",
-  propValues: "属性值",
-};
-
-function fieldLabel(field: string): string {
-  return FIELD_LABELS[field] ?? field;
-}
-
-function resetField(field: string): void {
-  const view = overrideView.value;
-  if (!view) return;
-  dispatch(
-    {
-      type: "instance.resetOverride",
-      params: { instanceId: view.instanceId, mainId: view.mainId, fields: [field] },
-    },
-    "reset-override",
-  );
-}
-
-function resetAllOverrides(): void {
-  const owner = instanceOwner.value;
-  if (!owner) return;
-  dispatch({ type: "instance.resetOverride", params: { instanceId: owner.instanceId } }, "reset-override");
-}
-
-function resetOuterField(field: string): void {
-  const view = outerOverrideView.value;
-  if (!view) return;
-  dispatch(
-    {
-      type: "instance.resetOverride",
-      params: { instanceId: view.instanceId, mainId: view.mainId, fields: [field] },
-    },
-    "reset-override",
-  );
-}
-
-function num(e: Event): number {
-  return Number((e.target as HTMLInputElement).value);
-}
-
-/** 类型标签：多边形的叫法跟着边数走（三角形 / 多边形），其余直接显示节点类型。 */
-function typeLabel(n: DocNode): string {
-  if (n.type === "polygon") return (n.sides ?? 3) === 3 ? "三角形" : "多边形";
-  return n.type;
-}
-
-function setSides(e: Event) {
-  if (!node.value) return;
-  const raw = Math.round(num(e));
-  if (!Number.isFinite(raw)) return;
-  const sides = Math.max(3, Math.min(12, raw));
-  dispatch({ type: "node.update", params: { nodeId: node.value.id, patch: { sides } } }, "inspect");
-}
-
-function setNum(key: "x" | "y" | "width" | "height", e: Event) {
-  if (!node.value) return;
-  dispatch({ type: "node.update", params: { nodeId: node.value.id, patch: { [key]: num(e) } } }, "inspect");
-}
-
-/** 只做展示层舍入：文档保留完整精度（缩放会把 400 算成 399.99999999999994）。 */
-function fmt(v: number): string {
-  return String(Math.round(v * 100) / 100);
-}
-
-function setCornerRadius(e: Event) {
-  if (!node.value) return;
-  dispatch(
-    { type: "node.update", params: { nodeId: node.value.id, patch: { style: { ...node.value.style, cornerRadius: num(e) } } } },
-    "inspect",
-  );
-}
-
-function setFillToken(e: Event) {
-  if (!node.value) return;
-  const token = (e.target as HTMLSelectElement).value;
-  const fill = token ? { token } : null;
-  dispatch(
-    { type: "node.update", params: { nodeId: node.value.id, patch: { style: { ...node.value.style, fill } } } },
-    "inspect",
-  );
-}
-
-function strokeTokenOf(n: DocNode): string {
-  return n.style.stroke?.token ?? "";
-}
-
-function setStrokeToken(e: Event) {
-  if (!node.value) return;
-  const token = (e.target as HTMLSelectElement).value;
-  const stroke = token ? { token } : undefined;
-  dispatch(
-    { type: "node.update", params: { nodeId: node.value.id, patch: { style: { ...node.value.style, stroke } } } },
-    "inspect",
-  );
-}
-
-function setStrokeWidth(e: Event) {
-  if (!node.value) return;
-  dispatch(
-    {
-      type: "node.update",
-      params: { nodeId: node.value.id, patch: { style: { ...node.value.style, strokeWidth: Math.max(0, num(e)) } } },
-    },
-    "inspect",
-  );
-}
-
-function canClosePath(n: DocNode): boolean {
-  return Boolean(n.vector?.closed) || (n.vector?.anchors.length ?? 0) >= 3;
-}
-
-function setClosed(e: Event) {
-  const n = node.value;
-  if (!n?.vector) return;
-  const closed = (e.target as HTMLInputElement).checked;
-  if (closed && n.vector.anchors.length < 3) return;
-  dispatch(
-    { type: "node.update", params: { nodeId: n.id, patch: { vector: { ...n.vector, closed } } } },
-    "inspect",
-  );
-}
-
-function setName(e: Event) {
-  if (!node.value) return;
-  const name = (e.target as HTMLInputElement).value.replace(/\s+/g, " ").trim();
-  if (!name || name === node.value.name) return;
-  dispatch({ type: "node.update", params: { nodeId: node.value.id, patch: { name } } }, "rename-node");
-}
-
-/* ---------- 文案：多行草稿，失焦 / ⌘Enter 提交，Esc 放弃 ---------- */
-
-const textDraft = ref("");
-const textAreaEl = ref<HTMLTextAreaElement | null>(null);
-
-watch(
+const {
+  lockedChain,
+  targets,
+  applyNodes,
+  applyStyle,
+  shared,
+  fmt,
+  numValue,
+  num,
+  boolOf,
+  nameOf,
+  typeLabel,
+  setName,
+  setNum,
+  setRotation,
+  setOpacity,
+  toggleVisible,
+  toggleLock,
+  toggleClip,
+  fillTokenOf,
+  strokeTokenOf,
+  colorOf,
+  setFill,
+  setStroke,
+  resolvedCustom,
+  setCustomPaint,
+  setStrokeWidth,
+  radiusOf,
+  uniform,
+  radiusUnified,
+  setRadiusAll,
+  setRadiusCorner,
+  layoutOf,
+  setLayout,
+  addLayout,
+  removeLayout,
+  paddingOf,
+  paddingUnified,
+  setPaddingAll,
+  setPaddingSide,
+  setSizing,
+  setMainAlign,
+  setCrossAlign,
+  setAlignContent,
+  setSides,
+  setLayoutNumber,
+  toggleAbsolute,
+  autoGrowTextArea,
+  onTextAreaInput,
+  onTextAreaKey,
+  textPatch,
+  commitText,
+  applyTextStyle,
+  setTextStyle,
+  setAutoResize,
+  setListType,
+  setTruncate,
+  canClosePath,
+  setClosed,
+  copyId,
+  componentAncestorId,
+  hasSlotAncestor,
+  toSlot,
+  clearSlot,
+  targetKey,
+  propTypeLabel,
+  defineProp,
+  renameDef,
+  deleteDef,
+  propValue,
+  hasPropValue,
+  setProp,
+  onTextProp,
+  onBoolProp,
+  onSwapProp,
+  onSwapComponent,
+  gotoMaster,
+  detachInstance,
+  fieldLabel,
+  resetField,
+  resetAllOverrides,
+  resetOuterField,
+  MIXED,
+  nodes,
   node,
-  (n) => {
-    textDraft.value = n?.text ?? "";
-    requestAnimationFrame(() => autoGrowTextArea(textAreaEl.value));
-  },
-  { immediate: true },
-);
-
-function autoGrowTextArea(el: HTMLTextAreaElement | null) {
-  if (!el) return;
-  el.style.height = "auto";
-  el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
-}
-
-function commitText() {
-  const n = node.value;
-  if (!n) return;
-  const text = textDraft.value;
-  if (text === (n.text ?? "")) return;
-  // 文本尺寸跟着内容走（与画布行内编辑同一套测量）
-  const size = measureTextSize(text, n.style.fontSize ?? DEFAULT_TEXT_FONT_SIZE, n.style.fontFamily);
-  dispatch(
-    { type: "node.update", params: { nodeId: n.id, patch: { text, width: size.width, height: size.height } } },
-    "inspect",
-  );
-}
-
-function onTextAreaInput(e: Event) {
-  const el = e.target as HTMLTextAreaElement;
-  textDraft.value = el.value;
-  autoGrowTextArea(el);
-}
-
-function onTextAreaKey(e: KeyboardEvent) {
-  if (e.isComposing) return;
-  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
-    e.preventDefault();
-    commitText();
-    (e.target as HTMLTextAreaElement).blur();
-  } else if (e.key === "Escape") {
-    e.preventDefault();
-    textDraft.value = node.value?.text ?? "";
-    (e.target as HTMLTextAreaElement).blur();
-  }
-}
-
-const copied = ref(false);
-let copyTimer = 0;
-
-async function copyId() {
-  if (!node.value) return;
-  try {
-    await navigator.clipboard.writeText(node.value.id);
-    copied.value = true;
-    window.clearTimeout(copyTimer);
-    copyTimer = window.setTimeout(() => (copied.value = false), 1200);
-  } catch {
-    /* 剪贴板不可用时静默失败 */
-  }
-}
-
-function setFontSize(e: Event) {
-  if (!node.value) return;
-  dispatch(
-    { type: "node.update", params: { nodeId: node.value.id, patch: { style: { ...node.value.style, fontSize: num(e) } } } },
-    "inspect",
-  );
-}
-
-function setLayout(patch: Record<string, unknown>) {
-  if (!node.value || node.value.type !== "frame") return;
-  const layout = {
-    ...(node.value.layout ?? { direction: "horizontal", gap: 8, padding: 12, mainAlign: "start", crossAlign: "start" }),
-    ...patch,
-  };
-  dispatch({ type: "node.update", params: { nodeId: node.value.id, patch: { layout } } }, "layout");
-}
-
-function fillTokenOf(n: DocNode): string {
-  return n.style.fill?.token ?? "";
-}
+  multi,
+  allText,
+  hasType,
+  supportsFill,
+  supportsStroke,
+  supportsRadius,
+  supportsClip,
+  supportsLayout,
+  supportsSizing,
+  readonly,
+  tokenNames,
+  radiusExpanded,
+  paddingExpanded,
+  textDraft,
+  textAreaEl,
+  FONT_STACKS,
+  copied,
+  instanceOwner,
+  canMakeSlot,
+  componentContext,
+  targetProp,
+  componentDefs,
+  instanceProps,
+  allComponents,
+  overrideView,
+  outerOverrideView,
+  FIELD_LABELS,
+} = useInspector();
 </script>
 
 <template>
-  <!-- data-version：命令在文档里原地改字段，computed 返回同一对象引用不会触发重渲染，
-       这里让根节点跟随版本号，保证检查器数值永远是当前文档的 -->
   <div class="panel" :data-version="ui.version">
     <header><span class="micro-label">检查器</span></header>
 
@@ -533,11 +129,12 @@ function fillTokenOf(n: DocNode): string {
     <template v-else-if="node">
       <section class="block meta">
         <div class="meta-row">
-          <label>名称</label>
-          <input class="name-input" :value="node.name" spellcheck="false" @change="setName" />
-          <span class="type-tag">{{ typeLabel(node) }}</span>
+          <label>{{ multi ? "选区" : "名称" }}</label>
+          <input v-if="!multi" class="name-input" :value="node.name" spellcheck="false" @change="setName" />
+          <span v-else class="name-input mixed-text">已选 {{ nodes.length }} 个图层</span>
+          <span class="type-tag">{{ multi ? "multi" : typeLabel(node) }}</span>
         </div>
-        <div class="meta-row">
+        <div v-if="!multi" class="meta-row">
           <label>ID</label>
           <code class="node-id" :title="node.id">{{ node.id }}</code>
           <button class="copy" :class="{ on: copied }" title="复制 ID" @click="copyId">
@@ -546,59 +143,188 @@ function fillTokenOf(n: DocNode): string {
         </div>
       </section>
 
-      <section class="block">
-        <div class="label-row"><span class="micro-label">位置与尺寸</span></div>
+      <section v-if="readonly" class="block">
+        <div class="row">
+          <span class="muted">该图层已锁定；解锁后才能编辑。</span>
+          <button class="mini" @click="toggleLock">解锁</button>
+        </div>
+      </section>
+
+      <section v-if="!multi" class="block">
+        <div class="label-row">
+          <span class="micro-label">位置与尺寸</span>
+          <div class="icon-group">
+            <button class="icon-btn" :class="{ off: !node.visible }" title="显示/隐藏" @click="toggleVisible">
+              {{ node.visible ? "◉" : "○" }}
+            </button>
+            <button class="icon-btn" :class="{ on: node.locked }" title="锁定/解锁" @click="toggleLock">
+              {{ node.locked ? "🔒" : "🔓" }}
+            </button>
+          </div>
+        </div>
         <div class="grid">
-          <label>X</label><input class="mono" type="number" :value="fmt(node.x)" @change="setNum('x', $event)" />
-          <label>Y</label><input class="mono" type="number" :value="fmt(node.y)" @change="setNum('y', $event)" />
-          <label>W</label><input class="mono" type="number" :value="fmt(node.width)" @change="setNum('width', $event)" />
-          <label>H</label><input class="mono" type="number" :value="fmt(node.height)" @change="setNum('height', $event)" />
+          <label>X</label><input class="mono" type="number" :value="fmt(node.x)" :disabled="readonly" @change="setNum('x', $event)" />
+          <label>Y</label><input class="mono" type="number" :value="fmt(node.y)" :disabled="readonly" @change="setNum('y', $event)" />
+          <label>W</label>
+          <div class="field-with-select">
+            <input class="mono" type="number" :value="fmt(node.width)" :disabled="readonly || node.type === 'group'" @change="setNum('width', $event)" />
+            <select
+              v-if="supportsSizing || (node.layout && supportsLayout)"
+              class="sizing"
+              :value="node.layoutSizingW ?? 'fixed'"
+              :disabled="readonly"
+              @change="setSizing('W', $event)"
+            >
+              <option value="fixed">Fixed</option>
+              <option value="hug">Hug</option>
+              <option v-if="supportsSizing">Fill</option>
+            </select>
+          </div>
+          <label>H</label>
+          <div class="field-with-select">
+            <input class="mono" type="number" :value="fmt(node.height)" :disabled="readonly || node.type === 'group'" @change="setNum('height', $event)" />
+            <select
+              v-if="supportsSizing || (node.layout && supportsLayout)"
+              class="sizing"
+              :value="node.layoutSizingH ?? 'fixed'"
+              :disabled="readonly"
+              @change="setSizing('H', $event)"
+            >
+              <option value="fixed">Fixed</option>
+              <option value="hug">Hug</option>
+              <option v-if="supportsSizing">Fill</option>
+            </select>
+          </div>
+        </div>
+        <div v-if="node.type !== 'page'" class="grid two">
+          <label>旋转</label>
+          <input class="mono" type="number" step="1" :value="fmt(node.rotation)" :disabled="readonly" @change="setRotation($event)" />
+          <label>不透明度</label>
+          <input class="mono" type="number" min="0" max="100" step="1" :value="Math.round((node.opacity ?? 1) * 100)" :disabled="readonly" @change="setOpacity($event)" />
         </div>
       </section>
 
-      <section class="block" v-if="node.type !== 'page'">
-        <span class="micro-label">外观</span>
-        <div class="row">
-          <label>填充</label>
-          <select :value="fillTokenOf(node)" @change="setFillToken">
-            <option value="">（无）</option>
-            <option v-for="t in tokenNames" :key="t" :value="t">{{ t }}</option>
-          </select>
+      <section v-if="multi" class="block">
+        <span class="micro-label">批量变换</span>
+        <div class="grid two">
+          <label>旋转</label>
+          <input class="mono" type="number" step="1" :value="numValue(shared((n) => n.rotation))" placeholder="混合" :disabled="readonly" @change="setRotation($event)" />
+          <label>不透明度</label>
+          <input class="mono" type="number" min="0" max="100" step="1" :value="shared((n) => Math.round((n.opacity ?? 1) * 100)) === MIXED ? '' : String(shared((n) => Math.round((n.opacity ?? 1) * 100)))" placeholder="混合" :disabled="readonly" @change="setOpacity($event)" />
         </div>
         <div class="row">
-          <label>描边</label>
-          <select :value="strokeTokenOf(node)" @change="setStrokeToken">
-            <option value="">（无）</option>
-            <option v-for="t in tokenNames" :key="t" :value="t">{{ t }}</option>
-          </select>
-        </div>
-        <div class="row">
-          <label>线宽</label>
-          <input class="mono" type="number" min="0" step="0.5" :value="node.style.strokeWidth ?? 1" @change="setStrokeWidth($event)" />
-        </div>
-        <div class="row" v-if="node.type === 'path'">
-          <label>闭合</label>
-          <input
-            class="checkbox"
-            type="checkbox"
-            :checked="Boolean(node.vector?.closed)"
-            :disabled="!canClosePath(node)"
-            @change="setClosed"
-          />
-        </div>
-        <div class="row" v-if="node.type === 'polygon'">
-          <label>边数</label>
-          <input class="mono" type="number" min="3" max="12" step="1" :value="node.sides ?? 3" @change="setSides" />
-        </div>
-        <div class="row" v-if="node.type === 'rect' || node.type === 'frame'">
-          <label>圆角</label>
-          <input class="mono" type="number" :value="node.style.cornerRadius ?? 0" @change="setCornerRadius($event)" />
+          <button class="mini" :disabled="readonly" @click="applyNodes((n) => ({ visible: !n.visible }))">切换可见性</button>
+          <button class="mini" :disabled="readonly" @click="applyNodes((n) => ({ locked: !n.locked }))">切换锁定</button>
         </div>
       </section>
 
-      <section class="block" v-if="node.type === 'text'">
-        <span class="micro-label">文本</span>
-        <div class="row text-row">
+      <!-- 子项布局：sizing 之外的最小/最大与绝对定位 -->
+      <section v-if="!multi && supportsSizing" class="block">
+        <span class="micro-label">布局项</span>
+        <div class="row">
+          <label>绝对定位</label>
+          <input type="checkbox" class="checkbox" :checked="Boolean(node.layoutAbsolute)" :disabled="readonly" @change="toggleAbsolute" />
+        </div>
+        <div class="grid two" v-if="!node.layoutAbsolute">
+          <label>最小 W</label>
+          <input class="mono" type="number" :value="node.layoutMinW ?? ''" :disabled="readonly" @change="setLayoutNumber('layoutMinW', $event)" />
+          <label>最小 H</label>
+          <input class="mono" type="number" :value="node.layoutMinH ?? ''" :disabled="readonly" @change="setLayoutNumber('layoutMinH', $event)" />
+          <label>最大 W</label>
+          <input class="mono" type="number" :value="node.layoutMaxW ?? ''" :disabled="readonly" @change="setLayoutNumber('layoutMaxW', $event)" />
+          <label>最大 H</label>
+          <input class="mono" type="number" :value="node.layoutMaxH ?? ''" :disabled="readonly" @change="setLayoutNumber('layoutMaxH', $event)" />
+        </div>
+      </section>
+
+      <!-- 自动布局容器 -->
+      <section v-if="!multi && (supportsLayout || node.type === 'instance')" class="block">
+        <div class="label-row">
+          <span class="micro-label">自动布局</span>
+          <button
+            v-if="supportsLayout && !node.layout"
+            class="mini"
+            :disabled="readonly"
+            @click="addLayout"
+          >+ 添加</button>
+          <button
+            v-else-if="supportsLayout && node.layout"
+            class="mini"
+            :disabled="readonly"
+            @click="removeLayout"
+          >移除</button>
+        </div>
+
+        <template v-if="node.layout">
+          <div class="seg">
+            <button :class="{ on: node.layout.direction === 'horizontal' }" :disabled="readonly" @click="setLayout({ direction: 'horizontal' })">横向</button>
+            <button :class="{ on: node.layout.direction === 'vertical' }" :disabled="readonly" @click="setLayout({ direction: 'vertical' })">纵向</button>
+          </div>
+          <div class="grid two">
+            <label>间距</label>
+            <input class="mono" type="number" :value="fmt(node.layout.gap)" :disabled="readonly" @change="setLayout({ gap: num($event) })" />
+            <label>内边距</label>
+            <div class="field-with-select">
+              <input class="mono" type="number" :value="numValue(paddingUnified())" placeholder="混合" :disabled="readonly" @change="setPaddingAll" />
+              <button class="mini corner-toggle" :disabled="readonly" @click="paddingExpanded = !paddingExpanded">
+                {{ paddingExpanded ? "统一" : "分边" }}
+              </button>
+            </div>
+          </div>
+          <div v-if="paddingExpanded" class="grid two">
+            <label>上</label><input class="mono" type="number" :value="fmt(paddingOf(node).top)" :disabled="readonly" @change="setPaddingSide('top', $event)" />
+            <label>右</label><input class="mono" type="number" :value="fmt(paddingOf(node).right)" :disabled="readonly" @change="setPaddingSide('right', $event)" />
+            <label>下</label><input class="mono" type="number" :value="fmt(paddingOf(node).bottom)" :disabled="readonly" @change="setPaddingSide('bottom', $event)" />
+            <label>左</label><input class="mono" type="number" :value="fmt(paddingOf(node).left)" :disabled="readonly" @change="setPaddingSide('left', $event)" />
+          </div>
+          <div class="grid two">
+            <label>主轴</label>
+            <select :value="node.layout.mainAlign" :disabled="readonly" @change="setMainAlign">
+              <option value="start">起始</option>
+              <option value="center">居中</option>
+              <option value="end">末尾</option>
+              <option value="space-between">两端对齐</option>
+            </select>
+            <label>交叉轴</label>
+            <select :value="node.layout.crossAlign" :disabled="readonly" @change="setCrossAlign">
+              <option value="start">起始</option>
+              <option value="center">居中</option>
+              <option value="end">末尾</option>
+              <option value="stretch">拉伸</option>
+            </select>
+          </div>
+          <div class="row">
+            <label>换行</label>
+            <input type="checkbox" class="checkbox" :checked="node.layout.wrap" :disabled="readonly" @change="setLayout({ wrap: boolOf($event) })" />
+            <label v-if="node.layout.wrap" class="inline-label">行距</label>
+            <input v-if="node.layout.wrap" class="mono" type="number" :value="fmt(node.layout.crossGap)" :disabled="readonly" @change="setLayout({ crossGap: num($event) })" />
+          </div>
+          <div v-if="node.layout.wrap" class="grid two">
+            <label>多行</label>
+            <select :value="node.layout.alignContent" :disabled="readonly" @change="setAlignContent">
+              <option value="start">起始</option>
+              <option value="center">居中</option>
+              <option value="end">末尾</option>
+              <option value="space-between">两端对齐</option>
+              <option value="stretch">拉伸</option>
+            </select>
+          </div>
+        </template>
+        <div v-else class="row"><span class="muted">未启用自动布局</span></div>
+      </section>
+
+      <!-- 文本 -->
+      <section v-if="allText" class="block">
+        <div class="label-row">
+          <span class="micro-label">文本</span>
+          <select class="inline-select" :value="node.textAutoResize ?? 'auto-width'" :disabled="readonly || multi" @change="setAutoResize">
+            <option value="auto-width">自动宽度</option>
+            <option value="auto-height">自动高度</option>
+            <option value="fixed">固定尺寸</option>
+          </select>
+        </div>
+        <div v-if="multi" class="row"><span class="muted">多选：排版改动会应用到全部文本图层</span></div>
+        <div v-if="!multi" class="row text-row">
           <label>文案</label>
           <textarea
             ref="textAreaEl"
@@ -606,23 +332,176 @@ function fillTokenOf(n: DocNode): string {
             rows="1"
             spellcheck="false"
             :value="textDraft"
+            :disabled="readonly"
             @input="onTextAreaInput"
             @blur="commitText"
             @keydown="onTextAreaKey"
           />
         </div>
-        <div class="row"><label>字号</label><input class="mono" type="number" :value="node.style.fontSize ?? 14" @change="setFontSize($event)" /></div>
-      </section>
-
-      <section class="block" v-if="node.type === 'frame'">
-        <span class="micro-label">自动布局</span>
-        <div class="seg">
-          <button :class="{ on: (node.layout?.direction ?? 'horizontal') === 'horizontal' }" @click="setLayout({ direction: 'horizontal' })">横向</button>
-          <button :class="{ on: node.layout?.direction === 'vertical' }" @click="setLayout({ direction: 'vertical' })">纵向</button>
+        <div class="grid two">
+          <label>字体</label>
+          <select :value="node.style.fontFamily ?? FONT_STACKS[0].value" :disabled="readonly" @change="setTextStyle('fontFamily', $event)">
+            <option v-for="f in FONT_STACKS" :key="f.value" :value="f.value">{{ f.label }}</option>
+          </select>
+          <label>字重</label>
+          <select :value="String(node.style.fontWeight ?? 400)" :disabled="readonly" @change="setTextStyle('fontWeight', $event, Number)">
+            <option v-for="w in [100, 200, 300, 400, 500, 600, 700, 800, 900]" :key="w" :value="String(w)">{{ w }}</option>
+          </select>
+          <label>字号</label>
+          <input class="mono" type="number" min="1" :value="fmt(node.style.fontSize ?? 20)" :disabled="readonly" @change="setTextStyle('fontSize', $event, Number)" />
+          <label>行高</label>
+          <div class="field-with-select">
+            <input
+              class="mono"
+              type="number"
+              :value="node.style.lineHeightUnit === 'auto' || !node.style.lineHeightUnit ? '' : fmt(node.style.lineHeight ?? 0)"
+              placeholder="自动"
+              :disabled="readonly || !node.style.lineHeightUnit || node.style.lineHeightUnit === 'auto'"
+              @change="setTextStyle('lineHeight', $event, Number)"
+            />
+            <select :value="node.style.lineHeightUnit ?? 'auto'" :disabled="readonly" @change="setTextStyle('lineHeightUnit', $event)">
+              <option value="auto">自动</option>
+              <option value="px">px</option>
+              <option value="percent">%</option>
+            </select>
+          </div>
+          <label>字距</label>
+          <div class="field-with-select">
+            <input class="mono" type="number" :value="fmt(node.style.letterSpacing ?? 0)" :disabled="readonly" @change="setTextStyle('letterSpacing', $event, Number)" />
+            <select :value="node.style.letterSpacingUnit ?? 'px'" :disabled="readonly" @change="setTextStyle('letterSpacingUnit', $event)">
+              <option value="px">px</option>
+              <option value="percent">%</option>
+            </select>
+          </div>
+          <label>段距</label>
+          <input class="mono" type="number" :value="fmt(node.style.paragraphSpacing ?? 0)" :disabled="readonly" @change="setTextStyle('paragraphSpacing', $event, Number)" />
+        </div>
+        <div class="row">
+          <label>斜体</label>
+          <input
+            type="checkbox"
+            class="checkbox"
+            :checked="node.style.fontStyle === 'italic'"
+            :disabled="readonly"
+            @change="applyTextStyle({ fontStyle: boolOf($event) ? 'italic' : 'normal' })"
+          />
+          <label class="inline-label">截断</label>
+          <input
+            type="checkbox"
+            class="checkbox"
+            :checked="Boolean(node.truncate)"
+            :disabled="readonly || (node.textAutoResize ?? 'auto-width') !== 'fixed'"
+            @change="setTruncate"
+          />
+          <label class="inline-label">列表</label>
+          <select class="inline-select" :value="node.listType ?? 'none'" :disabled="readonly" @change="setListType">
+            <option value="none">无</option>
+            <option value="bulleted">项目符号</option>
+            <option value="numbered">编号</option>
+          </select>
+        </div>
+        <div class="seg small">
+          <button :class="{ on: (node.style.textAlign ?? 'left') === 'left' }" :disabled="readonly" @click="applyTextStyle({ textAlign: 'left' })">左</button>
+          <button :class="{ on: node.style.textAlign === 'center' }" :disabled="readonly" @click="applyTextStyle({ textAlign: 'center' })">中</button>
+          <button :class="{ on: node.style.textAlign === 'right' }" :disabled="readonly" @click="applyTextStyle({ textAlign: 'right' })">右</button>
+          <button :class="{ on: node.style.textAlign === 'justify' }" :disabled="readonly" @click="applyTextStyle({ textAlign: 'justify' })">两端</button>
+        </div>
+        <div class="seg small">
+          <button :class="{ on: (node.style.textVerticalAlign ?? 'top') === 'top' }" :disabled="readonly" @click="applyTextStyle({ textVerticalAlign: 'top' })">上</button>
+          <button :class="{ on: node.style.textVerticalAlign === 'middle' }" :disabled="readonly" @click="applyTextStyle({ textVerticalAlign: 'middle' })">中</button>
+          <button :class="{ on: node.style.textVerticalAlign === 'bottom' }" :disabled="readonly" @click="applyTextStyle({ textVerticalAlign: 'bottom' })">下</button>
         </div>
         <div class="grid two">
-          <label>间距</label><input class="mono" type="number" :value="node.layout?.gap ?? 8" @change="setLayout({ gap: num($event) })" />
-          <label>内边距</label><input class="mono" type="number" :value="node.layout?.padding ?? 12" @change="setLayout({ padding: num($event) })" />
+          <label>大小写</label>
+          <select :value="node.style.textCase ?? 'none'" :disabled="readonly" @change="setTextStyle('textCase', $event)">
+            <option value="none">无</option>
+            <option value="upper">大写</option>
+            <option value="lower">小写</option>
+            <option value="title">标题</option>
+          </select>
+          <label>装饰</label>
+          <select :value="node.style.textDecoration ?? 'none'" :disabled="readonly" @change="setTextStyle('textDecoration', $event)">
+            <option value="none">无</option>
+            <option value="underline">下划线</option>
+            <option value="strikethrough">删除线</option>
+          </select>
+        </div>
+      </section>
+
+      <!-- 外观 -->
+      <section v-if="supportsFill || supportsStroke" class="block">
+        <span class="micro-label">外观</span>
+        <div v-if="supportsFill" class="row">
+          <label>填充</label>
+          <div class="color-control">
+            <span class="swatch" :style="{ background: colorOf(node.style.fill) }" />
+            <select :value="fillTokenOf(node)" :disabled="readonly" @change="setFill">
+              <option value="">（无）</option>
+              <option value="__custom">自定义…</option>
+              <option v-for="t in tokenNames" :key="t" :value="t">{{ t }}</option>
+            </select>
+          </div>
+        </div>
+        <div v-if="supportsFill && node.style.fill && !node.style.fill.token" class="row sub-row">
+          <label />
+          <input type="color" class="color-input" :value="colorOf(node.style.fill)" :disabled="readonly" @input="setCustomPaint('fill', $event)" />
+          <input class="mono hex" :value="node.style.fill.value ?? ''" :disabled="readonly" @change="setCustomPaint('fill', $event)" />
+        </div>
+        <div v-if="supportsStroke" class="row">
+          <label>描边</label>
+          <div class="color-control">
+            <span class="swatch" :style="{ background: colorOf(node.style.stroke) }" />
+            <select :value="strokeTokenOf(node)" :disabled="readonly" @change="setStroke">
+              <option value="">（无）</option>
+              <option value="__custom">自定义…</option>
+              <option v-for="t in tokenNames" :key="t" :value="t">{{ t }}</option>
+            </select>
+          </div>
+        </div>
+        <div v-if="supportsStroke && node.style.stroke && !node.style.stroke.token" class="row sub-row">
+          <label />
+          <input type="color" class="color-input" :value="colorOf(node.style.stroke)" :disabled="readonly" @input="setCustomPaint('stroke', $event)" />
+          <input class="mono hex" :value="node.style.stroke.value ?? ''" :disabled="readonly" @change="setCustomPaint('stroke', $event)" />
+        </div>
+        <div v-if="supportsStroke" class="row">
+          <label>线宽</label>
+          <input class="mono" type="number" min="0" step="0.5" :value="node.style.strokeWidth ?? 1" :disabled="readonly" @change="setStrokeWidth($event)" />
+        </div>
+        <div v-if="supportsRadius" class="row">
+          <label>圆角</label>
+          <div class="field-with-select">
+            <input class="mono" type="number" min="0" :value="numValue(radiusUnified())" placeholder="混合" :disabled="readonly" @change="setRadiusAll" />
+            <button class="mini corner-toggle" :disabled="readonly" @click="radiusExpanded = !radiusExpanded">
+              {{ radiusExpanded ? "统一" : "四角" }}
+            </button>
+          </div>
+        </div>
+        <div v-if="supportsRadius && radiusExpanded" class="grid two">
+          <label>左上</label><input class="mono" type="number" min="0" :value="fmt(radiusOf(node).topLeft)" :disabled="readonly" @change="setRadiusCorner('topLeft', $event)" />
+          <label>右上</label><input class="mono" type="number" min="0" :value="fmt(radiusOf(node).topRight)" :disabled="readonly" @change="setRadiusCorner('topRight', $event)" />
+          <label>右下</label><input class="mono" type="number" min="0" :value="fmt(radiusOf(node).bottomRight)" :disabled="readonly" @change="setRadiusCorner('bottomRight', $event)" />
+          <label>左下</label><input class="mono" type="number" min="0" :value="fmt(radiusOf(node).bottomLeft)" :disabled="readonly" @change="setRadiusCorner('bottomLeft', $event)" />
+        </div>
+        <div v-if="supportsClip" class="row">
+          <label>裁剪内容</label>
+          <input type="checkbox" class="checkbox" :checked="node.clip" :disabled="readonly" @change="toggleClip" />
+        </div>
+        <div v-if="!multi && node.type === 'path'" class="row">
+          <label>闭合</label>
+          <input type="checkbox" class="checkbox" :checked="Boolean(node.vector?.closed)" :disabled="readonly || !canClosePath(node)" @change="setClosed" />
+        </div>
+        <div v-if="!multi && node.type === 'polygon'" class="row">
+          <label>边数</label>
+          <input
+            class="mono"
+            type="number"
+            min="3"
+            max="12"
+            step="1"
+            :value="node.sides ?? 3"
+            :disabled="readonly"
+            @change="setSides"
+          />
         </div>
       </section>
 
@@ -768,9 +647,9 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 8px;
 }
 
-/* 名称 / ID 元信息：所有选中对象（含页面）统一展示 */
 .meta {
   gap: 6px;
 }
@@ -790,6 +669,12 @@ header {
 
 .name-input {
   flex: 1;
+}
+
+.mixed-text {
+  font-size: 12px;
+  color: var(--text-dim);
+  padding: 5px 0;
 }
 
 .node-id {
@@ -872,6 +757,10 @@ header {
   min-width: 30px;
 }
 
+.inline-label {
+  min-width: 0 !important;
+}
+
 .muted {
   font-size: 11px;
   color: var(--text-faint);
@@ -890,6 +779,7 @@ header {
   font-size: 11px;
   font-family: inherit;
   cursor: pointer;
+  white-space: nowrap;
 }
 
 .mini:hover {
@@ -899,6 +789,93 @@ header {
 
 .mini.wide {
   width: 100%;
+}
+
+.icon-group {
+  display: flex;
+  gap: 4px;
+}
+
+.icon-btn {
+  border: 1px solid var(--hairline);
+  background: transparent;
+  border-radius: 6px;
+  font-size: 11px;
+  padding: 2px 6px;
+  cursor: pointer;
+}
+
+.icon-btn.off {
+  opacity: 0.45;
+}
+
+.icon-btn.on {
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
+.field-with-select {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+
+.field-with-select > input {
+  flex: 1;
+}
+
+.field-with-select select {
+  width: auto;
+  flex: none;
+  font-size: 10.5px;
+  padding: 4px 4px;
+}
+
+.field-with-select .sizing {
+  width: 62px;
+}
+
+.corner-toggle {
+  flex: none;
+}
+
+.inline-select {
+  width: auto !important;
+  font-size: 11px;
+  padding: 4px 6px;
+}
+
+.color-control {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.swatch {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  border: 1px solid var(--hairline-strong);
+  flex: none;
+}
+
+.color-input {
+  width: 32px !important;
+  height: 26px;
+  padding: 0 !important;
+  border: none !important;
+  background: transparent !important;
+  flex: none;
+}
+
+.hex {
+  flex: 1;
+}
+
+.sub-row {
+  margin-left: 38px;
 }
 
 .prop-def {
@@ -968,12 +945,17 @@ select:focus {
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+input:disabled,
+select:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .mono {
   font-family: var(--mono);
   font-size: 11.5px;
 }
 
-/* 多行文案：与 input 同款外观，自动增高 */
 .text-row {
   align-items: flex-start;
 }
@@ -995,10 +977,6 @@ select:focus {
   font-family: inherit;
   outline: none;
   overflow-y: auto;
-  transition:
-    border-color var(--dur-fast) var(--ease),
-    box-shadow var(--dur-fast) var(--ease),
-    background var(--dur-fast) var(--ease);
 }
 
 .text-area:focus {
@@ -1014,6 +992,11 @@ select:focus {
   border: 1px solid var(--hairline);
   border-radius: var(--radius-pill);
   padding: 2px;
+}
+
+.seg.small button {
+  padding: 3px 6px;
+  font-size: 11px;
 }
 
 .seg button {

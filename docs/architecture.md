@@ -67,7 +67,9 @@ packages/ai-tools/src/
 
 页面是 `rootIds` 中的 `page` 节点，携带 `x / y / width / height`（默认 1440×1024），可在无限画布上自由拖动；新建页面自动放到最右侧页面之右（间距 160）。画布同时渲染所有页面，子节点坐标相对父容器（页面或画板），渲染与命中检测按祖先链累加偏移。
 
-节点公共字段：`id / type / name / parentId / children / x / y / width / height / rotation / visible / locked`。坐标相对父节点内容区左上角，旋转绕自身中心。
+节点公共字段：`id / type / name / parentId / children / x / y / width / height / rotation / opacity / visible / locked / clip`。坐标相对父节点内容区左上角，旋转绕自身中心；`clip` 只对画板/组件/实例生效。
+
+自动布局相关字段（子项侧）：`layoutSizingW/H`（fixed / hug / fill）、`layoutMinW/H`、`layoutMaxW/H`、`layoutAbsolute`。文本节点另有 `textAutoResize`（auto-width / auto-height / fixed）、`listType`、`truncate`。
 
 节点类型（v1）：`page / frame / group / rect / ellipse / line / polygon / star / path / text / image / instance / component / slot`。
 
@@ -98,12 +100,19 @@ AI 工具最终也落到这套命令上：**GUI 和 Agent 是同一命令层的�
 ```ts
 interface RenderBackend {
   beginFrame(viewport: Viewport): void;
-  drawRect(r: RectNode, style: ResolvedStyle): void;
-  drawEllipse(r: EllipseNode, style: ResolvedStyle): void;
-  drawPath(d: PathData, style: ResolvedStyle): void;
-  drawPolygon(points: readonly Point[], style: ResolvedStyle): void;
-  drawImage(img: CanvasImageSource, dst: Rect): void;
-  drawText(layout: LaidOutText, style: ResolvedStyle): void;
+  /** 压入容器位移与绕中心的旋转，子节点相对容器绘制 */
+  pushTransform(x: number, y: number, rotation?: number, width?: number, height?: number): void;
+  popTransform(): void;
+  /** 压入圆角矩形裁剪区（当前坐标系） */
+  pushClip(x: number, y: number, width: number, height: number, radius: CornerRadius): void;
+  popClip(): void;
+  pushOpacity(alpha: number): void;
+  popOpacity(): void;
+  drawRect(node: DocNode, fill?: string, stroke?: string, strokeWidth?: number, radius?: CornerRadius, shadow?: boolean): void;
+  drawEllipse(node: DocNode, fill?: string, stroke?: string, strokeWidth?: number): void;
+  drawPath(node: DocNode, vector: VectorPath, fill?: string, stroke?: string, strokeWidth?: number): void;
+  drawPolygon(node: DocNode, points: readonly Point[], fill?: string, stroke?: string, strokeWidth?: number): void;
+  drawText(node: DocNode, fill?: string, stroke?: string): void;
   endFrame(): void;
 }
 ```
@@ -170,16 +179,20 @@ interface RenderBackend {
 
 ## 6. 自动布局求解器
 
-纯函数：`solve(container: LayoutSpec, children: MeasuredChild[], constraints) → positions[]`。契约：
+纯函数：`solveLayout(spec, children, availW?, availH?) → { items, contentWidth, contentHeight }`。契约：
 
-- 输入：方向、gap、padding、主/交叉轴对齐、每个子项双轴尺寸行为（hug / fill / fixed + min/max）、wrap 开关；
-- 输出：子节点在容器内容区内的 `x/y/width/height`；
-- 算法：**两遍法**——先测量（measure：hug 沿递归冒泡尺寸），后排布（arrange：主轴分配、交叉轴对齐）；
-- **wrap 需要固定点迭代**：换行改变主轴可用空间→改变 fill 分配→可能改变行数；迭代上限 + 收敛判定防止病态输入死循环；
-- 绝对定位子项不参与求解，直接按容器坐标系定位；
+- 输入：方向、gap、四边 padding、主/交叉轴对齐、`wrap` / `crossGap` / `alignContent`；每个子项的尺寸行为（fixed / hug / fill + min/max）、可见性、绝对定位；
+- 输出：子项在容器 border box 内的 `x/y/width/height`，以及容器内容所需尺寸（供 hug 写回）；
+- `availW/availH` 为 `undefined` 表示该轴 hug：不分配 fill、不按 space-between 拉伸；
+- 算法：**两遍法**——先确定主轴尺寸（fill 只在单行分配剩余空间），再分行/交叉轴排布；
+- **wrap 下 fill 退化为 fixed**：换行后没有稳定的剩余空间可分配，避免固定点迭代；
+- 隐藏子项退出排布；绝对定位子项原样保留（X/Y 相对容器左上角，忽略 padding）；
+- 交叉轴 `stretch` 只作用于 `fixed` / `fill` 子项：`hug` 与文本自动尺寸必须保持内容尺寸，否则会与测量写回形成循环；
 - 明确不做：基线对齐、CSS grid、百分比尺寸。
 
-布局发生在命令应用之后、渲染之前，结果写回节点的 `layoutCache`（渲染直接消费，不重复计算）。
+求解发生在**事务末尾**：从受影响节点向上收集布局容器，自底向上各求解一次，几何写回作为内部 `node.update` 与用户命令共用同一个撤销条目。文档几何是唯一真源，没有 `layoutCache`。
+
+派生几何（布局求解、文本测量）不写入实例覆盖表；hug 轴与 fill 轴的尺寸也不记录为覆盖。
 
 ## 7. 组件系统
 
@@ -203,13 +216,12 @@ interface RenderBackend {
 
 ## 9. 文本与字体
 
-- v1 文本节点单一样式（字体族/字号/行高/字重/对齐/字色），富文本 runs 放 v1.5；
-- 编辑体验用 **DOM 浮层**（textarea 覆盖文本节点，回车确认、Shift+Enter 换行、Esc 取消）——可靠性远高于自绘光标；
-- 新建文本默认字号 20（世界坐标）、字体与界面一致，节点尺寸按 `measureText` 自动贴合（宽 = 最长行，高 = 行数 × 字号 × 1.4），创建后直接进入编辑并全选；
-- 编辑期间该节点在画布上停绘（`drawDocument` 的 `hideTextId`），提交时一次性 `node.update` 写回 `text/width/height`，一步撤销；编辑中只保留输入框本身，选中框/手柄/尺寸徽标全部隐藏（避免"双框"）；
-- 检查器「文案」是自动增高 `textarea`：`Enter` 换行、失焦或 `⌘Enter` 提交（一步撤销）、`Esc` 放弃；提交时同样按 `measureText` 重算宽高；
-- 排版：Canvas `measureText` 逐段测量 + 断行（中文按字、英文按词，遵循 CJK 禁则基础规则）；测量结果按字体参数缓存；
-- 字体：系统字体直接可用；支持导入 ttf/woff2 并**嵌入文档包**（`FontFace` API 注册），保证跨机器渲染一致。
+- 整段单一样式：字体族、字重、斜体、字号、行高（auto / px / %）、字距（px / %）、段距（px）、水平对齐（left / center / right / justify）、垂直对齐（top / middle / bottom）、大小写、装饰、列表（无 / 项目符号 / 编号）、fixed 高度截断；富文本 runs 仍在 v1.5。
+- 字体族是**受控栈**：Geist / Geist Mono / 系统无衬线 / 系统衬线 / 系统等宽；字重 100–900；不做字体导入与可变字体轴。
+- `textAutoResize` 三模式：`auto-width`（不换行）、`auto-height`（固定宽度换行，高度随内容）、`fixed`（宽高固定，可截断）。检查器改 W/H 会切到 fixed。
+- 行盒算法在 `packages/core/src/text.ts`（纯函数，宽度测量由调用方注入）：换行、列表缩进、段落间距、截断省略号都由它产出，Canvas 渲染与检查器测量共用同一份结果。
+- 测量留在 UI 层：`apps/web/src/text-metrics.ts` 注入 Canvas `measureText`，提交前一次性写回 `text + width/height`；AI 工具通过 `makeExecutor` 的测量参数获得同一能力，无测量的宿主按字号估算。
+- 行内编辑使用 **contenteditable** 浮层：与画布共享字体、行高、字距、对齐、装饰与列表 CSS；`⌘Enter` 提交、Esc 取消、失焦提交。编辑期间画布停绘该节点。
 
 ## 10. 文件格式
 

@@ -5,7 +5,7 @@
  */
 
 import type { DocNode, DocState, NodeId, VectorPath } from "@sqraft/core";
-import { resolvePaint, polygonPoints } from "@sqraft/core";
+import { cornerRadiusOf, resolvePaint, polygonPoints } from "@sqraft/core";
 import type { RenderBackend, RenderContext, Viewport } from "./backend";
 
 const CONTAINER_TYPES = new Set(["page", "frame", "group"]);
@@ -25,7 +25,7 @@ function drawSelf(
     case "component":
     case "instance":
     case "slot":
-      backend.drawRect(node, fill, stroke, node.style.strokeWidth, node.style.cornerRadius ?? 0);
+      backend.drawRect(node, fill, stroke, node.style.strokeWidth, cornerRadiusOf(node.style));
       break;
     case "ellipse":
       backend.drawEllipse(node, fill, stroke, node.style.strokeWidth);
@@ -35,7 +35,7 @@ function drawSelf(
       else backend.drawLine(node, stroke ?? "#000", node.style.strokeWidth ?? 1);
       break;
     case "text":
-      backend.drawText(node, fill ?? "#000");
+      backend.drawText(node, fill ?? "#000", stroke);
       break;
     case "path": {
       const vector = vectorOverride ?? node.vector;
@@ -47,7 +47,7 @@ function drawSelf(
       break;
     default:
       if (!CONTAINER_TYPES.has(node.type)) {
-        backend.drawRect(node, fill, stroke, node.style.strokeWidth, node.style.cornerRadius ?? 0);
+        backend.drawRect(node, fill, stroke, node.style.strokeWidth, cornerRadiusOf(node.style));
       }
   }
 }
@@ -72,6 +72,8 @@ function drawNode(
   options: DrawOptions,
 ): void {
   if (!node.visible) return;
+  const opacity = node.opacity ?? 1;
+  if (opacity < 1) backend.pushOpacity(opacity);
   const geo = geometryOf(node, options);
   const changed = geo.x !== node.x || geo.y !== node.y || geo.width !== node.width || geo.height !== node.height;
   // 行内编辑中的文本由 DOM 输入框承载，画布上跳过以免重影
@@ -81,13 +83,17 @@ function drawNode(
     drawSelf(backend, ctx, changed ? { ...node, ...geo } : node, vectorOverride);
   }
   if (node.children.length > 0) {
-    backend.pushTransform(geo.x, geo.y);
+    backend.pushTransform(geo.x, geo.y, node.rotation, geo.width, geo.height);
+    const clipped = node.clip && (node.type === "frame" || node.type === "component" || node.type === "instance");
+    if (clipped) backend.pushClip(0, 0, geo.width, geo.height, cornerRadiusOf(node.style));
     for (const childId of node.children) {
       const child = ctx.doc.nodes[childId];
       if (child) drawNode(backend, ctx, child, options);
     }
+    if (clipped) backend.popClip();
     backend.popTransform();
   }
+  if (opacity < 1) backend.popOpacity();
 }
 
 export interface DrawOptions {
@@ -125,7 +131,7 @@ export function drawDocument(backend: RenderBackend, doc: DocState, options: Dra
       "#ffffff",
       "rgba(15,23,42,0.10)",
       1,
-      0,
+      { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 },
       true,
     );
     backend.pushTransform(geo.x, geo.y);

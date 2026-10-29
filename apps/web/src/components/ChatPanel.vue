@@ -7,6 +7,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { makeExecutor, toOpenAITools } from "@sqraft/ai-tools";
 import { ai, hasModels, selectModel, selectedProvider } from "../ai";
 import { docStore, hooks, ui } from "../store";
+import { textSizeOf } from "../text-metrics";
 import { registerShortcuts } from "../shortcuts";
 import {
   autoTitle,
@@ -45,7 +46,12 @@ const textareaEl = ref<HTMLTextAreaElement | null>(null);
 const fileInputEl = ref<HTMLInputElement | null>(null);
 let stopShortcuts = () => {};
 
-const executor = makeExecutor(docStore, () => hooks.getScreenshot(), () => hooks.getActivePageId());
+const executor = makeExecutor(
+  docStore,
+  () => hooks.getScreenshot(),
+  () => hooks.getActivePageId(),
+  (node, style, text) => textSizeOf(node, style, text),
+);
 
 const selectedValue = computed(() => {
   if (!ai.selectedProviderId || !ai.selectedModel) return "";

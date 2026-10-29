@@ -79,6 +79,8 @@ export function materializeInstance(
     width: master.width,
     height: master.height,
     rotation: master.rotation,
+    opacity: master.opacity,
+    clip: master.clip,
     // 母版自身是否隐藏只影响它在画布上的呈现，不传播给实例
     visible: true,
     locked: false,
@@ -255,6 +257,8 @@ export function planSwapInstanceClone(state: DocState, instance: DocNode, newCom
         width: master.width,
         height: master.height,
         rotation: master.rotation,
+        opacity: master.opacity,
+        clip: master.clip,
         style: cloneStyle(master.style),
         layout: master.layout ? { ...master.layout } : undefined,
         name: master.name,
@@ -290,8 +294,20 @@ export function planSwapInstanceClone(state: DocState, instance: DocNode, newCom
             width: child.width,
             height: child.height,
             rotation: child.rotation,
+            opacity: child.opacity,
+            clip: child.clip,
             visible: child.visible,
             locked: child.locked,
+            layoutSizingW: child.layoutSizingW,
+            layoutSizingH: child.layoutSizingH,
+            layoutMinW: child.layoutMinW,
+            layoutMinH: child.layoutMinH,
+            layoutMaxW: child.layoutMaxW,
+            layoutMaxH: child.layoutMaxH,
+            layoutAbsolute: child.layoutAbsolute,
+            textAutoResize: child.textAutoResize,
+            listType: child.listType,
+            truncate: child.truncate,
             style: cloneStyle(child.style),
             layout: child.layout ? { ...child.layout } : undefined,
             slotFilled: true,
@@ -348,6 +364,8 @@ function diffNode(
   set("height", pick("height"));
   set("rotation", pick("rotation"));
   set("name", pick("name"));
+  set("opacity", pick("opacity"));
+  set("clip", pick("clip"));
   if (isRoot && forced && "visible" in forced) set("visible", forced.visible);
   if (!isRoot) {
     set("type", pick("type"));
@@ -355,6 +373,16 @@ function diffNode(
     set("y", pick("y"));
     set("visible", pick("visible"));
     set("locked", pick("locked"));
+    set("layoutSizingW", pick("layoutSizingW"));
+    set("layoutSizingH", pick("layoutSizingH"));
+    set("layoutMinW", pick("layoutMinW"));
+    set("layoutMinH", pick("layoutMinH"));
+    set("layoutMaxW", pick("layoutMaxW"));
+    set("layoutMaxH", pick("layoutMaxH"));
+    set("layoutAbsolute", pick("layoutAbsolute"));
+    set("textAutoResize", pick("textAutoResize"));
+    set("listType", pick("listType"));
+    set("truncate", pick("truncate"));
   }
   set("text", pick("text"));
   set("sides", pick("sides"));
@@ -596,6 +624,26 @@ export function findOuterOverrideOwner(state: DocState, nodeId: NodeId): Overrid
   return { owner: ancestor, key: node.mainId, master };
 }
 
+/** 派生几何：布局求解 / 文本测量得出的字段，不记录为实例覆盖。 */
+function isDerivedGeometry(state: DocState, node: DocNode, field: "x" | "y" | "width" | "height"): boolean {
+  const parent = node.parentId ? state.nodes[node.parentId] : undefined;
+  if (parent?.layout && !node.layoutAbsolute) {
+    if (field === "x" || field === "y") return true;
+    if (field === "width" && (node.layoutSizingW ?? "fixed") === "fill") return true;
+    if (field === "height" && (node.layoutSizingH ?? "fixed") === "fill") return true;
+  }
+  if (node.layout) {
+    if (field === "width" && node.layoutSizingW === "hug") return true;
+    if (field === "height" && node.layoutSizingH === "hug") return true;
+  }
+  if (node.type === "text") {
+    const mode = node.textAutoResize ?? "auto-width";
+    if (mode === "auto-width" && (field === "width" || field === "height")) return true;
+    if (mode === "auto-height" && field === "height") return true;
+  }
+  return false;
+}
+
 /** 当前节点自己的覆盖补丁（不含祖先的）。 */
 export function overridePatchOf(state: DocState, nodeId: NodeId): NodeOverride | null {
   const info = findOverrideOwner(state, nodeId);
@@ -639,7 +687,12 @@ export function computeSelfOverride(state: DocState, nodeId: NodeId): NodeOverri
   const master = state.nodes[node.componentId];
   if (!master || master.type !== "component") return null;
   const patch: NodeOverride = {};
-  for (const field of ["name", "width", "height", "rotation", "layout"] as const) {
+  const fields = [
+    "name", "width", "height", "rotation", "layout", "opacity", "clip",
+    "textAutoResize", "listType", "truncate",
+  ] as const;
+  for (const field of fields) {
+    if ((field === "width" || field === "height") && isDerivedGeometry(state, node, field)) continue;
     if (!sameValue(node[field], master[field])) (patch as Record<string, unknown>)[field] = cloneValue(node[field]);
   }
   const stylePatch: Partial<NodeStyle> = {};
@@ -662,6 +715,7 @@ export function computeOuterOverride(state: DocState, nodeId: NodeId): NodeOverr
   const patch: NodeOverride = {};
   for (const field of ["x", "y", "visible", "locked", "componentId"] as const) {
     if (bound.has(field)) continue;
+    if ((field === "x" || field === "y") && isDerivedGeometry(state, node, field)) continue;
     if (!sameValue(node[field], info.master[field])) (patch as Record<string, unknown>)[field] = cloneValue(node[field]);
   }
   // 仍指向同一个组件时，属性值是外层母版的一部分；已替换后归实例自己
@@ -682,9 +736,17 @@ export function computeOverridePatch(state: DocState, nodeId: NodeId): NodeOverr
   const patch: NodeOverride = {};
   const fields: Array<keyof DocNode> = [
     "name", "x", "y", "width", "height", "rotation", "visible", "locked", "text", "sides", "vector", "layout",
+    "opacity", "clip", "layoutSizingW", "layoutSizingH", "layoutMinW", "layoutMinH", "layoutMaxW", "layoutMaxH",
+    "layoutAbsolute", "textAutoResize", "listType", "truncate",
   ];
   for (const field of fields) {
     if (bound.has(field)) continue;
+    if (
+      (field === "x" || field === "y" || field === "width" || field === "height") &&
+      isDerivedGeometry(state, node, field)
+    ) {
+      continue;
+    }
     if (!sameValue(node[field], info.master[field])) {
       (patch as Record<string, unknown>)[field] = cloneValue(node[field]);
     }

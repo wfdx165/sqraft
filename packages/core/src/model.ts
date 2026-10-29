@@ -29,25 +29,80 @@ export interface ComponentPropertyDef {
   targetMainId: NodeId;
 }
 
+/** 四角圆角（模型只存四角；统一值是 UI 快捷）。 */
+export interface CornerRadius {
+  topLeft: number;
+  topRight: number;
+  bottomRight: number;
+  bottomLeft: number;
+}
+
+export const ZERO_CORNER_RADIUS: CornerRadius = {
+  topLeft: 0,
+  topRight: 0,
+  bottomRight: 0,
+  bottomLeft: 0,
+};
+
+/** 行高：auto 用 TEXT_LINE_HEIGHT；percent 以字号为基准。 */
+export type LineHeightUnit = "auto" | "px" | "percent";
+export type LetterSpacingUnit = "px" | "percent";
+export type TextAlign = "left" | "center" | "right" | "justify";
+export type TextVerticalAlign = "top" | "middle" | "bottom";
+export type TextCase = "none" | "upper" | "lower" | "title";
+export type TextDecoration = "none" | "underline" | "strikethrough";
+export type FontStyle = "normal" | "italic";
+
 export interface NodeStyle {
   fill?: Paint | null;
   stroke?: Paint;
   strokeWidth?: number;
-  cornerRadius?: number;
+  cornerRadius?: CornerRadius;
   fontSize?: number;
   fontFamily?: string;
   fontWeight?: number;
+  fontStyle?: FontStyle;
   lineHeight?: number;
-  textAlign?: "left" | "center" | "right";
+  lineHeightUnit?: LineHeightUnit;
+  letterSpacing?: number;
+  letterSpacingUnit?: LetterSpacingUnit;
+  paragraphSpacing?: number;
+  textAlign?: TextAlign;
+  textVerticalAlign?: TextVerticalAlign;
+  textCase?: TextCase;
+  textDecoration?: TextDecoration;
 }
+
+/** 四边内边距：模型只存四边；统一值是 UI 快捷。 */
+export interface Padding {
+  top: number;
+  right: number;
+  bottom: number;
+  left: number;
+}
+
+export const ZERO_PADDING: Padding = { top: 0, right: 0, bottom: 0, left: 0 };
+
+export type MainAlign = "start" | "center" | "end" | "space-between";
+export type CrossAlign = "start" | "center" | "end" | "stretch";
+export type AlignContent = "start" | "center" | "end" | "space-between" | "stretch";
 
 export interface LayoutSpec {
   direction: "horizontal" | "vertical";
   gap: number;
-  padding: number;
-  mainAlign: "start" | "center" | "end" | "space-between";
-  crossAlign: "start" | "center" | "end" | "stretch";
+  padding: Padding;
+  mainAlign: MainAlign;
+  crossAlign: CrossAlign;
+  wrap: boolean;
+  crossGap: number;
+  alignContent: AlignContent;
 }
+
+/** 子项在父布局中的尺寸行为。 */
+export type LayoutSizing = "fixed" | "hug" | "fill";
+/** 文本尺寸模式。 */
+export type TextAutoResize = "auto-width" | "auto-height" | "fixed";
+export type ListType = "none" | "bulleted" | "numbered";
 
 /**
  * 字段级覆盖：style 允许只覆盖子字段（如 fill），其余字段按 DocNode 的形状给。
@@ -66,9 +121,28 @@ export interface DocNode {
   width: number;
   height: number;
   rotation: number;
+  /** 0–1；按层叠（祖先 × 自身）生效 */
+  opacity: number;
   visible: boolean;
   locked: boolean;
+  /** 仅 frame/component：裁剪子节点到圆角边界 */
+  clip: boolean;
+  /** 自身在父自动布局里的尺寸行为（仅作子项时有意义） */
+  layoutSizingW?: LayoutSizing;
+  layoutSizingH?: LayoutSizing;
+  layoutMinW?: number;
+  layoutMinH?: number;
+  layoutMaxW?: number;
+  layoutMaxH?: number;
+  /** 绝对定位：退出父布局排布，X/Y 相对容器左上角 */
+  layoutAbsolute?: boolean;
   text?: string;
+  /** 文本尺寸模式；缺省按 auto-width */
+  textAutoResize?: TextAutoResize;
+  /** 文本列表类型（整段） */
+  listType?: ListType;
+  /** fixed 高度下是否截断并显示省略号 */
+  truncate?: boolean;
   /** instance → 主组件 id */
   componentId?: NodeId;
   /** 自动布局：仅 frame 可持有（自动布局的唯一宿主） */
@@ -97,6 +171,8 @@ export interface TokenEntry {
 
 export interface DocState {
   version: number;
+  /** 文件格式版本；旧文件缺省按 1 处理 */
+  formatVersion?: number;
   rootIds: NodeId[];
   nodes: Record<NodeId, DocNode>;
   /** Token 表：key 形如 "color/primary"（单一取值，无模式） */
@@ -110,6 +186,7 @@ export function newId(): NodeId {
 }
 
 export function createNode(type: NodeType, patch: Partial<DocNode> = {}): DocNode {
+  const container = type === "frame" || type === "component";
   return {
     id: newId(),
     type,
@@ -121,8 +198,15 @@ export function createNode(type: NodeType, patch: Partial<DocNode> = {}): DocNod
     width: 100,
     height: 100,
     rotation: 0,
+    opacity: 1,
     visible: true,
     locked: false,
+    // 新画板/组件默认裁剪内容；实例在物化时继承母版
+    clip: container,
+    layoutSizingW: "fixed",
+    layoutSizingH: "fixed",
+    textAutoResize: type === "text" ? "auto-width" : undefined,
+    listType: type === "text" ? "none" : undefined,
     style: {},
     ...patch,
   };
@@ -146,6 +230,7 @@ export function createEmptyDoc(): DocState {
   });
   return {
     version: 1,
+    formatVersion: 2,
     rootIds: [page.id],
     nodes: { [page.id]: page },
     tokens: {
@@ -217,6 +302,99 @@ export function worldRect(state: DocState, id: NodeId): Rect | null {
     y += chain[i].y;
   }
   return { x, y, width: node.width, height: node.height };
+}
+
+/** 节点的累计旋转角（自身 + 祖先，度数）。 */
+export function worldRotation(state: DocState, id: NodeId): number {
+  let angle = 0;
+  let cur: DocNode | undefined = state.nodes[id];
+  while (cur) {
+    angle += cur.rotation || 0;
+    cur = cur.parentId ? state.nodes[cur.parentId] : undefined;
+  }
+  return angle;
+}
+
+export interface WorldPoint {
+  x: number;
+  y: number;
+}
+
+export interface QuadGeometry {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/**
+ * 节点在画布世界坐标中的旋转四边形（左上、右上、右下、左下）。
+ * `geometry` 可覆盖节点自身的局部矩形（缩放预览用），祖先变换照常累加。
+ * 命中与选中框用它；页面吸附等只需要轴对齐包围盒的地方继续用 worldRect。
+ */
+export function worldQuad(state: DocState, id: NodeId, geometry?: QuadGeometry): WorldPoint[] | null {
+  const node = state.nodes[id];
+  if (!node) return null;
+  const chain: DocNode[] = [];
+  let cur: DocNode | undefined = node;
+  while (cur) {
+    chain.push(cur);
+    cur = cur.parentId ? state.nodes[cur.parentId] : undefined;
+  }
+  const base = geometry ?? { x: node.x, y: node.y, width: node.width, height: node.height };
+  // 从节点本地坐标开始，逐层（自身 → 祖先）变换到父坐标系
+  let points: WorldPoint[] = [
+    { x: 0, y: 0 },
+    { x: base.width, y: 0 },
+    { x: base.width, y: base.height },
+    { x: 0, y: base.height },
+  ];
+  for (let i = 0; i < chain.length; i++) {
+    const n = chain[i];
+    const gx = i === 0 ? base.x : n.x;
+    const gy = i === 0 ? base.y : n.y;
+    const gw = i === 0 ? base.width : n.width;
+    const gh = i === 0 ? base.height : n.height;
+    const angle = ((n.rotation || 0) * Math.PI) / 180;
+    const cx = gx + gw / 2;
+    const cy = gy + gh / 2;
+    points = points.map((p) => {
+      const px = p.x + gx;
+      const py = p.y + gy;
+      if (!angle) return { x: px, y: py };
+      const dx = px - cx;
+      const dy = py - cy;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos };
+    });
+  }
+  return points;
+}
+
+/** 四角圆角归一化：缺省视为 0。 */
+export function cornerRadiusOf(style: NodeStyle | undefined): CornerRadius {
+  return style?.cornerRadius ?? ZERO_CORNER_RADIUS;
+}
+
+/** 四边 padding 归一化：缺省视为 0。 */
+export function paddingOf(spec: LayoutSpec | undefined): Padding {
+  return spec?.padding ?? ZERO_PADDING;
+}
+
+/** 自动布局默认值（新建容器或添加布局时使用）。 */
+export function createLayoutSpec(patch: Partial<LayoutSpec> = {}): LayoutSpec {
+  return {
+    direction: "vertical",
+    gap: 0,
+    padding: { ...ZERO_PADDING },
+    mainAlign: "start",
+    crossAlign: "start",
+    wrap: false,
+    crossGap: 0,
+    alignContent: "start",
+    ...patch,
+  };
 }
 
 /** 新建页面的摆放位置：最右侧页面之右，与首屏顶部对齐。 */

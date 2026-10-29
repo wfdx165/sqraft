@@ -6,6 +6,7 @@
 import type { Command, DocNode, DocStore, NodeId, NodeStyle, VectorAnchor } from "@sqraft/core";
 import {
   clampSides,
+  createLayoutSpec,
   createNode,
   firstPageId,
   makeAnchor,
@@ -13,7 +14,99 @@ import {
   nextComponentName,
   validateVector,
   walkSubtree,
+  type CornerRadius,
+  type LayoutSpec,
+  type Padding,
+  type TextAutoResize,
 } from "@sqraft/core";
+
+/** create_node / update_node 共用的排版与外观字段。 */
+const STYLE_SCHEMA: Record<string, unknown> = {
+  fillToken: { type: "string", description: "填充色的 Token 名，如 color/primary" },
+  strokeToken: { type: "string", description: "描边色的 Token 名；开放路径默认 color/text" },
+  strokeWidth: { type: "number", description: "描边线宽" },
+  cornerRadius: {
+    description: "圆角：数字表示四角统一；也可传 { topLeft, topRight, bottomRight, bottomLeft }",
+    oneOf: [
+      { type: "number" },
+      {
+        type: "object",
+        properties: {
+          topLeft: { type: "number" },
+          topRight: { type: "number" },
+          bottomRight: { type: "number" },
+          bottomLeft: { type: "number" },
+        },
+        additionalProperties: false,
+      },
+    ],
+  },
+  fontFamily: { type: "string", description: "受控字体栈，如 'Geist Variable', 'PingFang SC', sans-serif" },
+  fontWeight: { type: "number", description: "100–900" },
+  fontStyle: { type: "string", enum: ["normal", "italic"] },
+  fontSize: { type: "number" },
+  lineHeight: { type: "number" },
+  lineHeightUnit: { type: "string", enum: ["auto", "px", "percent"] },
+  letterSpacing: { type: "number" },
+  letterSpacingUnit: { type: "string", enum: ["px", "percent"] },
+  paragraphSpacing: { type: "number" },
+  textAlign: { type: "string", enum: ["left", "center", "right", "justify"] },
+  textVerticalAlign: { type: "string", enum: ["top", "middle", "bottom"] },
+  textCase: { type: "string", enum: ["none", "upper", "lower", "title"] },
+  textDecoration: { type: "string", enum: ["none", "underline", "strikethrough"] },
+  textAutoResize: { type: "string", enum: ["auto-width", "auto-height", "fixed"] },
+  listType: { type: "string", enum: ["none", "bulleted", "numbered"] },
+  truncate: { type: "boolean" },
+};
+
+/** 节点几何/布局字段。 */
+const NODE_SCHEMA: Record<string, unknown> = {
+  x: { type: "number" },
+  y: { type: "number" },
+  width: { type: "number" },
+  height: { type: "number" },
+  rotation: { type: "number", description: "旋转角度（度）" },
+  opacity: { type: "number", description: "0–1" },
+  visible: { type: "boolean" },
+  locked: { type: "boolean" },
+  clip: { type: "boolean", description: "仅 frame/component：裁剪子节点" },
+  layoutSizingW: { type: "string", enum: ["fixed", "hug", "fill"] },
+  layoutSizingH: { type: "string", enum: ["fixed", "hug", "fill"] },
+  layoutMinW: { type: "number" },
+  layoutMinH: { type: "number" },
+  layoutMaxW: { type: "number" },
+  layoutMaxH: { type: "number" },
+  layoutAbsolute: { type: "boolean" },
+  layout: {
+    type: "object",
+    description: "自动布局：只允许 frame/component。padding 支持数字或四边对象。",
+    properties: {
+      direction: { type: "string", enum: ["horizontal", "vertical"] },
+      gap: { type: "number" },
+      padding: {
+        oneOf: [
+          { type: "number" },
+          {
+            type: "object",
+            properties: {
+              top: { type: "number" },
+              right: { type: "number" },
+              bottom: { type: "number" },
+              left: { type: "number" },
+            },
+            additionalProperties: false,
+          },
+        ],
+      },
+      mainAlign: { type: "string", enum: ["start", "center", "end", "space-between"] },
+      crossAlign: { type: "string", enum: ["start", "center", "end", "stretch"] },
+      wrap: { type: "boolean" },
+      crossGap: { type: "number" },
+      alignContent: { type: "string", enum: ["start", "center", "end", "space-between", "stretch"] },
+    },
+    additionalProperties: false,
+  },
+};
 
 export interface ToolDefinition {
   name: string;
@@ -46,17 +139,8 @@ export const tools: ToolDefinition[] = [
         parentId: { type: "string", description: "父节点 id；省略则建到当前页面" },
         kind: { type: "string", enum: ["frame", "rect", "ellipse", "polygon", "line", "path", "text", "component", "slot"] },
         name: { type: "string", description: "slot 必填且组件内唯一" },
-        x: { type: "number" },
-        y: { type: "number" },
-        width: { type: "number" },
-        height: { type: "number" },
         sides: { type: "number", description: "kind=polygon 的边数，3–12，默认 3" },
         text: { type: "string", description: "kind=text 时的文案" },
-        fontSize: { type: "number" },
-        fillToken: { type: "string", description: "填充色的 Token 名，如 color/primary" },
-        strokeToken: { type: "string", description: "描边色的 Token 名；开放路径默认 color/text" },
-        strokeWidth: { type: "number", description: "描边线宽，默认开放路径 2" },
-        cornerRadius: { type: "number" },
         closed: { type: "boolean", description: "kind=path 时是否闭合，默认 false" },
         points: {
           type: "array",
@@ -76,6 +160,8 @@ export const tools: ToolDefinition[] = [
             additionalProperties: false,
           },
         },
+        ...NODE_SCHEMA,
+        ...STYLE_SCHEMA,
       },
       required: ["kind"],
       additionalProperties: false,
@@ -172,16 +258,8 @@ export const tools: ToolDefinition[] = [
       type: "object",
       properties: {
         nodeId: { type: "string" },
-        x: { type: "number" },
-        y: { type: "number" },
-        width: { type: "number" },
-        height: { type: "number" },
-        sides: { type: "number", description: "polygon 的边数，3–12" },
         text: { type: "string" },
-        fillToken: { type: "string" },
-        strokeToken: { type: "string" },
-        strokeWidth: { type: "number" },
-        cornerRadius: { type: "number" },
+        sides: { type: "number", description: "polygon 的边数，3–12" },
         closed: { type: "boolean" },
         points: {
           type: "array",
@@ -201,6 +279,8 @@ export const tools: ToolDefinition[] = [
             additionalProperties: false,
           },
         },
+        ...NODE_SCHEMA,
+        ...STYLE_SCHEMA,
       },
       required: ["nodeId"],
       additionalProperties: false,
@@ -240,6 +320,19 @@ function serializeSubtree(store: DocStore, id: NodeId): string {
       w: n.width,
       h: n.height,
       text: n.text,
+      rotation: n.rotation,
+      opacity: n.opacity,
+      visible: n.visible,
+      locked: n.locked,
+      clip: n.clip,
+      style: n.style,
+      ...(n.layout ? { layout: n.layout } : {}),
+      ...(n.layoutSizingW ? { layoutSizingW: n.layoutSizingW } : {}),
+      ...(n.layoutSizingH ? { layoutSizingH: n.layoutSizingH } : {}),
+      ...(n.layoutAbsolute ? { layoutAbsolute: n.layoutAbsolute } : {}),
+      ...(n.textAutoResize ? { textAutoResize: n.textAutoResize } : {}),
+      ...(n.listType ? { listType: n.listType } : {}),
+      ...(n.truncate ? { truncate: n.truncate } : {}),
       ...(n.type === "polygon" ? { sides: n.sides ?? 3 } : {}),
       ...(n.vector ? { vector: n.vector } : {}),
       ...(n.componentId ? { componentId: n.componentId } : {}),
@@ -295,10 +388,73 @@ function findSlotByName(store: DocStore, instanceId: NodeId, name: string): Node
   return found;
 }
 
+function cornerFrom(value: unknown): CornerRadius | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value === "number") {
+    return { topLeft: value, topRight: value, bottomRight: value, bottomLeft: value };
+  }
+  const c = value as Partial<CornerRadius>;
+  return {
+    topLeft: Number(c.topLeft ?? 0),
+    topRight: Number(c.topRight ?? 0),
+    bottomRight: Number(c.bottomRight ?? 0),
+    bottomLeft: Number(c.bottomLeft ?? 0),
+  };
+}
+
+function paddingFrom(value: unknown): Padding {
+  if (typeof value === "number") return { top: value, right: value, bottom: value, left: value };
+  const p = (value ?? {}) as Partial<Padding>;
+  return { top: Number(p.top ?? 0), right: Number(p.right ?? 0), bottom: Number(p.bottom ?? 0), left: Number(p.left ?? 0) };
+}
+
+function layoutFrom(value: unknown): LayoutSpec | undefined {
+  if (value === undefined) return undefined;
+  const raw = value as Partial<LayoutSpec>;
+  return createLayoutSpec({
+    ...raw,
+    padding: paddingFrom(raw.padding),
+  });
+}
+
+/** 外观与排版字段（只在显式传入时覆盖）。 */
+function applyStyleArgs(style: NodeStyle, args: Record<string, unknown>): NodeStyle {
+  const next: NodeStyle = { ...style };
+  const keys = [
+    "fontFamily", "fontWeight", "fontStyle", "fontSize", "lineHeight", "lineHeightUnit",
+    "letterSpacing", "letterSpacingUnit", "paragraphSpacing", "textAlign", "textVerticalAlign",
+    "textCase", "textDecoration",
+  ] as const;
+  for (const key of keys) {
+    if (args[key] !== undefined) (next as Record<string, unknown>)[key] = args[key];
+  }
+  const corner = cornerFrom(args.cornerRadius);
+  if (corner) next.cornerRadius = corner;
+  applyStyleTokens(next, args);
+  return next;
+}
+
+/** 节点几何/布局字段（只在显式传入时覆盖）。 */
+function applyNodeArgs(args: Record<string, unknown>): Partial<DocNode> {
+  const patch: Partial<DocNode> = {};
+  const keys = [
+    "x", "y", "width", "height", "rotation", "opacity", "visible", "locked", "clip",
+    "layoutSizingW", "layoutSizingH", "layoutMinW", "layoutMinH", "layoutMaxW", "layoutMaxH",
+    "layoutAbsolute", "text", "textAutoResize", "listType", "truncate",
+  ] as const;
+  for (const key of keys) {
+    if (args[key] !== undefined) (patch as Record<string, unknown>)[key] = args[key];
+  }
+  const layout = layoutFrom(args.layout);
+  if (layout) patch.layout = layout;
+  return patch;
+}
+
 export function makeExecutor(
   store: DocStore,
   getScreenshot: () => Promise<string>,
   getActivePageId?: () => NodeId | null,
+  measureText?: (node: DocNode, style: NodeStyle, text: string) => { width: number; height: number },
 ): ToolExecutor {
   return async (name, args) => {
     switch (name) {
@@ -359,11 +515,10 @@ export function makeExecutor(
           validateVector({ closed, anchors: points });
         }
 
-        const style: NodeStyle = {
-          fontSize: args.fontSize as number | undefined,
-          cornerRadius: args.cornerRadius as number | undefined,
-        };
-        applyStyleTokens(style, args);
+        if (args.layout !== undefined && kind !== "frame" && kind !== "component") {
+          throw new Error("layout 仅适用于 frame / component");
+        }
+        const style = applyStyleArgs({}, args);
         if (isPath) {
           // 与 GUI 一致：未显式给颜色时，闭合默认填充、开放默认描边
           if (!style.fill && !style.stroke) {
@@ -387,7 +542,14 @@ export function makeExecutor(
           vector: isPath ? { closed, anchors: points! } : undefined,
           sides: isPolygon ? clampSides(args.sides as number) : undefined,
           style,
+          ...applyNodeArgs(args),
         });
+        // 文本：自动尺寸由宿主注入的测量函数决定
+        if (kind === "text" && measureText && (node.textAutoResize ?? "auto-width") !== "fixed") {
+          const size = measureText(node, node.style, node.text ?? "");
+          node.width = size.width;
+          node.height = size.height;
+        }
         store.apply({ type: "node.create", params: { nodes: [node], parentId } }, "ai:create");
         return JSON.stringify({ ok: true, nodeId: node.id });
       }
@@ -476,15 +638,13 @@ export function makeExecutor(
         assertToken(store, args.fillToken as string | undefined, "fillToken");
         assertToken(store, args.strokeToken as string | undefined, "strokeToken");
 
-        const patch: Record<string, unknown> = {};
-        for (const k of ["x", "y", "width", "height", "text", "cornerRadius"] as const) {
-          if (args[k] !== undefined) patch[k] = args[k];
+        if (args.layout !== undefined && node.type !== "frame" && node.type !== "component" && node.type !== "instance") {
+          throw new Error("layout 仅适用于 frame / component / instance");
         }
+        const patch: Partial<DocNode> = { ...applyNodeArgs(args) };
 
-        const style: NodeStyle = { ...node.style };
-        const before = JSON.stringify(style);
-        applyStyleTokens(style, args);
-        if (JSON.stringify(style) !== before) patch.style = style;
+        const style = applyStyleArgs(node.style, args);
+        if (JSON.stringify(style) !== JSON.stringify(node.style)) patch.style = style;
 
         const points = readPoints(args.points);
         const closedArg = args.closed !== undefined ? Boolean(args.closed) : undefined;
@@ -502,6 +662,17 @@ export function makeExecutor(
           patch.vector = { ...node.vector, closed: closedArg };
         }
 
+        // 文本自动尺寸：文本或排版变化后重算
+        if (node.type === "text" && measureText) {
+          const mode = (patch.textAutoResize ?? node.textAutoResize ?? "auto-width") as TextAutoResize;
+          const text = (patch.text ?? node.text ?? "") as string;
+          const style = (patch.style ?? node.style) as NodeStyle;
+          if (mode !== "fixed") {
+            const size = measureText({ ...node, ...patch, style }, style, text);
+            if (mode === "auto-width") patch.width = size.width;
+            patch.height = size.height;
+          }
+        }
         store.apply({ type: "node.update", params: { nodeId, patch } }, "ai:update");
         return JSON.stringify({ ok: true });
       }

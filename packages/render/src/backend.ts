@@ -3,7 +3,7 @@
  * 未来 WebGL2 后端实现同一接口即可替换，文档模型零改动。
  */
 
-import type { DocNode, DocState, VectorPath } from "@sqraft/core";
+import type { CornerRadius, DocNode, DocState, VectorPath } from "@sqraft/core";
 
 export interface Viewport {
   /** 视口左上角在世界坐标中的位置 */
@@ -23,20 +23,23 @@ export interface RenderContext {
 
 export interface RenderBackend {
   beginFrame(vp: Viewport): void;
-  /** 压入容器坐标（子节点相对父容器），popTransform 必须配对 */
-  pushTransform(x: number, y: number): void;
+  /** 压入容器坐标与旋转（绕容器中心），popTransform 必须配对 */
+  pushTransform(x: number, y: number, rotation?: number, width?: number, height?: number): void;
   popTransform(): void;
-  /** 压入整体不透明度（用于非活动页淡化），popOpacity 必须配对 */
+  /** 压入裁剪区域（当前坐标系），popClip 必须配对 */
+  pushClip(x: number, y: number, width: number, height: number, radius: CornerRadius): void;
+  popClip(): void;
+  /** 压入整体不透明度，popOpacity 必须配对 */
   pushOpacity(alpha: number): void;
   popOpacity(): void;
-  drawRect(node: DocNode, fill?: string, stroke?: string, strokeWidth?: number, radius?: number, shadow?: boolean): void;
+  drawRect(node: DocNode, fill?: string, stroke?: string, strokeWidth?: number, radius?: CornerRadius, shadow?: boolean): void;
   drawEllipse(node: DocNode, fill?: string, stroke?: string, strokeWidth?: number): void;
   drawLine(node: DocNode, stroke?: string, strokeWidth?: number): void;
   /** 矢量路径：闭合时 closePath；fill/stroke 为空则跳过对应绘制 */
   drawPath(node: DocNode, vector: VectorPath, fill?: string, stroke?: string, strokeWidth?: number): void;
   /** 参数化多边形：points 为节点本地坐标，闭合描边 */
   drawPolygon(node: DocNode, points: ReadonlyArray<{ x: number; y: number }>, fill?: string, stroke?: string, strokeWidth?: number): void;
-  drawText(node: DocNode, fill?: string): void;
+  drawText(node: DocNode, fill?: string, stroke?: string): void;
   endFrame(): void;
 }
 

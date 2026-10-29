@@ -1,11 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
-  createNode,
   firstPageId,
   makeAnchor,
   scaleVector,
-  TEXT_LINE_HEIGHT,
   worldRect,
   type DocNode,
   type NodeId,
@@ -18,20 +16,29 @@ import {
   beginDraft,
   createPenState,
   finishDraft,
-  nextPolygonName,
   pathAnchorAt,
   removeDraftAnchor,
 } from "../canvas/pen";
 import { dispatch, docStore, hooks, select, switchMode, ui } from "../store";
-import { hitTest, pageAt, slotUnder } from "../canvas/hit";
+import { hitTest, isLocked, pageAt, slotUnder } from "../canvas/hit";
+import { containerAt, layoutParentOf, reorderGuide, reorderIndexAt } from "../canvas/layout-drag";
+import { buildCreatedNode } from "../canvas/create-drag";
+import { deleteSelection as deleteSelectionAction } from "../canvas/delete-selection";
+import { createDraftGuards } from "../canvas/draft-guard";
 import { paintDropSlot as paintDrop, paintSlotPlaceholders as paintSlots } from "../canvas/slot-overlay";
 import { drawPageLabels, labelAt, pageLabelRect } from "../canvas/labels";
-import { handlePoints, resizeRect, selectionScreenRect, type ResizeHandle } from "../canvas/selection";
+import {
+  handlePointsOfQuad,
+  localDelta,
+  resizeRect,
+  selectionQuad,
+  type ResizeHandle,
+} from "../canvas/selection";
 import { drawPulse, drawSelectionOverlay } from "../canvas/selection-overlay";
 import { useTextEditing } from "../canvas/text-editing";
 import { drawGrid } from "../canvas/grid";
 import { FLY_MS, PULSE_MS, createViewportNav } from "../canvas/viewport-nav";
-import { EQUILATERAL_RATIO, TOOL_NAMES, drawToolOf, type DrawTool } from "../canvas/tools";
+import { EQUILATERAL_RATIO, drawToolOf, type DrawTool } from "../canvas/tools";
 import { cursorFor } from "../canvas/cursor";
 import {
   createComponentFromSelection as createComponentFromSelectionAction,
@@ -45,7 +52,6 @@ import {
   type GapMark,
   type GuideLine,
 } from "../canvas/guides";
-import { DEFAULT_TEXT_FONT_FAMILY, DEFAULT_TEXT_FONT_SIZE, measureTextSize } from "../text-metrics";
 import { keyOf, registerShortcuts } from "../shortcuts";
 import { vTip } from "../tooltip";
 import Icon from "./Icon.vue";
@@ -55,7 +61,7 @@ const zoomPct = ref(100);
 const zoomMenuOpen = ref(false);
 const ZOOM_PRESETS = [0.5, 0.75, 1, 1.5, 2, 4];
 const vp: Viewport = { x: -200, y: -150, zoom: 1, width: 800, height: 600, dpr: window.devicePixelRatio || 1 };
-const { textEdit, textEditEl, syncTextEditSize, startTextEdit, commitTextEdit, cancelTextEdit, onTextEditKey } =
+const { textEdit, textEditEl, startTextEdit, commitTextEdit, cancelTextEdit, onTextEditInput, onTextEditKey } =
   useTextEditing(vp, markDirty);
 
 const pageRename = ref<{ id: NodeId; value: string; left: number; top: number; width: number } | null>(null);
@@ -97,6 +103,9 @@ let drag: {
   startVector?: VectorPath;
   /** 起笔时的绘图工具：拖动中切工具也不会用新工具提交（避免造出非法节点） */
   tool?: DrawTool;
+  /** 自动布局容器内的拖动 = 重排序 */
+  reorderParentId?: NodeId;
+  reorderIndex?: number;
 } | null = null;
 let preview: { x: number; y: number; w: number; h: number; valid: boolean } | null = null;
 
@@ -247,10 +256,10 @@ function hitHandle(sx: number, sy: number): { handle: ResizeHandle; id: NodeId }
   if (ui.mode !== "edit" || ui.tool !== "select" || ui.selection.length !== 1) return null;
   const id = ui.selection[0];
   const node = docStore.doc.nodes[id];
-  if (!node || node.type === "text") return null;
-  const rect = selectionScreenRect(vp, id, resizePreview, drag);
-  if (!rect) return null;
-  for (const [handle, hx, hy] of handlePoints(rect)) {
+  if (!node || node.type === "text" || isLocked(id)) return null;
+  const quad = selectionQuad(vp, id, resizePreview, drag);
+  if (!quad) return null;
+  for (const [handle, hx, hy] of handlePointsOfQuad(quad)) {
     if (Math.abs(sx - hx) <= HANDLE_HIT_PX && Math.abs(sy - hy) <= HANDLE_HIT_PX) return { handle, id };
   }
   return null;
@@ -452,23 +461,14 @@ function updateHover(e: PointerEvent) {
   }
 }
 
+const draftGuards = createDraftGuards(pen, () => canvasRef.value, () => finishDraft(pen, penDeps, false));
+
 function onPointerLeave() {
   if (pen.draft) {
     pen.penHover = null;
     markDirty();
   }
   if (!drag) clearHover();
-}
-
-/** 点画布以外的任何地方（工具条、左栏、面板）都按 Esc 规则收尾草稿。 */
-function onWindowPointerDown(e: PointerEvent) {
-  if (!pen.draft) return;
-  if (e.target === canvasRef.value) return;
-  finishDraft(pen, penDeps, false);
-}
-
-function onWindowBlur() {
-  if (pen.draft) finishDraft(pen, penDeps, false);
 }
 
 /** 根据手柄与指针位移计算新矩形（世界坐标；`keepAspect` 对应 Shift）。 */
@@ -669,6 +669,20 @@ function onPointerDown(e: PointerEvent) {
     markDirty();
     return;
   }
+  // 自动布局容器里的普通子项：拖动 = 重排序；⌘ 拖动 = 转绝对定位
+  const hitNode = docStore.doc.nodes[hit.id];
+  const layoutParent = hitNode ? layoutParentOf(hitNode.id) : null;
+  if (hitNode && layoutParent && !hitNode.layoutAbsolute && ui.selection.length === 1) {
+    if (e.metaKey) {
+      dispatch({ type: "node.update", params: { nodeId: hitNode.id, patch: { layoutAbsolute: true } } }, "layout");
+    } else {
+      dragging.value = true;
+      drag = { ...base, startX: w.x, startY: w.y, mode: "reorder", reorderParentId: layoutParent.id, reorderIndex: -1 };
+      markDirty();
+      return;
+    }
+  }
+
   // 页面间参考线只对页面生效（普通图层拖动时通常为空）
   const { dragPages, snapTargets } = pageDragContext(ui.selection);
   drag = { ...base, startX: w.x, startY: w.y, mode: "move", dragPages, snapTargets };
@@ -766,6 +780,13 @@ function onPointerMove(e: PointerEvent) {
       }
     }
     pen.vectorDrag.preview = vec;
+  } else if (drag.mode === "reorder" && drag.reorderParentId) {
+    if (!drag.moved) {
+      if (Math.hypot(sx - drag.downX, sy - drag.downY) < 3) return;
+      drag.moved = true;
+    }
+    drag.reorderIndex = reorderIndexAt(drag.reorderParentId, w.x, w.y, ui.selection);
+    guideLines = reorderGuide(drag.reorderParentId, w.x, w.y);
   } else if (drag.mode === "move") {
     // 3px 阈值：双击/手抖不产生移动命令
     if (!drag.moved) {
@@ -791,7 +812,8 @@ function onPointerMove(e: PointerEvent) {
     }
     const node = docStore.doc.nodes[drag.resizeId];
     const min = node?.type === "page" ? MIN_PAGE_SIZE : MIN_NODE_SIZE;
-    const next = resizeRect(drag.startRect, drag.handle, w.x - drag.startX, w.y - drag.startY, e.shiftKey, min);
+    const delta = localDelta(drag.resizeId, w.x - drag.startX, w.y - drag.startY);
+    const next = resizeRect(drag.startRect, drag.handle, delta.dx, delta.dy, e.shiftKey, min);
     resizePreview = { id: drag.resizeId, ...next };
     if (drag.startVector && drag.startRect) {
       const sx = next.width / Math.max(1, drag.startRect.width);
@@ -856,18 +878,43 @@ function onPointerUp() {
     markDirty();
     return;
   }
+  if (drag.mode === "reorder") {
+    if (drag.moved && drag.reorderParentId && (drag.reorderIndex ?? -1) >= 0) {
+      const parentId = drag.reorderParentId;
+      const index = drag.reorderIndex as number;
+      const cmds = ui.selection.map((id) => ({
+        type: "node.reparent" as const,
+        params: { nodeId: id, parentId, index },
+      }));
+      dispatch(cmds, "reorder");
+    }
+    guideLines = [];
+    gapMarks = [];
+    drag = null;
+    markDirty();
+    return;
+  }
   if (drag.mode === "resize") {
     if (drag.moved && resizePreview) {
       const node = docStore.doc.nodes[resizePreview.id];
       if (node) {
-        const next = {
+        const next: Partial<DocNode> = {
           x: Math.round(resizePreview.x),
           y: Math.round(resizePreview.y),
           width: Math.round(resizePreview.width),
           height: Math.round(resizePreview.height),
         };
+        const parent = node.parentId ? docStore.doc.nodes[node.parentId] : null;
+        if (parent?.layout && !node.layoutAbsolute) {
+          next.layoutSizingW = "fixed";
+          next.layoutSizingH = "fixed";
+        }
         if (next.x !== node.x || next.y !== node.y || next.width !== node.width || next.height !== node.height) {
-          dispatch({ type: "node.update", params: { nodeId: node.id, patch: next } }, "resize");
+          try {
+            dispatch({ type: "node.update", params: { nodeId: node.id, patch: next } }, "resize");
+          } catch {
+            /* 锁定或被核心拒绝时保持原状，不留下半成品预览 */
+          }
         }
       }
     }
@@ -896,80 +943,30 @@ function onPointerUp() {
     if (!filled && (drag.offsetX || drag.offsetY)) {
       const ids = [...ui.selection];
       const cmds = ids
-        .filter((id) => docStore.doc.nodes[id])
+        .filter((id) => docStore.doc.nodes[id] && !isLocked(id))
         .map((id) => {
           const n = docStore.doc.nodes[id];
           return { type: "node.update" as const, params: { nodeId: id, patch: { x: n.x + drag!.offsetX, y: n.y + drag!.offsetY } } };
         });
       if (cmds.length) dispatch(cmds, "move");
     }
-  } else if (drag.mode === "create" && preview && drag.pageId) {
-    const pageId = drag.pageId;
-    const page = docStore.doc.nodes[pageId];
-    const x0 = Math.min(preview.x, preview.x + preview.w);
-    const y0 = Math.min(preview.y, preview.y + preview.h);
-    const w = Math.max(8, Math.abs(preview.w));
-    const h = Math.max(8, Math.abs(preview.h));
-    const tool = drag.tool;
-    if (!tool) {
+  } else if (drag.mode === "create" && preview && drag.pageId && drag.tool) {
+    try {
+      const built = buildCreatedNode({ tool: drag.tool, pageId: drag.pageId, preview });
+      dispatch({ type: "node.create", params: { nodes: [built.node], parentId: built.parentId } }, "create");
+      ui.tool = "select";
+      select([built.node.id]);
+      const startEdit = built.startEdit;
       preview = null;
       drag = null;
+      guideLines = [];
+      gapMarks = [];
       markDirty();
+      if (startEdit) startTextEdit(built.node, true);
       return;
+    } catch {
+      /* 起笔页面失效时按取消处理 */
     }
-    const isLine = tool === "line";
-    const isTriangle = tool === "triangle";
-    const node = createNode(isTriangle ? "polygon" : tool, isLine
-      ? {
-          name: TOOL_NAMES[tool] ?? tool,
-          x: 0,
-          y: 0,
-          width: 1,
-          height: 1,
-          // 用两点路径记住起止方向：单纯用包围盒会把左上→右下的方向强行归一化
-          vector: {
-            closed: false,
-            anchors: [
-              makeAnchor(preview.x - page.x, preview.y - page.y),
-              makeAnchor(preview.x + preview.w - page.x, preview.y + preview.h - page.y),
-            ],
-          },
-          style: { stroke: { token: "color/text" }, strokeWidth: 2 },
-        }
-      : {
-          name: isTriangle ? nextPolygonName(docStore, 3) : (TOOL_NAMES[tool] ?? tool),
-          x: x0 - page.x,
-          y: y0 - page.y,
-          width: w,
-          height: h,
-          sides: isTriangle ? 3 : undefined,
-          // 画板默认白底（color/surface），形状默认主色
-          style: { fill: { token: tool === "frame" ? "color/surface" : "color/primary" } },
-        });
-    let startEdit = false;
-    if (tool === "text") {
-      // 文本：自动尺寸 + 与界面一致的字体，创建后直接进入编辑（全选）
-      const size = measureTextSize("文本", DEFAULT_TEXT_FONT_SIZE, DEFAULT_TEXT_FONT_FAMILY);
-      node.text = "文本";
-      node.width = size.width;
-      node.height = size.height;
-      node.style = {
-        fill: { token: "color/text" },
-        fontSize: DEFAULT_TEXT_FONT_SIZE,
-        fontFamily: DEFAULT_TEXT_FONT_FAMILY,
-      };
-      startEdit = true;
-    }
-    dispatch({ type: "node.create", params: { nodes: [node], parentId: pageId } }, "create");
-    ui.tool = "select";
-    select([node.id]);
-    preview = null;
-    drag = null;
-    guideLines = [];
-    gapMarks = [];
-    markDirty();
-    if (startEdit) startTextEdit(node, true);
-    return;
   }
   preview = null;
   drag = null;
@@ -1132,17 +1129,6 @@ function pickTool(kind: typeof ui.tool) {
   clearHover();
 }
 
-function deleteSelection() {
-  const ids = ui.selection.filter((id) => docStore.doc.nodes[id]?.type !== "page");
-  if (!ids.length) return;
-  if (pen.pathEdit && ids.includes(pen.pathEdit.id)) {
-    pen.pathEdit = null;
-    pen.vectorDrag = null;
-  }
-  dispatch(ids.map((id) => ({ type: "node.delete" as const, params: { nodeId: id } })), "delete");
-  select(ui.selection.filter((s) => !ids.includes(s)));
-}
-
 let unsub = () => {};
 let ro: ResizeObserver | null = null;
 let stopModeWatch = () => {};
@@ -1187,7 +1173,7 @@ onMounted(() => {
     "tool.text": () => pickTool("text"),
     "edit.undo": () => docStore.undo(),
     "edit.redo": () => docStore.redo(),
-    "edit.delete": deleteSelection,
+    "edit.delete": () => deleteSelectionAction(pen),
     "component.create": createComponentFromSelection,
     "component.detach": detachSelection,
     "view.zoomIn": () => zoomStep(1.2),
@@ -1234,8 +1220,8 @@ onMounted(() => {
     },
   );
   window.addEventListener("keydown", onKey, true);
-  window.addEventListener("pointerdown", onWindowPointerDown, true);
-  window.addEventListener("blur", onWindowBlur);
+  window.addEventListener("pointerdown", draftGuards.onWindowPointerDown, true);
+  window.addEventListener("blur", draftGuards.onWindowBlur);
 });
 
 onBeforeUnmount(() => {
@@ -1246,8 +1232,8 @@ onBeforeUnmount(() => {
   stopShortcuts();
   ro?.disconnect();
   window.removeEventListener("keydown", onKey, true);
-  window.removeEventListener("pointerdown", onWindowPointerDown, true);
-  window.removeEventListener("blur", onWindowBlur);
+  window.removeEventListener("pointerdown", draftGuards.onWindowPointerDown, true);
+  window.removeEventListener("blur", draftGuards.onWindowBlur);
 });
 </script>
 
@@ -1278,24 +1264,22 @@ onBeforeUnmount(() => {
     />
 
     <!-- 文本节点行内编辑 -->
-    <textarea
+    <div
       v-if="textEdit"
       ref="textEditEl"
-      v-model="textEdit.value"
       class="text-edit"
+      :class="{ 'is-list': textEdit.listType !== 'none', 'is-numbered': textEdit.listType === 'numbered' }"
+      contenteditable="true"
       spellcheck="false"
-      wrap="off"
+      v-html="textEdit.html"
       :style="{
         left: textEdit.left + 'px',
         top: textEdit.top + 'px',
         width: textEdit.width + 'px',
         height: textEdit.height + 'px',
-        fontSize: textEdit.fontSize * textEdit.scale + 'px',
-        fontFamily: textEdit.fontFamily,
-        fontWeight: textEdit.fontWeight,
-        lineHeight: TEXT_LINE_HEIGHT,
+        ...textEdit.css,
       }"
-      @input="syncTextEditSize"
+      @input="onTextEditInput"
       @keydown="onTextEditKey"
       @blur="commitTextEdit"
     />
@@ -1369,10 +1353,30 @@ onBeforeUnmount(() => {
     0 0 0 1px var(--accent-line),
     0 0 0 4px rgba(79, 70, 229, 0.1);
   color: var(--text);
-  white-space: pre;
+  white-space: pre-wrap;
   overflow: hidden;
-  resize: none;
   outline: none;
+}
+.text-edit > div + div {
+  margin-top: var(--para, 0px);
+}
+.text-edit.is-list > div {
+  position: relative;
+  padding-left: 1.2em;
+}
+.text-edit.is-numbered {
+  counter-reset: text-li;
+}
+.text-edit.is-numbered > div::before {
+  counter-increment: text-li;
+  content: counter(text-li) ".";
+  position: absolute;
+  left: 0;
+}
+.text-edit.is-list:not(.is-numbered) > div::before {
+  content: "•";
+  position: absolute;
+  left: 0.15em;
 }
 
 .zoom-bar {

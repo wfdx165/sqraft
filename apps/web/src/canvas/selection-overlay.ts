@@ -2,10 +2,10 @@
  * 选中框、缩放手柄、尺寸徽标与悬停文本边界。
  * 屏幕空间叠加层；不参与文档渲染。
  */
-import { worldRect, type NodeId } from "@sqraft/core";
+import { worldQuad, worldRect, type NodeId } from "@sqraft/core";
 import { worldToScreen, type Viewport } from "@sqraft/render";
 import { docStore } from "../store";
-import { handlePoints, selectionScreenRect, type MovePreview, type ResizePreview } from "./selection";
+import { handlePointsOfQuad, selectionQuad, selectionScreenRect, type MovePreview, type ResizePreview } from "./selection";
 
 export interface SelectionOverlayOptions {
   selection: readonly NodeId[];
@@ -50,15 +50,20 @@ export function drawSelectionOverlay(
     // 锚点编辑态由 drawPathEditing 接管（不画包围盒手柄与尺寸徽标）
     if (opts.pathEditId === id) continue;
     const rect = selectionScreenRect(vp, id, opts.resizePreview, opts.drag);
-    if (!rect) continue;
+    const quad = selectionQuad(vp, id, opts.resizePreview, opts.drag);
+    if (!rect || !quad) continue;
     const { x, y, width, height } = rect;
 
     g.strokeStyle = "#4f46e5";
     g.lineWidth = 1.5;
-    g.strokeRect(x, y, width, height);
+    g.beginPath();
+    g.moveTo(quad[0].x, quad[0].y);
+    for (let i = 1; i < quad.length; i++) g.lineTo(quad[i].x, quad[i].y);
+    g.closePath();
+    g.stroke();
 
     if (opts.editing && opts.selection.length === 1 && n.type !== "text") {
-      for (const [, hx, hy] of handlePoints(rect)) {
+      for (const [, hx, hy] of handlePointsOfQuad(quad)) {
         g.beginPath();
         g.rect(hx - 3, hy - 3, 6, 6);
         g.fillStyle = "#ffffff";

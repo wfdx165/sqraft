@@ -5,9 +5,13 @@ import {
   resolvePaint,
   worldRect,
   nextPagePosition,
+  worldQuad,
   DEFAULT_PAGE_WIDTH,
   PAGE_GAP,
+  createLayoutSpec,
 } from "../src/model";
+import { migrateDoc } from "../src/migrate";
+import { layoutText, lineHeightPx, letterSpacingPx } from "../src/text";
 import { DocStore } from "../src/store";
 import { solveLayout } from "../src/layout";
 import {
@@ -19,6 +23,7 @@ import {
   vectorBounds,
   type VectorPath,
 } from "../src/vector";
+import type { DocState } from "../src/model";
 import { clampSides, hitPolygon, polygonPoints } from "../src/polygon";
 import { materializeInstance } from "../src/component";
 
@@ -134,11 +139,11 @@ describe("Token 改名", () => {
 });
 
 describe("布局求解器（golden）", () => {
-  const base = { direction: "horizontal", gap: 10, padding: 0, mainAlign: "start", crossAlign: "start" } as const;
+  const base = createLayoutSpec({ direction: "horizontal", gap: 10, padding: { top: 0, right: 0, bottom: 0, left: 0 } });
 
   it("横向排列：固定项按序排布", () => {
     const r = solveLayout(
-      { ...base },
+      base,
       [
         { id: "a", width: 100, height: 50, sizingW: "fixed", sizingH: "fixed" },
         { id: "b", width: 200, height: 80, sizingW: "fixed", sizingH: "fixed" },
@@ -146,7 +151,7 @@ describe("布局求解器（golden）", () => {
       1000,
       500,
     );
-    expect(r).toEqual([
+    expect(r.items).toEqual([
       { id: "a", x: 0, y: 0, width: 100, height: 50 },
       { id: "b", x: 110, y: 0, width: 200, height: 80 },
     ]);
@@ -154,7 +159,7 @@ describe("布局求解器（golden）", () => {
 
   it("fill 子项均分剩余主轴空间", () => {
     const r = solveLayout(
-      { ...base },
+      base,
       [
         { id: "a", width: 100, height: 50, sizingW: "fixed", sizingH: "fixed" },
         { id: "b", width: 0, height: 50, sizingW: "fill", sizingH: "fixed" },
@@ -163,8 +168,8 @@ describe("布局求解器（golden）", () => {
       310,
       100,
     );
-    expect(r[1]).toEqual({ id: "b", x: 110, y: 0, width: 95, height: 50 });
-    expect(r[2]).toEqual({ id: "c", x: 215, y: 0, width: 95, height: 50 });
+    expect(r.items[1]).toEqual({ id: "b", x: 110, y: 0, width: 95, height: 50 });
+    expect(r.items[2]).toEqual({ id: "c", x: 215, y: 0, width: 95, height: 50 });
   });
 
   it("交叉轴居中与 end 对齐", () => {
@@ -174,7 +179,7 @@ describe("布局求解器（golden）", () => {
       200,
       100,
     );
-    expect(r[0].y).toBe(25);
+    expect(r.items[0].y).toBe(25);
   });
 
   it("space-between 均分间距", () => {
@@ -187,7 +192,72 @@ describe("布局求解器（golden）", () => {
       200,
       100,
     );
-    expect(r[1].x).toBe(150);
+    expect(r.items[1].x).toBe(150);
+  });
+
+  it("padding 计入子项位置与内容尺寸", () => {
+    const r = solveLayout(
+      { ...base, padding: { top: 10, right: 20, bottom: 30, left: 40 } },
+      [{ id: "a", width: 50, height: 20, sizingW: "fixed", sizingH: "fixed" }],
+      300,
+      200,
+    );
+    expect(r.items[0]).toMatchObject({ x: 40, y: 10 });
+    expect(r.contentWidth).toBe(110);
+    expect(r.contentHeight).toBe(60);
+  });
+
+  it("hug 轴不分配 fill，返回内容尺寸", () => {
+    const r = solveLayout(
+      base,
+      [
+        { id: "a", width: 50, height: 20, sizingW: "fixed", sizingH: "fixed" },
+        { id: "b", width: 20, height: 20, sizingW: "fill", sizingH: "fixed" },
+      ],
+      undefined,
+      undefined,
+    );
+    expect(r.items[1].width).toBe(20);
+    expect(r.contentWidth).toBe(80);
+    expect(r.contentHeight).toBe(20);
+  });
+
+  it("wrap 分行并支持 alignContent", () => {
+    const spec = createLayoutSpec({
+      direction: "horizontal",
+      gap: 10,
+      crossGap: 5,
+      wrap: true,
+      alignContent: "center",
+    });
+    const r = solveLayout(
+      spec,
+      [
+        { id: "a", width: 60, height: 20, sizingW: "fixed", sizingH: "fixed" },
+        { id: "b", width: 60, height: 20, sizingW: "fixed", sizingH: "fixed" },
+        { id: "c", width: 60, height: 20, sizingW: "fixed", sizingH: "fixed" },
+      ],
+      130,
+      100,
+    );
+    expect(r.items[0]).toMatchObject({ x: 0, y: 27.5 });
+    expect(r.items[1]).toMatchObject({ x: 70, y: 27.5 });
+    expect(r.items[2]).toMatchObject({ x: 0, y: 52.5 });
+  });
+
+  it("隐藏子项退出排布，绝对定位原样返回", () => {
+    const r = solveLayout(
+      base,
+      [
+        { id: "a", width: 50, height: 20, sizingW: "fixed", sizingH: "fixed" },
+        { id: "b", width: 50, height: 20, sizingW: "fixed", sizingH: "fixed", visible: false },
+        { id: "c", x: 33, y: 44, width: 10, height: 10, sizingW: "fixed", sizingH: "fixed", absolute: true },
+      ],
+      200,
+      100,
+    );
+    expect(r.items.find((i) => i.id === "b")).toBeUndefined();
+    expect(r.items.find((i) => i.id === "c")).toMatchObject({ x: 33, y: 44, width: 10, height: 10 });
   });
 });
 
@@ -1739,5 +1809,291 @@ describe("组件：插槽插入与实例内容保护", () => {
     store.apply({ type: "component.create", params: { nodeIds: [inst], componentId: wrapper } });
     expect(store.doc.nodes[wrapper].children).toEqual([inst]);
     expect(store.doc.nodes[inst].type).toBe("instance");
+  });
+});
+
+describe("自动布局：命令层写回", () => {
+  function setup() {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const frame = createNode("frame", { name: "F", width: 300, height: 200 });
+    store.apply({ type: "node.create", params: { nodes: [frame], parentId: pageId } });
+    const a = createNode("rect", { name: "A", width: 100, height: 50 });
+    const b = createNode("rect", { name: "B", width: 50, height: 20 });
+    store.apply({ type: "node.create", params: { nodes: [a], parentId: frame.id } });
+    store.apply({ type: "node.create", params: { nodes: [b], parentId: frame.id } });
+    return { store, pageId, frame, a, b };
+  }
+
+  it("添加布局后按 padding/gap 排布，撤销回到原状", () => {
+    const { store, frame, a, b } = setup();
+    const before = { ax: a.x, ay: a.y, bx: b.x, by: b.y };
+    store.apply({
+      type: "node.update",
+      params: {
+        nodeId: frame.id,
+        patch: {
+          layout: createLayoutSpec({
+            direction: "horizontal",
+            gap: 10,
+            padding: { top: 5, right: 5, bottom: 5, left: 5 },
+          }),
+        },
+      },
+    });
+    expect(store.doc.nodes[a.id]).toMatchObject({ x: 5, y: 5 });
+    expect(store.doc.nodes[b.id]).toMatchObject({ x: 115, y: 5 });
+    store.undo();
+    expect(store.doc.nodes[a.id]).toMatchObject({ x: before.ax, y: before.ay });
+    expect(store.doc.nodes[b.id]).toMatchObject({ x: before.bx, y: before.by });
+  });
+
+  it("hug 容器宽度由内容决定，fill 子项撑满剩余空间", () => {
+    const { store, frame, a } = setup();
+    store.apply({
+      type: "node.update",
+      params: {
+        nodeId: frame.id,
+        patch: { layoutSizingW: "hug", layoutSizingH: "hug", layout: createLayoutSpec({ direction: "vertical", gap: 4 }) },
+      },
+    });
+    expect(store.doc.nodes[frame.id].width).toBe(100);
+    expect(store.doc.nodes[frame.id].height).toBe(74);
+
+    store.apply({ type: "node.update", params: { nodeId: a.id, patch: { layoutSizingW: "fill" } } });
+    expect(store.doc.nodes[a.id].width).toBe(100);
+  });
+
+  it("隐藏子项退出排布，绝对定位子项保持自身坐标", () => {
+    const { store, frame, a, b } = setup();
+    store.apply({ type: "node.update", params: { nodeId: b.id, patch: { x: 33, y: 44, layoutAbsolute: true } } });
+    store.apply({
+      type: "node.update",
+      params: { nodeId: frame.id, patch: { layout: createLayoutSpec({ direction: "vertical", gap: 10 }) } },
+    });
+    expect(store.doc.nodes[b.id]).toMatchObject({ x: 33, y: 44 });
+    expect(store.doc.nodes[a.id]).toMatchObject({ x: 0, y: 0 });
+
+    store.apply({ type: "node.update", params: { nodeId: a.id, patch: { visible: false } } });
+    store.apply({ type: "node.update", params: { nodeId: a.id, patch: { visible: true, height: 50 } } });
+    expect(store.doc.nodes[a.id]).toMatchObject({ x: 0, y: 0 });
+  });
+
+  it("重排复用 node.reparent，并触发重新求解", () => {
+    const { store, frame, a, b } = setup();
+    store.apply({
+      type: "node.update",
+      params: { nodeId: frame.id, patch: { layout: createLayoutSpec({ direction: "horizontal", gap: 10 }) } },
+    });
+    expect(store.doc.nodes[b.id].x).toBe(110);
+    store.apply({ type: "node.reparent", params: { nodeId: b.id, parentId: frame.id, index: 0 } });
+    expect(store.doc.nodes[b.id].x).toBe(0);
+    expect(store.doc.nodes[a.id].x).toBe(60);
+  });
+});
+
+describe("锁定：命令入口校验", () => {
+  function setup() {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const frame = createNode("frame", { name: "锁定组", width: 200, height: 100 });
+    store.apply({ type: "node.create", params: { nodes: [frame], parentId: pageId } });
+    const child = createNode("rect", { name: "子项", width: 50, height: 50 });
+    store.apply({ type: "node.create", params: { nodes: [child], parentId: frame.id } });
+    store.apply({ type: "node.update", params: { nodeId: frame.id, patch: { locked: true } } });
+    return { store, pageId, frame, child };
+  }
+
+  it("锁定节点的自身与后代都不能改、不能删、不能移", () => {
+    const { store, frame, child } = setup();
+    expect(() =>
+      store.apply({ type: "node.update", params: { nodeId: child.id, patch: { width: 10 } } }),
+    ).toThrow(/锁定/);
+    expect(() => store.apply({ type: "node.delete", params: { nodeId: child.id } })).toThrow(/锁定/);
+    expect(() =>
+      store.apply({ type: "node.create", params: { nodes: [createNode("rect")], parentId: frame.id } }),
+    ).toThrow(/锁定/);
+    expect(() =>
+      store.apply({ type: "node.reparent", params: { nodeId: child.id, parentId: store.doc.rootIds[0] } }),
+    ).toThrow(/锁定/);
+  });
+
+  it("解锁后恢复编辑；撤销仍然可用", () => {
+    const { store, frame } = setup();
+    store.apply({ type: "node.update", params: { nodeId: frame.id, patch: { locked: false } } });
+    expect(store.doc.nodes[frame.id].locked).toBe(false);
+    store.apply({ type: "node.update", params: { nodeId: frame.id, patch: { width: 240 } } });
+    expect(store.doc.nodes[frame.id].width).toBe(240);
+    store.undo();
+    expect(store.doc.nodes[frame.id].width).toBe(200);
+  });
+});
+
+describe("迁移：formatVersion 1 → 2", () => {
+  it("归一化 padding / cornerRadius / 文本字段，并保持旧文档不裁剪", () => {
+    const page = createNode("page", { width: 800, height: 600 });
+    const frame = createNode("frame", {
+      width: 200,
+      height: 100,
+      clip: undefined as unknown as boolean,
+      style: { cornerRadius: 8 as unknown as never },
+      layout: { direction: "vertical", gap: 4, padding: 12 as unknown as never, mainAlign: "start", crossAlign: "start" } as never,
+    });
+    const text = createNode("text", { width: 50, height: 20, text: "hi", style: { lineHeight: 2 } });
+    const state: DocState = {
+      version: 1,
+      rootIds: [page.id],
+      nodes: { [page.id]: { ...page, children: [frame.id] }, [frame.id]: { ...frame, children: [text.id] }, [text.id]: text },
+      tokens: {},
+    };
+    migrateDoc(state as never, 1);
+    expect(state.formatVersion).toBe(2);
+    const f = state.nodes[frame.id];
+    expect(f.layout?.padding).toEqual({ top: 12, right: 12, bottom: 12, left: 12 });
+    expect(f.layout?.wrap).toBe(false);
+    expect(f.style.cornerRadius).toEqual({ topLeft: 8, topRight: 8, bottomRight: 8, bottomLeft: 8 });
+    expect(f.clip).toBe(false);
+    const t = state.nodes[text.id];
+    expect(t.textAutoResize).toBe("auto-width");
+    expect(t.listType).toBe("none");
+    expect(t.style.lineHeight).toBeUndefined();
+    const snapshot = JSON.stringify(state);
+    migrateDoc(state as never, 2);
+    expect(JSON.stringify(state)).toBe(snapshot);
+  });
+});
+
+describe("文本行盒", () => {
+  const measure = (text: string) => [...text].length * 10;
+
+  it("按宽度换行、列表缩进与段落间距", () => {
+    const layout = layoutText("ab cd\n第二段", { fontSize: 10, paragraphSpacing: 4 }, {
+      measure,
+      listType: "bulleted",
+      maxWidth: 50,
+    });
+    expect(layout.lines.length).toBeGreaterThanOrEqual(3);
+    expect(layout.lines[0].marker).toBe("•");
+    expect(layout.lines[0].indent).toBeGreaterThan(0);
+    expect(layout.height).toBeGreaterThan(layout.lines.length * 14);
+  });
+
+  it("fixed 高度 + truncate 生成省略号", () => {
+    const layout = layoutText("aa bb cc dd ee", { fontSize: 10 }, {
+      measure,
+      maxWidth: 30,
+      maxHeight: 15,
+      truncate: true,
+    });
+    expect(layout.truncated).toBe(true);
+    expect(layout.lines.at(-1)?.text.endsWith("…")).toBe(true);
+  });
+
+  it("行高与字距单位换算", () => {
+    expect(lineHeightPx({ fontSize: 10, lineHeight: 20, lineHeightUnit: "px" })).toBe(20);
+    expect(lineHeightPx({ fontSize: 10, lineHeight: 200, lineHeightUnit: "percent" })).toBe(20);
+    expect(lineHeightPx({ fontSize: 10, lineHeightUnit: "auto" })).toBeCloseTo(14);
+    expect(letterSpacingPx({ fontSize: 10, letterSpacing: 20, letterSpacingUnit: "percent" })).toBe(2);
+  });
+});
+
+describe("自动布局：实例覆盖", () => {
+  it("实例改布局只影响自己，并写入覆盖表", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const master = createNode("frame", {
+      name: "卡片",
+      width: 200,
+      height: 120,
+      layout: createLayoutSpec({ direction: "horizontal", gap: 8 }),
+    });
+    store.apply({ type: "node.create", params: { nodes: [master], parentId: pageId } });
+    const child = createNode("rect", { name: "内容", width: 40, height: 20 });
+    store.apply({ type: "node.create", params: { nodes: [child], parentId: master.id } });
+    store.apply({ type: "component.create", params: { nodeIds: [master.id] } });
+    const instId = createNode("instance").id;
+    store.apply({
+      type: "instance.create",
+      params: { componentId: master.id, parentId: pageId, nodeId: instId, x: 300, y: 0 },
+    });
+    const cloneId = `${instId}:${child.id}`;
+    expect(store.doc.nodes[cloneId].x).toBe(0);
+
+    store.apply({
+      type: "node.update",
+      params: { nodeId: instId, patch: { layout: createLayoutSpec({ direction: "horizontal", gap: 40 }) } },
+    });
+    expect(store.doc.nodes[master.id].layout?.gap).toBe(8);
+    expect(store.doc.nodes[cloneId].x).toBe(0);
+    expect(store.doc.nodes[instId].overrides?.[master.id]?.layout).toBeTruthy();
+
+    store.undo();
+    expect(store.doc.nodes[instId].overrides?.[master.id]?.layout).toBeFalsy();
+  });
+});
+
+describe("布局：尺寸安全与 stretch 语义", () => {
+  const base = createLayoutSpec({ direction: "horizontal", gap: 10 });
+
+  it("空间不足时 fill 子项不会得到负宽度", () => {
+    const r = solveLayout(
+      base,
+      [
+        { id: "fixed", width: 200, height: 20, sizingW: "fixed", sizingH: "fixed" },
+        { id: "fill", width: 0, height: 20, sizingW: "fill", sizingH: "fixed" },
+      ],
+      100,
+      100,
+    );
+    expect(r.items.find((i) => i.id === "fill")?.width).toBe(0);
+  });
+
+  it("stretch 不覆盖 hug / 文本自动尺寸", () => {
+    const r = solveLayout(
+      { ...base, crossAlign: "stretch" },
+      [
+        { id: "hug", width: 50, height: 20, sizingW: "fixed", sizingH: "fixed", hugH: true },
+        { id: "stretch", width: 50, height: 20, sizingW: "fixed", sizingH: "fixed" },
+      ],
+      300,
+      100,
+    );
+    expect(r.items.find((i) => i.id === "hug")?.height).toBe(20);
+    expect(r.items.find((i) => i.id === "stretch")?.height).toBe(100);
+  });
+});
+
+describe("worldQuad：几何覆盖", () => {
+  it("覆盖节点局部矩形时仍累加祖先偏移", () => {
+    const page = createNode("page", { x: 100, y: 50, width: 800, height: 600 });
+    const frame = createNode("frame", { x: 20, y: 10, width: 200, height: 200 });
+    const child = createNode("rect", { x: 10, y: 10, width: 50, height: 50 });
+    frame.children = [child.id];
+    child.parentId = frame.id;
+    page.children = [frame.id];
+    frame.parentId = page.id;
+    const state = { version: 1, rootIds: [page.id], nodes: { [page.id]: page, [frame.id]: frame, [child.id]: child }, tokens: {} };
+    const quad = worldQuad(state, child.id, { x: 30, y: 20, width: 60, height: 40 });
+    expect(quad?.[0]).toEqual({ x: 150, y: 80 });
+    expect(quad?.[2]).toEqual({ x: 210, y: 120 });
+  });
+});
+
+describe("applyDerived：派生几何白名单", () => {
+  it("只允许写回几何，不进入撤销栈", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const rect = createNode("rect", { width: 100, height: 100 });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+    const undoBefore = store.canUndo;
+    store.applyDerived({ type: "node.update", params: { nodeId: rect.id, patch: { height: 60 } } });
+    expect(store.doc.nodes[rect.id].height).toBe(60);
+    expect(store.canUndo).toBe(undoBefore);
+    expect(() =>
+      store.applyDerived({ type: "node.update", params: { nodeId: rect.id, patch: { style: rect.style } } }),
+    ).toThrow(/只允许/);
+    expect(() =>
+      store.applyDerived({ type: "node.update", params: { nodeId: rect.id, patch: { text: "x" } } }),
+    ).toThrow(/只允许/);
   });
 });

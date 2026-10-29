@@ -1,7 +1,7 @@
 /**
  * 选中框与缩放手柄的屏幕几何。纯函数，不持有状态。
  */
-import { worldRect, type NodeId, type Rect } from "@sqraft/core";
+import { worldQuad, worldRect, worldRotation, type NodeId, type Rect } from "@sqraft/core";
 import { worldToScreen, type Viewport } from "@sqraft/render";
 import { docStore } from "../store";
 
@@ -22,42 +22,79 @@ export interface ResizePreview {
   height: number;
 }
 
-export function handlePoints(r: Rect): Array<[ResizeHandle, number, number]> {
-  const cx = r.x + r.width / 2;
-  const cy = r.y + r.height / 2;
-  const x2 = r.x + r.width;
-  const y2 = r.y + r.height;
+export interface ScreenPoint {
+  x: number;
+  y: number;
+}
+
+/** 选中框四角（屏幕坐标，含旋转与拖动预览）。 */
+export function selectionQuad(
+  vp: Viewport,
+  id: NodeId,
+  resizePreview: ResizePreview | null,
+  drag: MovePreview | null,
+): ScreenPoint[] | null {
+  if (resizePreview && resizePreview.id === id) {
+    // 预览是节点局部坐标：仍然走 worldQuad，才能带上祖先偏移与自身旋转
+    const quad = worldQuad(docStore.doc, id, resizePreview);
+    return quad?.map((p) => worldToScreen(vp, p.x, p.y)) ?? null;
+  }
+  const quad = worldQuad(docStore.doc, id);
+  if (!quad) return null;
+  const dx = drag && drag.mode === "move" && drag.moved ? drag.offsetX : 0;
+  const dy = drag && drag.mode === "move" && drag.moved ? drag.offsetY : 0;
+  return quad.map((p) => worldToScreen(vp, p.x + dx, p.y + dy));
+}
+
+/** 旋转选中框的 8 个手柄位置。 */
+export function handlePointsOfQuad(quad: ScreenPoint[]): Array<[ResizeHandle, number, number]> {
+  const [a, b, c, d] = quad;
+  const mid = (p: ScreenPoint, q: ScreenPoint) => ({ x: (p.x + q.x) / 2, y: (p.y + q.y) / 2 });
+  const n = mid(a, b);
+  const e = mid(b, c);
+  const s = mid(c, d);
+  const w = mid(d, a);
   return [
-    ["nw", r.x, r.y],
-    ["n", cx, r.y],
-    ["ne", x2, r.y],
-    ["e", x2, cy],
-    ["se", x2, y2],
-    ["s", cx, y2],
-    ["sw", r.x, y2],
-    ["w", r.x, cy],
+    ["nw", a.x, a.y],
+    ["n", n.x, n.y],
+    ["ne", b.x, b.y],
+    ["e", e.x, e.y],
+    ["se", c.x, c.y],
+    ["s", s.x, s.y],
+    ["sw", d.x, d.y],
+    ["w", w.x, w.y],
   ];
 }
 
-/** 当前选中对象在屏幕上的矩形（含移动/缩放预览）。 */
+/** 当前选中对象在屏幕上的轴对齐包围盒（含移动/缩放预览与旋转）。 */
 export function selectionScreenRect(
   vp: Viewport,
   id: NodeId,
   resizePreview: ResizePreview | null,
   drag: MovePreview | null,
 ): Rect | null {
-  const r = worldRect(docStore.doc, id);
-  if (!r) return null;
-  if (resizePreview && resizePreview.id === id) {
-    const a = worldToScreen(vp, resizePreview.x, resizePreview.y);
-    const b = worldToScreen(vp, resizePreview.x + resizePreview.width, resizePreview.y + resizePreview.height);
+  const quad = selectionQuad(vp, id, resizePreview, drag);
+  if (!quad) {
+    const r = worldRect(docStore.doc, id);
+    if (!r) return null;
+    const a = worldToScreen(vp, r.x, r.y);
+    const b = worldToScreen(vp, r.x + r.width, r.y + r.height);
     return { x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y };
   }
-  const dx = drag && drag.mode === "move" && drag.moved ? drag.offsetX : 0;
-  const dy = drag && drag.mode === "move" && drag.moved ? drag.offsetY : 0;
-  const a = worldToScreen(vp, r.x + dx, r.y + dy);
-  const b = worldToScreen(vp, r.x + dx + r.width, r.y + dy + r.height);
-  return { x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y };
+  const xs = quad.map((p) => p.x);
+  const ys = quad.map((p) => p.y);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
+}
+
+/** 世界位移 → 节点本地轴位移（用于旋转后的缩放手柄）。 */
+export function localDelta(nodeId: NodeId, dx: number, dy: number): { dx: number; dy: number } {
+  const angle = (-worldRotation(docStore.doc, nodeId) * Math.PI) / 180;
+  if (!angle) return { dx, dy };
+  const cos = Math.cos(angle);
+  const sin = Math.sin(angle);
+  return { dx: dx * cos - dy * sin, dy: dx * sin + dy * cos };
 }
 
 /** 根据手柄与指针位移计算新矩形（世界坐标；`keepAspect` 对应 Shift）。 */
