@@ -1893,6 +1893,62 @@ describe("自动布局：命令层写回", () => {
   });
 });
 
+describe("拖拽换父级：命令层", () => {
+  it("多根批量 reparent 到布局画板：索引连续、求解生效、一次撤销", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const target = createNode("frame", { name: "目标", width: 300, height: 200 });
+    store.apply({ type: "node.create", params: { nodes: [target], parentId: pageId } });
+    store.apply({
+      type: "node.update",
+      params: { nodeId: target.id, patch: { layout: createLayoutSpec({ direction: "horizontal", gap: 10 }) } },
+    });
+    const a = createNode("rect", { name: "A", width: 40, height: 20 });
+    const b = createNode("rect", { name: "B", width: 40, height: 20 });
+    store.apply({ type: "node.create", params: { nodes: [a], parentId: pageId } });
+    store.apply({ type: "node.create", params: { nodes: [b], parentId: pageId } });
+
+    store.apply(
+      [
+        { type: "node.reparent", params: { nodeId: a.id, parentId: target.id, index: 0 } },
+        { type: "node.reparent", params: { nodeId: b.id, parentId: target.id, index: 1 } },
+      ],
+      "move",
+    );
+    expect(store.doc.nodes[target.id].children).toEqual([a.id, b.id]);
+    expect(store.doc.nodes[a.id]).toMatchObject({ x: 0, y: 0 });
+    expect(store.doc.nodes[b.id]).toMatchObject({ x: 50, y: 0 });
+
+    store.undo();
+    expect(store.doc.nodes[target.id].children).toEqual([]);
+    expect(store.doc.nodes[a.id].parentId).toBe(pageId);
+    expect(store.doc.nodes[b.id].parentId).toBe(pageId);
+  });
+
+  it("跨页面 reparent 保留世界坐标，撤销回到原父级", () => {
+    const store = new DocStore(createEmptyDoc());
+    const page1 = store.doc.rootIds[0];
+    const page2 = createNode("page", { name: "页面 2", x: 2000, width: 800, height: 600 });
+    store.apply({ type: "node.create", params: { nodes: [page2], parentId: null } });
+    const frame = createNode("frame", { x: 100, y: 50, width: 200, height: 100 });
+    store.apply({ type: "node.create", params: { nodes: [frame], parentId: page1 } });
+    const child = createNode("rect", { x: 10, y: 20, width: 30, height: 30 });
+    store.apply({ type: "node.create", params: { nodes: [child], parentId: frame.id } });
+
+    const before = worldRect(store.doc, child.id)!;
+    store.apply({
+      type: "node.reparent",
+      params: { nodeId: child.id, parentId: page2.id, x: before.x - page2.x, y: before.y - page2.y },
+    });
+    expect(store.doc.nodes[child.id].parentId).toBe(page2.id);
+    expect(worldRect(store.doc, child.id)).toMatchObject({ x: before.x, y: before.y });
+
+    store.undo();
+    expect(store.doc.nodes[child.id].parentId).toBe(frame.id);
+    expect(worldRect(store.doc, child.id)).toMatchObject({ x: before.x, y: before.y });
+  });
+});
+
 describe("锁定：命令入口校验", () => {
   function setup() {
     const store = new DocStore(createEmptyDoc());

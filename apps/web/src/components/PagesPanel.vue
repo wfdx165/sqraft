@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   createNode,
   getPages,
@@ -12,6 +12,7 @@ import {
   type NodeId,
 } from "@sqraft/core";
 import { dispatch, docStore, hooks, select, ui } from "../store";
+import { registerShortcuts } from "../shortcuts";
 import Icon from "./Icon.vue";
 
 interface Row {
@@ -23,6 +24,59 @@ const pages = computed(() => {
   void ui.version;
   return getPages(docStore.doc);
 });
+
+/* ---------- 搜索 ---------- */
+
+const filter = ref("");
+const searchEl = ref<HTMLInputElement | null>(null);
+
+/** 归一化后的查询词（空串 = 不过滤）。 */
+const query = computed(() => filter.value.trim().toLowerCase());
+
+/**
+ * 过滤后的页面列表。正在重命名的那一行始终保留，
+ * 避免改名改到一半因为旧名字不匹配而消失在列表里。
+ */
+const filteredPages = computed(() => {
+  const q = query.value;
+  if (!q) return pages.value;
+  return pages.value.filter((page) => page.name.toLowerCase().includes(q) || page.id === renamingId.value);
+});
+
+/** 计数徽标：有查询时显示「命中 / 总数」，否则只显示总数。 */
+const countLabel = computed(() => {
+  const total = pages.value.length;
+  return query.value ? `${filteredPages.value.length} / ${total}` : String(total);
+});
+
+/** 把页面名按首次命中的片段切成三段，供高亮渲染。 */
+function highlightOf(name: string): { text: string; hit: boolean }[] {
+  const q = query.value;
+  if (!q) return [{ text: name, hit: false }];
+  const at = name.toLowerCase().indexOf(q);
+  if (at < 0) return [{ text: name, hit: false }];
+  const out: { text: string; hit: boolean }[] = [];
+  if (at > 0) out.push({ text: name.slice(0, at), hit: false });
+  out.push({ text: name.slice(at, at + q.length), hit: true });
+  if (at + q.length < name.length) out.push({ text: name.slice(at + q.length), hit: false });
+  return out;
+}
+
+/** ⌘F：切到页面 tab 并聚焦搜索框；已在框内则全选，方便覆盖重输。 */
+function focusSearch(): void {
+  ui.tab = "pages";
+  nextTick(() => {
+    searchEl.value?.focus();
+    searchEl.value?.select();
+  });
+}
+
+let stopSearchShortcut = () => {};
+onMounted(() => {
+  stopSearchShortcut = registerShortcuts({ "focus.pageSearch": focusSearch });
+});
+onBeforeUnmount(() => stopSearchShortcut());
+
 
 /** 当前页面下的图层树（手风琴：仅展开活动页面） */
 const rows = computed<Row[]>(() => {
@@ -196,8 +250,21 @@ function onLayerDelete(id: NodeId) {
       <button class="add" title="新建页面" @click="addPage"><Icon name="plus" :size="13" /></button>
     </header>
 
+    <div class="search-row">
+      <input
+        ref="searchEl"
+        v-model="filter"
+        class="search"
+        placeholder="搜索页面…"
+        spellcheck="false"
+        title="过滤页面名称"
+      />
+      <span class="count" title="命中数 / 总页数">{{ countLabel }}</span>
+    </div>
+
     <div class="pages">
-      <div v-for="page in pages" :key="page.id" class="page-block">
+      <div v-if="filteredPages.length === 0" class="empty-pages">没有匹配的页面</div>
+      <div v-for="page in filteredPages" :key="page.id" class="page-block">
         <div
           class="page-row"
           :class="{ active: ui.expandedPageId === page.id, 'active-page': ui.mode === 'edit' && ui.activePageId === page.id }"
@@ -214,7 +281,12 @@ function onLayerDelete(id: NodeId) {
             @keydown.enter.prevent="commitRename"
             @keydown.esc.prevent="cancelRename"
           />
-          <span v-else class="page-name" title="双击重命名" @dblclick.stop="startRename(page)">{{ page.name }}</span>
+          <span v-else class="page-name" title="双击重命名" @dblclick.stop="startRename(page)">
+            <template v-for="(seg, i) in highlightOf(page.name)" :key="i">
+              <span v-if="seg.hit" class="hit">{{ seg.text }}</span>
+              <template v-else>{{ seg.text }}</template>
+            </template>
+          </span>
           <span class="count">{{ layerCount(page) }}</span>
           <button
             v-if="pages.length > 1"
@@ -280,7 +352,55 @@ header {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  padding: 0 8px 6px;
+}
+
+/* 搜索行：输入框 + 命中/总数徽标（样式与设计系统面板保持一致） */
+.search-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   padding: 0 8px 8px;
+}
+
+.search {
+  flex: 1;
+  min-width: 0;
+  height: 27px;
+  padding: 0 9px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: rgba(15, 23, 42, 0.03);
+  color: var(--text);
+  font-size: 11.5px;
+  font-family: inherit;
+  outline: none;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease);
+}
+
+.search:focus {
+  border-color: var(--accent-line);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.count {
+  flex: none;
+  min-width: 20px;
+  text-align: center;
+  padding: 1px 6px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.05);
+  color: var(--text-faint);
+  font-family: var(--mono);
+  font-size: 10px;
+}
+
+.empty-pages {
+  padding: 6px 8px 6px 26px;
+  font-size: 11px;
+  color: var(--text-faint);
 }
 
 .add {
@@ -366,6 +486,12 @@ header {
   white-space: nowrap;
   font-size: 12.5px;
   font-weight: 500;
+}
+
+/* 搜索命中的片段 */
+.hit {
+  color: var(--accent);
+  font-weight: 600;
 }
 
 .rename {

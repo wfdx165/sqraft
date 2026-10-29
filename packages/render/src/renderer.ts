@@ -52,8 +52,10 @@ function drawSelf(
   }
 }
 
-/** 把渲染几何替换为拖动预览（resize）或偏移（move）。 */
+/** 把渲染几何替换为拖动预览（resize）、布局让位（geometry）或偏移（move）。 */
 function geometryOf(node: DocNode, options: DrawOptions): { x: number; y: number; width: number; height: number } {
+  const layout = options.geometryPreview?.get(node.id);
+  if (layout) return { x: layout.x, y: layout.y, width: layout.width, height: layout.height };
   const resize = options.resizePreview;
   if (resize && resize.id === node.id) {
     return { x: resize.x, y: resize.y, width: resize.width, height: resize.height };
@@ -107,6 +109,8 @@ export interface DrawOptions {
   resizePreview?: { id: NodeId; x: number; y: number; width: number; height: number };
   /** 路径缩放预览：锚点按同一比例缩放后的几何（不改文档）。 */
   vectorPreview?: { id: NodeId; vector: VectorPath };
+  /** 拖入自动布局容器的让位预览：命中的节点用给定几何绘制（不改文档）。 */
+  geometryPreview?: ReadonlyMap<NodeId, { x: number; y: number; width: number; height: number }>;
   /** 需要淡化的页面（编辑模式下的非活动页）。 */
   dimPageIds?: readonly NodeId[];
 }

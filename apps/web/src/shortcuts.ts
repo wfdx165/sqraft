@@ -27,6 +27,8 @@ export type ActionId =
   | "view.zoomOut"
   | "view.zoomReset"
   | "view.fit"
+  | "view.fitAll"
+  | "focus.pageSearch"
   | "chat.focus"
   | "file.open"
   | "file.save";
@@ -65,6 +67,8 @@ export const ACTIONS: ShortcutAction[] = [
   { id: "view.zoomOut", group: "视图", label: "缩小", default: "⌘−" },
   { id: "view.zoomReset", group: "视图", label: "缩放回到 100%", default: "⌘0" },
   { id: "view.fit", group: "视图", label: "适配页面", default: "⇧1" },
+  { id: "view.fitAll", group: "视图", label: "查看全部页面", default: "⇧2" },
+  { id: "focus.pageSearch", group: "其它", label: "聚焦页面搜索", default: "⌘F" },
   { id: "chat.focus", group: "其它", label: "打开对话", default: "⌘K" },
   { id: "file.open", group: "其它", label: "打开文件", default: "⌘O" },
   { id: "file.save", group: "其它", label: "保存文件", default: "⌘S" },
@@ -81,8 +85,8 @@ export const FIXED_HINTS: { keys: string; label: string }[] = [
 /** 浏览器/系统占用，绑了也轮不到我们。 */
 const RESERVED = new Set(["⌘W", "⌘R", "⌘T", "⌘Q", "⌘N", "⌘⇧W", "⌘⇧T"]);
 
-/** 输入焦点内仍然生效的命令（保存/打开/唤出对话不该被输入框吞掉）。 */
-const GLOBAL_ACTIONS = new Set<ActionId>(["file.open", "file.save", "chat.focus"]);
+/** 输入焦点内仍然生效的命令（保存/打开/唤出对话/页面搜索不该被输入框吞掉）。 */
+const GLOBAL_ACTIONS = new Set<ActionId>(["file.open", "file.save", "chat.focus", "focus.pageSearch"]);
 
 const STORAGE_KEY = "sqraft.shortcuts.v1";
 

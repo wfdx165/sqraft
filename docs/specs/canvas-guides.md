@@ -14,7 +14,7 @@
 - **父容器内容区**：有自动布局时按四边 `padding` 内缩，没有布局时等于父容器边界。
 - **父容器边界**：容器自身矩形，用于贴边与留白对齐。
 - 拖动页面时没有父容器，候选就是其它页面（与旧行为一致）。
-- **跨父容器多选**：不出参考线（上下文不唯一）；同父多选按并集包围盒算，目标排除组内节点。
+- **上下文跟随落点**：拖动换父级时按落点父级（画板/组件/页面）重算目标集合；指针在所有页面之外时退回“所有移动根同父”的上下文，跨父多选则不出线。
 - 只向下看一层：不跨容器、不扫整页。
 
 ## 几何
@@ -36,7 +36,7 @@
 | 拖动（move） | 整个包围盒 | 多选按并集；⌥ 全程关闭吸附与参考线 |
 | 绘制（create） | 指针那一角 | 起点是锚，不动；松手前的预览就已吸附 |
 | 缩放（resize） | 被拖动的边 | 固定边不动；`⇧` 等比缩放时不吸附（会破坏比例） |
-| 自动布局内拖动 | 不吸附 | 位置由求解器决定，走重排序插入线 |
+| 落到自动布局容器 | 不吸附 | 位置由求解器决定，只画插入线（`⌘` 转绝对定位后恢复吸附） |
 
 - 自动布局容器的重排序插入线横跨**内容区**（padding 内框），顺带提示可用范围。
 - `⌘` 转绝对定位后的子项退出布局，恢复完整拖动吸附。
@@ -53,5 +53,6 @@
 
 - `apps/web/src/canvas/guides.ts`：`guideContextFor` / `guideContextForParent`（目标集合）、`computeGuides`（拖动）、`snapResizeRect` / `snapDrawRect`（缩放与绘制）、`computeGapMarks`、`drawGuides`。
 - `apps/web/src/canvas/layout-drag.ts`：`reorderGuide` 用内容区、`reorderIndexAt` 提供插入索引。
+- `apps/web/src/canvas/drop-target.ts`：拖拽换父级的落点与合法性判定（上下文随落点父级切换）。
 - `apps/web/src/canvas/create-drag.ts`：新建节点的父容器、插入索引与默认布局。
 - `apps/web/src/components/CanvasView.vue`：在 move / resize / create 三条手势里接线，`⌥` 关闭吸附。

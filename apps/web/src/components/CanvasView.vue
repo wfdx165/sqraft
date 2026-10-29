@@ -5,6 +5,7 @@ import {
   makeAnchor,
   scaleVector,
   worldRect,
+  type Command,
   type DocNode,
   type NodeId,
   type Rect,
@@ -22,6 +23,16 @@ import {
 import { dispatch, docStore, hooks, select, switchMode, ui } from "../store";
 import { hitTest, isLocked, pageAt, slotUnder } from "../canvas/hit";
 import { containerAt, layoutParentOf, reorderGuide, reorderIndexAt } from "../canvas/layout-drag";
+import { dropAllowed, dropTargetAt, type DropTarget } from "../canvas/drop-target";
+import { paintDropTarget } from "../canvas/drop-overlay";
+import { hoverContainerAt, paintChildOutlines } from "../canvas/child-outlines";
+import {
+  buildInsertPreview,
+  isEmptyTransition,
+  retargetInsertPreview,
+  tickInsertPreview,
+  type InsertTransition,
+} from "../canvas/layout-preview";
 import { buildCreatedNode } from "../canvas/create-drag";
 import { deleteSelection as deleteSelectionAction } from "../canvas/delete-selection";
 import { createDraftGuards } from "../canvas/draft-guard";
@@ -72,6 +83,8 @@ const pageRename = ref<{ id: NodeId; value: string; left: number; top: number; w
 const renameEl = ref<HTMLInputElement | null>(null);
 /** 悬停的文本节点（仅用于画淡虚线边界，不进文档） */
 const hoverTextId = ref<NodeId | null>(null);
+/** 悬停的容器（画出其一级子元素边界，纯 UI 状态） */
+const hoverContainerId = ref<NodeId | null>(null);
 
 let ctx: CanvasRenderingContext2D | null = null;
 let backend: Canvas2DBackend | null = null;
@@ -92,14 +105,28 @@ let drag: {
   offsetX: number;
   offsetY: number;
   pageId?: NodeId;
-  /** 参考线上下文（同父兄弟 + 父内容区 + 父边界；跨父容器时为 null） */
+  /** 参考线上下文（同父兄弟 + 父内容区 + 父边界；随落点父级切换） */
   guide?: GuideContext | null;
+  /** 当前参考线上下文对应的父级（落点变化时重算） */
+  guideKey?: NodeId | null;
   /** 参与吸附的移动根矩形（拖动开始时固定，世界坐标） */
   snapRects?: Rect[];
   /** 缩放手柄与起始矩形 */
   handle?: ResizeHandle;
-  /** 拖动时指针下方的实例插槽（松手即填充） */
+  /** 拖动时指针下方的实例插槽（松手即填充，优先于换父级） */
   dropSlot?: NodeId | null;
+  /** 换父级落点（指针下最深的画板/组件，或页面根） */
+  drop?: DropTarget | null;
+  /** 落点是否会真的改变父级（决定是否画落点高亮） */
+  dropActive?: boolean;
+  /** 落点是自动布局容器时的插入索引 */
+  dropIndex?: number;
+  /** 落点带自动布局（进流：只画插入线，不吸附） */
+  dropLayout?: boolean;
+  /** 最近一次指针屏幕坐标（自动滚屏时按同一位置重算世界坐标） */
+  lastScreen?: { x: number; y: number };
+  /** 最近一次指针事件的修饰键 */
+  lastMods?: { alt: boolean; meta: boolean; shift: boolean };
   resizeId?: NodeId;
   startRect?: Rect;
   startAspect?: number;
@@ -107,9 +134,6 @@ let drag: {
   startVector?: VectorPath;
   /** 起笔时的绘图工具：拖动中切工具也不会用新工具提交（避免造出非法节点） */
   tool?: DrawTool;
-  /** 自动布局容器内的拖动 = 重排序 */
-  reorderParentId?: NodeId;
-  reorderIndex?: number;
 } | null = null;
 let preview: { x: number; y: number; w: number; h: number; valid: boolean } | null = null;
 
@@ -126,6 +150,9 @@ const detachSelection = () => detachSelectionAction(componentActionDeps);
 const MIN_PAGE_SIZE = 200;
 const MIN_NODE_SIZE = 8;
 const HANDLE_HIT_PX = 7;
+/** 拖动换父级时的边缘自动滚屏：触发区（屏幕像素）与最大速度（屏幕像素/秒） */
+const EDGE_SCROLL_ZONE = 40;
+const EDGE_SCROLL_MAX = 960;
 
 /** 缩放中的实时预览（不改文档） */
 let resizePreview: { id: NodeId; x: number; y: number; width: number; height: number } | null = null;
@@ -138,6 +165,10 @@ const dragging = ref(false);
 /* 页面参考线（世界坐标，拖拽中计算，绘制时转屏幕） */
 let guideLines: GuideLine[] = [];
 let gapMarks: GapMark[] = [];
+
+/* 布局插入的让位预览（120ms 过渡；拖动结束即清空） */
+let insertPreview: InsertTransition | null = null;
+let insertPreviewKey = "";
 
 const cursor = computed(() =>
   cursorFor({
@@ -188,6 +219,7 @@ function draw() {
     movePreview,
     resizePreview: editing ? (resizePreview ?? undefined) : undefined,
     vectorPreview: editing ? (vectorPreview ?? undefined) : undefined,
+    geometryPreview: insertPreview?.boxes,
     dimPageIds,
   });
   backend.endFrame();
@@ -195,6 +227,11 @@ function draw() {
   // 覆盖层：选中框 / 手柄 / 尺寸徽标 / 拖拽预览 / 脉冲
   ctx.save();
   ctx.setTransform(vp.dpr, 0, 0, vp.dpr, 0, 0);
+
+  // 悬停容器的子元素边界：信息层，压在选中框下面；任何手势 / 编辑态都不画
+  if (editing && ui.tool === "select" && !drag && !pen.pathEdit && !textEdit.value) {
+    paintChildOutlines(ctx, vp, hoverContainerId.value);
+  }
 
   drawSelectionOverlay(ctx, vp, {
     selection: ui.selection,
@@ -213,6 +250,7 @@ function draw() {
 
   if (preview) drawShapePreview(ctx, vp, preview, drag?.tool ?? ui.tool);
   paintDrop(ctx, vp, drag?.dropSlot ?? null);
+  paintDropTarget(ctx, vp, drag?.dropActive ? (drag.drop ?? null) : null);
 
   const pulse = viewportNav.nav.pulse;
   if (pulse) {
@@ -233,8 +271,12 @@ function draw() {
   });
 }
 
+let lastTick = performance.now();
+
 function loop() {
   const now = performance.now();
+  const dt = Math.min(0.05, (now - lastTick) / 1000);
+  lastTick = now;
   const flight = viewportNav.nav.flight;
   if (flight) {
     const t = Math.min(1, (now - flight.start) / FLY_MS);
@@ -245,12 +287,43 @@ function loop() {
     if (t >= 1) viewportNav.nav.flight = null;
     dirty = true;
   }
+  // 拖动换父级：指针停在视口边缘时连续滚屏，并按同一屏幕坐标重算落点与参考线
+  autoScrollStep(dt);
+  // 布局让位：120ms 缓动，过渡期间持续重绘
+  if (insertPreview) {
+    const tick = tickInsertPreview(insertPreview, now);
+    insertPreview.boxes = tick.boxes;
+    dirty = true;
+    if (tick.done && isEmptyTransition(insertPreview)) insertPreview = null;
+  }
   const pulse = viewportNav.nav.pulse;
   if (dirty || (pulse && now - pulse.start < PULSE_MS)) {
     dirty = false;
     draw();
   }
   raf = requestAnimationFrame(loop);
+}
+
+/** 边缘变速滚屏：速度按离边距离平方衰减，靠近边缘越快。 */
+function autoScrollStep(dt: number): boolean {
+  const d = drag;
+  if (!d || d.mode !== "move" || !d.moved || !d.lastScreen || !canvasRef.value) return false;
+  const rect = canvasRef.value.getBoundingClientRect();
+  const { x, y } = d.lastScreen;
+  // 指针已经离开画布（指针捕获期间）：不滚
+  if (x < -2 || y < -2 || x > rect.width + 2 || y > rect.height + 2) return false;
+  const speed = (dist: number) => {
+    if (dist >= EDGE_SCROLL_ZONE) return 0;
+    const t = (EDGE_SCROLL_ZONE - Math.max(0, dist)) / EDGE_SCROLL_ZONE;
+    return EDGE_SCROLL_MAX * t * t;
+  };
+  const vx = speed(x) - speed(rect.width - x);
+  const vy = speed(y) - speed(rect.height - y);
+  if (!vx && !vy) return false;
+  vp.x += (vx * dt) / vp.zoom;
+  vp.y += (vy * dt) / vp.zoom;
+  updateMoveDrag();
+  return true;
 }
 
 const resize = () => viewportNav.resize(canvasRef.value);
@@ -269,13 +342,17 @@ function hitHandle(sx: number, sy: number): { handle: ResizeHandle; id: NodeId }
   return null;
 }
 
+/** 参与移动的根节点：父节点也被选中的子节点不重复参与。 */
+function movingRootIds(ids: readonly NodeId[]): NodeId[] {
+  return ids.filter((id) => {
+    const n = docStore.doc.nodes[id];
+    return Boolean(n) && (!n!.parentId || !ids.includes(n!.parentId));
+  });
+}
+
 /** 参与吸附的移动根矩形：父节点也被选中的子节点不重复参与。 */
 function snapRectsOf(ids: readonly NodeId[]): Rect[] {
-  return ids
-    .filter((id) => {
-      const n = docStore.doc.nodes[id];
-      return Boolean(n) && (!n!.parentId || !ids.includes(n!.parentId));
-    })
+  return movingRootIds(ids)
     .map((id) => worldRect(docStore.doc, id))
     .filter((r): r is Rect => Boolean(r));
 }
@@ -432,6 +509,10 @@ function setHoverText(id: NodeId | null) {
 
 function clearHover() {
   setHoverText(null);
+  if (hoverContainerId.value) {
+    hoverContainerId.value = null;
+    markDirty();
+  }
   if (hoverHandle.value) {
     hoverHandle.value = null;
     markDirty();
@@ -463,6 +544,12 @@ function updateHover(e: PointerEvent) {
   const hit = hitTest(vp, w.x, w.y);
   const node = hit && !hit.inactive ? docStore.doc.nodes[hit.id] : null;
   setHoverText(node?.type === "text" ? node.id : null);
+  // 悬停容器的子元素边界（只读信息层）
+  const containerId = hit && !hit.inactive ? hoverContainerAt(w.x, w.y) : null;
+  if (hoverContainerId.value !== containerId) {
+    hoverContainerId.value = containerId;
+    markDirty();
+  }
   // 页面名称标签是编辑模式下移动整页的唯一入口，用 move 光标提示可拖
   const onLabel = Boolean(labelAt(sx, sy, vp, ctx));
   if (hoverLabel.value !== onLabel) {
@@ -486,10 +573,33 @@ function onPointerLeave() {
   if (!drag) clearHover();
 }
 
+/** 放弃当前手势（Esc）：清掉预览与参考线，不产生任何命令。 */
+function cancelDrag() {
+  if (!drag) return;
+  dragging.value = false;
+  drag = null;
+  resizePreview = null;
+  vectorPreview = null;
+  preview = null;
+  guideLines = [];
+  gapMarks = [];
+  clearInsertPreview();
+  markDirty();
+}
+
+/** 清空布局让位预览（拖动结束 / 取消 / 切模式）。 */
+function clearInsertPreview() {
+  if (!insertPreview && !insertPreviewKey) return;
+  insertPreview = null;
+  insertPreviewKey = "";
+  markDirty();
+}
+
 /** 根据手柄与指针位移计算新矩形（世界坐标；`keepAspect` 对应 Shift）。 */
 function onPointerDown(e: PointerEvent) {
   commitEditors();
   clearHover();
+  clearInsertPreview();
   vectorPreview = null;
   const rect = canvasRef.value!.getBoundingClientRect();
   const sx = e.clientX - rect.left;
@@ -585,7 +695,15 @@ function onPointerDown(e: PointerEvent) {
     if (label.id !== ui.activePageId) setActivePage(label.id, false);
     select([label.id]);
     ui.expandedPageId = label.id;
-    drag = { ...base, startX: w.x, startY: w.y, mode: "move", guide: guideContextFor([label.id]), snapRects: snapRectsOf([label.id]) };
+    drag = {
+      ...base,
+      startX: w.x,
+      startY: w.y,
+      mode: "move",
+      guide: guideContextFor([label.id]),
+      guideKey: null,
+      snapRects: snapRectsOf([label.id]),
+    };
     markDirty();
     return;
   }
@@ -685,23 +803,100 @@ function onPointerDown(e: PointerEvent) {
     markDirty();
     return;
   }
-  // 自动布局容器里的普通子项：拖动 = 重排序；⌘ 拖动 = 转绝对定位
+  // 自动布局容器里的普通子项：⌘ 按下时先转绝对定位，再当作普通拖动（换父级统一走 move）
   const hitNode = docStore.doc.nodes[hit.id];
   const layoutParent = hitNode ? layoutParentOf(hitNode.id) : null;
-  if (hitNode && layoutParent && !hitNode.layoutAbsolute && ui.selection.length === 1) {
-    if (e.metaKey) {
-      dispatch({ type: "node.update", params: { nodeId: hitNode.id, patch: { layoutAbsolute: true } } }, "layout");
-    } else {
-      dragging.value = true;
-      drag = { ...base, startX: w.x, startY: w.y, mode: "reorder", reorderParentId: layoutParent.id, reorderIndex: -1 };
-      markDirty();
-      return;
-    }
+  if (hitNode && layoutParent && !hitNode.layoutAbsolute && ui.selection.length === 1 && e.metaKey) {
+    dispatch({ type: "node.update", params: { nodeId: hitNode.id, patch: { layoutAbsolute: true } } }, "layout");
   }
 
   // 容器内参考线：同父兄弟 + 父内容区 + 父边界（页面拖动时父容器为空，候选是其它页面）
   const guide = guideContextFor(ui.selection);
-  drag = { ...base, startX: w.x, startY: w.y, mode: "move", guide, snapRects: snapRectsOf(ui.selection) };
+  const roots = movingRootIds(ui.selection);
+  const parents = new Set(roots.map((id) => docStore.doc.nodes[id]?.parentId ?? null));
+  drag = {
+    ...base,
+    startX: w.x,
+    startY: w.y,
+    mode: "move",
+    guide,
+    guideKey: parents.size === 1 ? [...parents][0] : null,
+    snapRects: snapRectsOf(ui.selection),
+    lastScreen: { x: sx, y: sy },
+    lastMods: { alt: e.altKey, meta: e.metaKey, shift: e.shiftKey },
+  };
+}
+
+/**
+ * 移动拖拽的每帧重算：偏移、插槽、落点、插入索引、参考线上下文。
+ * 指针事件与边缘自动滚屏共用（滚屏后按同一屏幕坐标重新求世界坐标）。
+ */
+function updateMoveDrag() {
+  const d = drag;
+  if (!d || d.mode !== "move" || !d.lastScreen) return;
+  const { x: sx, y: sy } = d.lastScreen;
+  // 3px 阈值：双击/手抖不产生移动命令
+  if (!d.moved) {
+    if (Math.hypot(sx - d.downX, sy - d.downY) < 3) return;
+    d.moved = true;
+  }
+  const w = screenToWorld(vp, sx, sy);
+  d.offsetX = w.x - d.startX;
+  d.offsetY = w.y - d.startY;
+
+  // 插槽优先：拖进实例插槽仍走 slot.fill，不做普通换父级
+  const slot = slotUnder(vp, w.x, w.y, ui.selection);
+  if (d.dropSlot !== slot) d.dropSlot = slot;
+
+  const roots = movingRootIds(ui.selection);
+  const target = slot ? null : dropTargetAt(w.x, w.y, ui.selection);
+  d.drop = target;
+  d.dropActive = Boolean(
+    target && roots.some((id) => dropAllowed(id, target) && docStore.doc.nodes[id]?.parentId !== target.id),
+  );
+  d.dropLayout = Boolean(target && target.kind === "container" && docStore.doc.nodes[target.id]?.layout);
+  d.dropIndex = target && d.dropLayout ? reorderIndexAt(target.id, w.x, w.y, ui.selection) : undefined;
+
+  // 参考线上下文跟随落点父级：落点画板/页面 → 用它；无落点或落点不合法 → 退回同父（旧行为）
+  const parents = new Set(roots.map((id) => docStore.doc.nodes[id]?.parentId ?? null));
+  const usable = Boolean(target && roots.some((id) => dropAllowed(id, target)));
+  const ctxParent = target && usable ? target.id : parents.size === 1 ? [...parents][0] : null;
+  if ((d.guideKey ?? null) !== ctxParent) {
+    d.guideKey = ctxParent;
+    d.guide = ctxParent ? guideContextForParent(ctxParent, ui.selection) : null;
+  }
+
+  const alt = d.lastMods?.alt ?? false;
+  const meta = d.lastMods?.meta ?? false;
+  // ⌘ = 落成绝对定位子项：位置由拖动决定，不画插入线、也不关吸附
+  const layoutTarget = Boolean(target && d.dropLayout && usable && !meta);
+
+  // 让位预览：每个能落进去的根各占一个槽；容器/索引不变时复用
+  const insertRoots = target && layoutTarget ? roots.filter((id) => dropAllowed(id, target)) : [];
+  const previewKey = target && layoutTarget ? `${target.id}:${d.dropIndex ?? 0}:${insertRoots.join(",")}` : "";
+  if (previewKey !== insertPreviewKey) {
+    insertPreviewKey = previewKey;
+    if (previewKey || insertPreview) {
+      const boxes = target && layoutTarget ? buildInsertPreview(target.id, d.dropIndex ?? 0, insertRoots) : null;
+      insertPreview = retargetInsertPreview(insertPreview?.boxes ?? null, boxes ?? new Map(), performance.now());
+    }
+  }
+
+  if (layoutTarget && target) {
+    // 进流位置由求解器决定：只画插入线，不做吸附
+    guideLines = reorderGuide(target.id, w.x, w.y);
+    gapMarks = [];
+  } else if (!alt && d.guide && d.snapRects?.length) {
+    const guides = computeGuides(d.snapRects, d.guide.targets, { dx: d.offsetX, dy: d.offsetY }, vp.zoom);
+    d.offsetX = guides.dx;
+    d.offsetY = guides.dy;
+    guideLines = guides.lines;
+    gapMarks = guides.gaps;
+  } else {
+    guideLines = [];
+    gapMarks = [];
+  }
+  markDirty();
 }
 
 function onPointerMove(e: PointerEvent) {
@@ -731,6 +926,7 @@ function onPointerMove(e: PointerEvent) {
     preview = null;
     guideLines = [];
     gapMarks = [];
+    clearInsertPreview();
     dragging.value = false;
     return;
   } else if (drag.mode === "pen" && pen.draft) {
@@ -796,34 +992,10 @@ function onPointerMove(e: PointerEvent) {
       }
     }
     pen.vectorDrag.preview = vec;
-  } else if (drag.mode === "reorder" && drag.reorderParentId) {
-    if (!drag.moved) {
-      if (Math.hypot(sx - drag.downX, sy - drag.downY) < 3) return;
-      drag.moved = true;
-    }
-    drag.reorderIndex = reorderIndexAt(drag.reorderParentId, w.x, w.y, ui.selection);
-    guideLines = reorderGuide(drag.reorderParentId, w.x, w.y);
   } else if (drag.mode === "move") {
-    // 3px 阈值：双击/手抖不产生移动命令
-    if (!drag.moved) {
-      if (Math.hypot(sx - drag.downX, sy - drag.downY) < 3) return;
-      drag.moved = true;
-    }
-    drag.offsetX = w.x - drag.startX;
-    drag.offsetY = w.y - drag.startY;
-    const slot = slotUnder(vp, w.x, w.y, ui.selection);
-    if (drag.dropSlot !== slot) drag.dropSlot = slot;
-    // ⌥ 临时关闭吸附：既不修正偏移，也不画线
-    if (!e.altKey && drag.guide && drag.snapRects?.length) {
-      const guides = computeGuides(drag.snapRects, drag.guide.targets, { dx: drag.offsetX, dy: drag.offsetY }, vp.zoom);
-      drag.offsetX = guides.dx;
-      drag.offsetY = guides.dy;
-      guideLines = guides.lines;
-      gapMarks = guides.gaps;
-    } else {
-      guideLines = [];
-      gapMarks = [];
-    }
+    drag.lastScreen = { x: sx, y: sy };
+    drag.lastMods = { alt: e.altKey, meta: e.metaKey, shift: e.shiftKey };
+    updateMoveDrag();
   } else if (drag.mode === "resize") {
     if (!drag.resizeId || !drag.startRect || !drag.handle) return;
     if (!drag.moved) {
@@ -899,9 +1071,154 @@ function onPointerMove(e: PointerEvent) {
   markDirty();
 }
 
-function onPointerUp() {
+/** 文档树里的 z 序键（页面序号 + 每层子索引），用于多根一起落下时保持相对顺序。 */
+function zOrderKey(id: NodeId): number[] {
+  const key: number[] = [];
+  let cur: DocNode | undefined = docStore.doc.nodes[id];
+  while (cur) {
+    const parent = cur.parentId ? docStore.doc.nodes[cur.parentId] : null;
+    if (!parent) {
+      key.unshift(docStore.doc.rootIds.indexOf(cur.id));
+      break;
+    }
+    key.unshift(parent.children.indexOf(cur.id));
+    cur = parent;
+  }
+  return key;
+}
+
+function compareZ(a: NodeId, b: NodeId): number {
+  const ka = zOrderKey(a);
+  const kb = zOrderKey(b);
+  for (let i = 0; i < Math.max(ka.length, kb.length); i++) {
+    const va = ka[i] ?? -1;
+    const vb = kb[i] ?? -1;
+    if (va !== vb) return va - vb;
+  }
+  return 0;
+}
+
+/** 当前位置在“排除其它移动根之后”的流内索引（与 reorderIndexAt 的计数口径一致）。 */
+function currentFlowIndex(node: DocNode, moving: Set<NodeId>): number {
+  const parent = node.parentId ? docStore.doc.nodes[node.parentId] : null;
+  if (!parent) return -1;
+  let index = 0;
+  for (const childId of parent.children) {
+    if (childId === node.id) break;
+    if (moving.has(childId)) continue;
+    const child = docStore.doc.nodes[childId];
+    if (!child || !child.visible || child.layoutAbsolute) continue;
+    index += 1;
+  }
+  return index;
+}
+
+/** 离开自动布局父级时，fill 在非布局容器里没有意义：归一成 fixed。 */
+function sizingPatch(node: DocNode, target: DropTarget): Partial<DocNode> | null {
+  if (docStore.doc.nodes[target.id]?.layout) return null;
+  const patch: Partial<DocNode> = {};
+  if (node.layoutSizingW === "fill") patch.layoutSizingW = "fixed";
+  if (node.layoutSizingH === "fill") patch.layoutSizingH = "fixed";
+  return Object.keys(patch).length ? patch : null;
+}
+
+/**
+ * 移动拖拽的提交：每个移动根各自判定落点，能落的 reparent、不能落的仅平移；
+ * 整批命令 = 一个撤销条目。跨页落下时松手才切活动页（Q3）。
+ */
+function commitMoveDrag(d: NonNullable<typeof drag>, e: PointerEvent): void {
+  const roots = movingRootIds(ui.selection).sort(compareZ);
+  const target = d.drop;
+  const dx = d.offsetX;
+  const dy = d.offsetY;
+  const meta = e.metaKey;
+  const cmds: Command[] = [];
+  const moving = new Set(roots);
+  let landedPage: NodeId | null = null;
+
+  // 布局落点：按 z 序给每个能落进去的根分配连续插入位
+  const insertAt = new Map<NodeId, number>();
+  if (target && d.dropLayout) {
+    let cursor = d.dropIndex ?? 0;
+    for (const id of roots) {
+      if (!dropAllowed(id, target) || !docStore.doc.nodes[id]) continue;
+      insertAt.set(id, cursor);
+      cursor += 1;
+    }
+  }
+
+  for (const id of roots) {
+    const node = docStore.doc.nodes[id];
+    const rect = worldRect(docStore.doc, id);
+    if (!node || !rect || isLocked(id)) continue;
+    const allowed = target ? dropAllowed(id, target) : false;
+
+    if (target && allowed && node.parentId !== target.id) {
+      const parentRect = worldRect(docStore.doc, target.id);
+      if (!parentRect) continue;
+      const params: { nodeId: NodeId; parentId: NodeId; x: number; y: number; index?: number } = {
+        nodeId: id,
+        parentId: target.id,
+        x: rect.x + dx - parentRect.x,
+        y: rect.y + dy - parentRect.y,
+      };
+      if (d.dropLayout && !meta) {
+        // 进流：位置交给求解器
+        params.index = insertAt.get(id) ?? 0;
+        cmds.push({ type: "node.reparent", params });
+        if (node.layoutAbsolute) {
+          cmds.push({ type: "node.update", params: { nodeId: id, patch: { layoutAbsolute: false } } });
+        }
+      } else if (d.dropLayout) {
+        // ⌘：落成绝对定位子项，保留世界坐标
+        cmds.push({ type: "node.reparent", params });
+        if (!node.layoutAbsolute) {
+          cmds.push({ type: "node.update", params: { nodeId: id, patch: { layoutAbsolute: true } } });
+        }
+      } else {
+        // 非布局画板：追加到末尾（置顶）
+        cmds.push({ type: "node.reparent", params });
+        const patch = sizingPatch(node, target);
+        if (patch) cmds.push({ type: "node.update", params: { nodeId: id, patch } });
+      }
+      landedPage = target.pageId;
+      continue;
+    }
+
+    if (target && allowed && node.parentId === target.id && d.dropLayout) {
+      if (!meta) {
+        // 同父布局：按插入索引重排（索引没变就不产生命令）
+        const index = insertAt.get(id);
+        if (index !== undefined && index !== currentFlowIndex(node, moving)) {
+          cmds.push({ type: "node.reparent", params: { nodeId: id, parentId: target.id, index } });
+        }
+      } else {
+        // ⌘：就地转绝对定位并跟随指针
+        const patch: Partial<DocNode> = { x: node.x + dx, y: node.y + dy };
+        if (!node.layoutAbsolute) patch.layoutAbsolute = true;
+        cmds.push({ type: "node.update", params: { nodeId: id, patch } });
+      }
+      continue;
+    }
+
+    // 无落点 / 非法落点 / 同父非布局：只平移
+    if (dx || dy) {
+      cmds.push({ type: "node.update", params: { nodeId: id, patch: { x: node.x + dx, y: node.y + dy } } });
+    }
+  }
+
+  if (cmds.length) dispatch(cmds, "move");
+  if (landedPage && landedPage !== ui.activePageId) {
+    // 不走 setActivePage：它会按「父级 = 页面」过滤选区，落进画板里的节点会被清掉
+    ui.activePageId = landedPage;
+    ui.expandedPageId = landedPage;
+  }
+}
+
+function onPointerUp(e: PointerEvent) {
   if (!drag) return;
   dragging.value = false;
+  clearInsertPreview();
   // 只有编辑模式才提交移动/缩放；模式被切换过就整段丢弃（不产生命令、不留预览）
   if (drag.mode !== "pan" && ui.mode !== "edit") {
     resizePreview = null;
@@ -938,22 +1255,6 @@ function onPointerUp() {
       );
     }
     pen.vectorDrag = null;
-    drag = null;
-    markDirty();
-    return;
-  }
-  if (drag.mode === "reorder") {
-    if (drag.moved && drag.reorderParentId && (drag.reorderIndex ?? -1) >= 0) {
-      const parentId = drag.reorderParentId;
-      const index = drag.reorderIndex as number;
-      const cmds = ui.selection.map((id) => ({
-        type: "node.reparent" as const,
-        params: { nodeId: id, parentId, index },
-      }));
-      dispatch(cmds, "reorder");
-    }
-    guideLines = [];
-    gapMarks = [];
     drag = null;
     markDirty();
     return;
@@ -1004,16 +1305,7 @@ function onPointerUp() {
         filled = false;
       }
     }
-    if (!filled && (drag.offsetX || drag.offsetY)) {
-      const ids = [...ui.selection];
-      const cmds = ids
-        .filter((id) => docStore.doc.nodes[id] && !isLocked(id))
-        .map((id) => {
-          const n = docStore.doc.nodes[id];
-          return { type: "node.update" as const, params: { nodeId: id, patch: { x: n.x + drag!.offsetX, y: n.y + drag!.offsetY } } };
-        });
-      if (cmds.length) dispatch(cmds, "move");
-    }
+    if (!filled) commitMoveDrag(drag, e);
   } else if (drag.mode === "create" && preview && drag.pageId && drag.tool) {
     try {
       const built = buildCreatedNode({ tool: drag.tool, pageId: drag.pageId, preview });
@@ -1151,6 +1443,11 @@ function onKey(e: KeyboardEvent) {
 
   if (e.key !== "Escape") return;
 
+  // 拖动中 Esc：放弃整次手势（不产生命令，几何与父级保持原样）
+  if (drag) {
+    cancelDrag();
+    return;
+  }
   if (zoomMenuOpen.value) {
     zoomMenuOpen.value = false;
     return;
@@ -1247,6 +1544,7 @@ onMounted(() => {
     "view.zoomOut": () => zoomStep(1 / 1.2),
     "view.zoomReset": resetZoom,
     "view.fit": () => fitView(),
+    "view.fitAll": () => fitAll(),
   });
   stopModeWatch = watch(
     () => ui.mode,
@@ -1358,6 +1656,9 @@ onBeforeUnmount(() => {
       <span class="z-divider" />
       <button class="z-fit" v-tip="{ label: ui.mode === 'edit' ? '适配活动页' : '适配全部', shortcut: keyOf('view.fit') }" @click="fitView()">
         <Icon name="fit" :size="13" />
+      </button>
+      <button class="z-fit" v-tip="{ label: '查看全部页面', shortcut: keyOf('view.fitAll') }" @click="fitAll()">
+        <Icon name="pages" :size="13" />
       </button>
     </div>
 
