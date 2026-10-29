@@ -4,13 +4,19 @@
  * 渲染层无文档缓存（architecture.md §5）。
  */
 
-import type { DocNode, DocState, NodeId } from "@sqraft/core";
-import { resolvePaint } from "@sqraft/core";
+import type { DocNode, DocState, NodeId, VectorPath } from "@sqraft/core";
+import { resolvePaint, polygonPoints } from "@sqraft/core";
 import type { RenderBackend, RenderContext, Viewport } from "./backend";
 
 const CONTAINER_TYPES = new Set(["page", "frame", "group"]);
 
-function drawSelf(backend: RenderBackend, ctx: RenderContext, node: DocNode, isRootChild: boolean): void {
+function drawSelf(
+  backend: RenderBackend,
+  ctx: RenderContext,
+  node: DocNode,
+  isRootChild: boolean,
+  vectorOverride?: VectorPath,
+): void {
   const fill = resolvePaint(ctx.doc, node.style.fill);
   const stroke = resolvePaint(ctx.doc, node.style.stroke);
   switch (node.type) {
@@ -26,10 +32,19 @@ function drawSelf(backend: RenderBackend, ctx: RenderContext, node: DocNode, isR
       backend.drawEllipse(node, fill, stroke, node.style.strokeWidth);
       break;
     case "line":
-      backend.drawLine(node, stroke ?? "#000", node.style.strokeWidth ?? 1);
+      if (node.vector) backend.drawPath(node, node.vector, undefined, stroke ?? "#000", node.style.strokeWidth ?? 1);
+      else backend.drawLine(node, stroke ?? "#000", node.style.strokeWidth ?? 1);
       break;
     case "text":
       backend.drawText(node, fill ?? "#000");
+      break;
+    case "path": {
+      const vector = vectorOverride ?? node.vector;
+      if (vector) backend.drawPath(node, vector, fill, stroke, node.style.strokeWidth ?? 1);
+      break;
+    }
+    case "polygon":
+      backend.drawPolygon(node, polygonPoints(node.sides, node.width, node.height), fill, stroke, node.style.strokeWidth ?? 1);
       break;
     case "instance":
       backend.drawRect(node, fill ?? "transparent", "rgba(79,70,229,0.6)", 1, node.style.cornerRadius ?? 0);
@@ -65,8 +80,10 @@ function drawNode(
   const geo = geometryOf(node, options);
   const changed = geo.x !== node.x || geo.y !== node.y || geo.width !== node.width || geo.height !== node.height;
   // 行内编辑中的文本由 DOM 输入框承载，画布上跳过以免重影
-  if (node.id !== options.hideTextId) {
-    drawSelf(backend, ctx, changed ? { ...node, ...geo } : node, isRootChild);
+  if (node.id !== options.hideTextId && node.id !== options.hidePathId) {
+    const vectorOverride =
+      options.vectorPreview && options.vectorPreview.id === node.id ? options.vectorPreview.vector : undefined;
+    drawSelf(backend, ctx, changed ? { ...node, ...geo } : node, isRootChild, vectorOverride);
   }
   if (node.children.length > 0) {
     backend.pushTransform(geo.x, geo.y);
@@ -81,10 +98,14 @@ function drawNode(
 export interface DrawOptions {
   /** 跳过该节点的自绘（用于文本行内编辑时隐藏原文字）。 */
   hideTextId?: NodeId;
+  /** 跳过该路径的自绘（锚点编辑时由 UI 叠加层绘制预览）。 */
+  hidePathId?: NodeId;
   /** 拖动中的渲染期预览：命中的"移动根"整体偏移，不改文档。 */
   movePreview?: { ids: readonly NodeId[]; dx: number; dy: number };
   /** 缩放中的渲染期预览：命中的节点用给定几何绘制。 */
   resizePreview?: { id: NodeId; x: number; y: number; width: number; height: number };
+  /** 路径缩放预览：锚点按同一比例缩放后的几何（不改文档）。 */
+  vectorPreview?: { id: NodeId; vector: VectorPath };
   /** 需要淡化的页面（编辑模式下的非活动页）。 */
   dimPageIds?: readonly NodeId[];
 }

@@ -11,7 +11,9 @@ const tools: { kind: ToolKind; action: ActionId; label: string; icon: string }[]
   { kind: "frame", action: "tool.frame", label: "画板", icon: "frame" },
   { kind: "rect", action: "tool.rect", label: "矩形", icon: "rect" },
   { kind: "ellipse", action: "tool.ellipse", label: "椭圆", icon: "ellipse" },
+  { kind: "triangle", action: "tool.triangle", label: "三角形", icon: "triangle" },
   { kind: "line", action: "tool.line", label: "直线", icon: "line" },
+  { kind: "path", action: "tool.path", label: "钢笔", icon: "pen" },
   { kind: "text", action: "tool.text", label: "文本", icon: "text" },
 ];
 

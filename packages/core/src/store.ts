@@ -5,6 +5,8 @@
 
 import type { DocNode, DocState, NodeId } from "./model";
 import { walkSubtree } from "./model";
+import { clampSides } from "./polygon";
+import { normalizeVector, scaleVector, validateVector, vectorBounds, type VectorPath } from "./vector";
 
 export type Command =
   | { type: "node.create"; params: { nodes: DocNode[]; parentId: NodeId | null; index?: number } }
@@ -45,9 +47,27 @@ export class DocStore {
     for (const fn of this.listeners) fn(this.state, changed);
   }
 
+  /**
+   * 批命令前置校验：applyOne 内会抛错的规则全部前移。
+   * 保证「要么全成、要么全不成」——中途抛错不会留下已生效但没进撤销栈的改动。
+   */
+  private validateOne(cmd: Command): void {
+    switch (cmd.type) {
+      case "node.create":
+        for (const n of cmd.params.nodes) if (n.vector) validateVector(n.vector);
+        break;
+      case "node.update":
+        if (cmd.params.patch.vector) validateVector(cmd.params.patch.vector as VectorPath);
+        break;
+      default:
+        break;
+    }
+  }
+
   /** 应用一条或一批命令（原子）；自动记录逆命令供撤销。 */
   apply(cmds: Command | Command[], label = "edit"): void {
     const list = Array.isArray(cmds) ? cmds : [cmds];
+    for (const cmd of list) this.validateOne(cmd);
     const inverses: Inverse[] = [];
     const changed = new Set<NodeId>();
     for (const cmd of list) {
@@ -101,20 +121,39 @@ export class DocStore {
     switch (cmd.type) {
       case "node.create": {
         const { nodes, parentId, index } = cmd.params;
+        const storedNodes: DocNode[] = [];
         for (const n of nodes) {
-          this.state.nodes[n.id] = { ...n };
+          // 归一化写在副本上：命令参数属于调用方，apply 不应改写它
+          const stored: DocNode = { ...n };
+          if (stored.vector) {
+            // 路径的锚点允许以父容器坐标传入：平移归一化后由包围盒推导节点框
+            validateVector(stored.vector);
+            const norm = normalizeVector(stored.vector.anchors, stored.vector.closed);
+            stored.vector = norm.vector;
+            stored.x += norm.bounds.x;
+            stored.y += norm.bounds.y;
+            stored.width = Math.max(1, norm.bounds.width);
+            stored.height = Math.max(1, norm.bounds.height);
+          }
+          if (stored.type === "polygon") {
+            // 边数是多边形唯一的形状参数：任何入口（GUI / AI）都给同一套夹紧
+            stored.sides = clampSides(stored.sides);
+            stored.width = Math.max(1, stored.width);
+            stored.height = Math.max(1, stored.height);
+          }
+          storedNodes.push(stored);
+          this.state.nodes[stored.id] = stored;
         }
         const parent = parentId ? this.state.nodes[parentId] : null;
-        const rootId = nodes[0].id;
+        const rootId = storedNodes[0].id;
         if (parent) {
           const at = index ?? parent.children.length;
           parent.children.splice(at, 0, rootId);
-          nodes[0].parentId = parent.id;
-          this.state.nodes[rootId].parentId = parent.id;
+          storedNodes[0].parentId = parent.id;
         } else {
           this.state.rootIds.push(rootId);
         }
-        for (const n of nodes) changed.add(n.id);
+        for (const n of storedNodes) changed.add(n.id);
         return { cmd: { type: "node.delete", params: { nodeId: rootId } } };
       }
       case "node.delete": {
@@ -137,17 +176,43 @@ export class DocStore {
         return { cmd: { type: "node.create", params: { nodes: rebuild, parentId, index } } };
       }
       case "node.update": {
-        const { nodeId, patch } = cmd.params;
+        const { nodeId } = cmd.params;
         const node = this.state.nodes[nodeId];
         if (!node) return { cmd: { type: "node.update", params: { nodeId, patch: {} } } };
+        // 路径的两个隐式规则：给 vector 时包围盒即节点框；只改宽高时按比例缩放锚点
+        const next: Partial<DocNode> = { ...cmd.params.patch };
+        if (next.vector) {
+          validateVector(next.vector as VectorPath);
+          const norm = normalizeVector(next.vector.anchors, next.vector.closed);
+          next.vector = norm.vector;
+          next.x = (next.x ?? node.x) + norm.bounds.x;
+          next.y = (next.y ?? node.y) + norm.bounds.y;
+          next.width = Math.max(1, norm.bounds.width);
+          next.height = Math.max(1, norm.bounds.height);
+        } else if (node.vector && (next.width !== undefined || next.height !== undefined)) {
+          const sx = next.width !== undefined ? (next.width as number) / Math.max(1, node.width) : 1;
+          const sy = next.height !== undefined ? (next.height as number) / Math.max(1, node.height) : 1;
+          const scaled = scaleVector(node.vector, sx, sy);
+          const bounds = vectorBounds(scaled);
+          next.vector = scaled;
+          // 扁平路径在垂直于自身的方向上没有跨度：以包围盒为准，保证节点框与几何一致
+          next.width = Math.max(1, bounds.width);
+          next.height = Math.max(1, bounds.height);
+        }
+        // 多边形：边数任何入口都夹紧到 3–12；宽高下限与其它节点一致
+        if (node.type === "polygon") {
+          if (next.sides !== undefined) next.sides = clampSides(next.sides as number);
+          if (next.width !== undefined) next.width = Math.max(1, next.width as number);
+          if (next.height !== undefined) next.height = Math.max(1, next.height as number);
+        }
         const prev: Record<string, unknown> = {};
-        for (const key of Object.keys(patch) as Array<keyof DocNode>) {
+        for (const key of Object.keys(next) as Array<keyof DocNode>) {
           if (key === "style") {
             prev[key] = { ...node.style };
-            node.style = { ...(patch.style as object) };
+            node.style = { ...(next.style as object) };
           } else {
             prev[key] = node[key];
-            (node as unknown as Record<string, unknown>)[key] = patch[key];
+            (node as unknown as Record<string, unknown>)[key] = next[key];
           }
         }
         changed.add(nodeId);

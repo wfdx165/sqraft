@@ -3,8 +3,8 @@
  * 纪律：样式只接受 Token 引用，字面量色值在工具层直接拒绝。
  */
 
-import type { Command, DocStore, NodeId } from "@sqraft/core";
-import { createNode, firstPageId, walkSubtree } from "@sqraft/core";
+import type { Command, DocStore, NodeId, NodeStyle, VectorAnchor } from "@sqraft/core";
+import { clampSides, createNode, firstPageId, makeAnchor, validateVector, walkSubtree } from "@sqraft/core";
 
 export interface ToolDefinition {
   name: string;
@@ -29,29 +29,52 @@ export const tools: ToolDefinition[] = [
   {
     name: "create_node",
     description:
-      "在父节点下创建一个节点。kind 支持 frame/rect/ellipse/line/text。样式颜色必须用 fillToken（Token 名，如 color/primary），不允许字面量色值。",
+      "在父节点下创建一个节点。kind 支持 frame/rect/ellipse/polygon/line/path/text。polygon 是参数化多边形，用 sides 指定边数（3–12，默认 3，3 即三角形），顶点由 width/height 包围盒推导。path 用 points 描述锚点（父容器坐标，手柄为相对锚点的偏移），闭合路径至少 3 个锚点、开放路径至少 2 个。样式颜色必须用 fillToken / strokeToken（Token 名），不允许字面量色值。",
     input_schema: {
       type: "object",
       properties: {
         parentId: { type: "string", description: "父节点 id；省略则建到当前页面" },
-        kind: { type: "string", enum: ["frame", "rect", "ellipse", "line", "text"] },
+        kind: { type: "string", enum: ["frame", "rect", "ellipse", "polygon", "line", "path", "text"] },
         name: { type: "string" },
         x: { type: "number" },
         y: { type: "number" },
         width: { type: "number" },
         height: { type: "number" },
+        sides: { type: "number", description: "kind=polygon 的边数，3–12，默认 3" },
         text: { type: "string", description: "kind=text 时的文案" },
         fontSize: { type: "number" },
         fillToken: { type: "string", description: "填充色的 Token 名，如 color/primary" },
+        strokeToken: { type: "string", description: "描边色的 Token 名；开放路径默认 color/text" },
+        strokeWidth: { type: "number", description: "描边线宽，默认开放路径 2" },
         cornerRadius: { type: "number" },
+        closed: { type: "boolean", description: "kind=path 时是否闭合，默认 false" },
+        points: {
+          type: "array",
+          minItems: 2,
+          description: "kind=path 的锚点，父容器坐标；x/y 必填，inX/inY/outX/outY 为相对锚点的手柄偏移",
+          items: {
+            type: "object",
+            properties: {
+              x: { type: "number" },
+              y: { type: "number" },
+              inX: { type: "number" },
+              inY: { type: "number" },
+              outX: { type: "number" },
+              outY: { type: "number" },
+            },
+            required: ["x", "y"],
+            additionalProperties: false,
+          },
+        },
       },
-      required: ["kind", "width", "height"],
+      required: ["kind"],
       additionalProperties: false,
     },
   },
   {
     name: "update_node",
-    description: "更新节点属性。fill 仅接受 Token 引用（fillToken）。",
+    description:
+      "更新节点属性。fill 仅接受 Token 引用（fillToken）。polygon 可用 sides 改边数（3–12）。path 可用 points（父容器坐标）整体替换锚点、用 closed 切换闭合；只改 width/height 时锚点会按比例缩放。",
     input_schema: {
       type: "object",
       properties: {
@@ -60,9 +83,31 @@ export const tools: ToolDefinition[] = [
         y: { type: "number" },
         width: { type: "number" },
         height: { type: "number" },
+        sides: { type: "number", description: "polygon 的边数，3–12" },
         text: { type: "string" },
         fillToken: { type: "string" },
+        strokeToken: { type: "string" },
+        strokeWidth: { type: "number" },
         cornerRadius: { type: "number" },
+        closed: { type: "boolean" },
+        points: {
+          type: "array",
+          minItems: 2,
+          description: "path 的新锚点，父容器坐标；与 create_node 的 points 同构",
+          items: {
+            type: "object",
+            properties: {
+              x: { type: "number" },
+              y: { type: "number" },
+              inX: { type: "number" },
+              inY: { type: "number" },
+              outX: { type: "number" },
+              outY: { type: "number" },
+            },
+            required: ["x", "y"],
+            additionalProperties: false,
+          },
+        },
       },
       required: ["nodeId"],
       additionalProperties: false,
@@ -91,9 +136,47 @@ export type ToolExecutor = (name: string, args: Record<string, unknown>) => Prom
 function serializeSubtree(store: DocStore, id: NodeId): string {
   const out: unknown[] = [];
   walkSubtree(store.doc, id, (n) =>
-    out.push({ id: n.id, type: n.type, name: n.name, x: n.x, y: n.y, w: n.width, h: n.height, text: n.text }),
+    out.push({
+      id: n.id,
+      type: n.type,
+      name: n.name,
+      x: n.x,
+      y: n.y,
+      w: n.width,
+      h: n.height,
+      text: n.text,
+      ...(n.type === "polygon" ? { sides: n.sides ?? 3 } : {}),
+      ...(n.vector ? { vector: n.vector } : {}),
+    }),
   );
   return JSON.stringify(out);
+}
+
+/** 读取 points：父容器坐标，x/y 必填，手柄缺省为 0。 */
+function readPoints(value: unknown): VectorAnchor[] | null {
+  if (value === undefined) return null;
+  if (!Array.isArray(value)) throw new Error("points 必须是锚点数组");
+  return value.map((raw, i) => {
+    if (!raw || typeof raw !== "object") throw new Error(`points[${i}] 必须是对象`);
+    const p = raw as Record<string, unknown>;
+    const x = Number(p.x);
+    const y = Number(p.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error(`points[${i}] 的 x/y 必须是数值`);
+    const offset = (key: string): number => {
+      const v = p[key];
+      if (v === undefined) return 0;
+      const n = Number(v);
+      if (!Number.isFinite(n)) throw new Error(`points[${i}].${key} 必须是数值`);
+      return n;
+    };
+    return makeAnchor(x, y, { inX: offset("inX"), inY: offset("inY"), outX: offset("outX"), outY: offset("outY") });
+  });
+}
+
+function applyStyleTokens(style: NodeStyle, args: Record<string, unknown>): void {
+  if (args.fillToken !== undefined) style.fill = { token: String(args.fillToken) };
+  if (args.strokeToken !== undefined) style.stroke = { token: String(args.strokeToken) };
+  if (args.strokeWidth !== undefined) style.strokeWidth = Math.max(0, Number(args.strokeWidth));
 }
 
 export function assertToken(store: DocStore, token: string | undefined, field: string): void {
@@ -118,36 +201,87 @@ export function makeExecutor(
         return JSON.stringify({ tokens: store.doc.tokens });
       }
       case "create_node": {
-        const kind = String(args.kind) as "frame" | "rect" | "ellipse" | "line" | "text";
+        const kind = String(args.kind) as "frame" | "rect" | "ellipse" | "polygon" | "line" | "path" | "text";
+        const isPath = kind === "path";
+        const isPolygon = kind === "polygon";
         assertToken(store, args.fillToken as string | undefined, "fillToken");
+        assertToken(store, args.strokeToken as string | undefined, "strokeToken");
         const parentId = (args.parentId as NodeId | undefined) ?? getActivePageId?.() ?? firstPageId(store.doc);
         if (!parentId || !store.doc.nodes[parentId]) throw new Error("parentId 不存在");
-        const style = args.fillToken ? { fill: { token: args.fillToken as string } } : {};
+
+        const points = readPoints(args.points);
+        const closed = Boolean(args.closed);
+        if (args.sides !== undefined && !isPolygon) throw new Error("sides 仅适用于 kind=polygon");
+        if (isPath) {
+          if (!points) throw new Error("kind=path 必须提供 points");
+          if (points.length < 2) throw new Error("路径至少需要 2 个锚点");
+          if (closed && points.length < 3) throw new Error("闭合路径至少需要 3 个锚点");
+          validateVector({ closed, anchors: points });
+        }
+
+        const style: NodeStyle = {
+          fontSize: args.fontSize as number | undefined,
+          cornerRadius: args.cornerRadius as number | undefined,
+        };
+        applyStyleTokens(style, args);
+        if (isPath) {
+          // 与 GUI 一致：未显式给颜色时，闭合默认填充、开放默认描边
+          if (!style.fill && !style.stroke) {
+            if (closed) style.fill = { token: "color/primary" };
+            else style.stroke = { token: "color/text" };
+          }
+          if (style.stroke && style.strokeWidth === undefined) style.strokeWidth = 2;
+        }
+        if (isPolygon && !style.fill && !style.stroke) style.fill = { token: "color/primary" };
+
         const node = createNode(kind, {
-          name: (args.name as string) ?? kind,
-          x: (args.x as number) ?? 0,
-          y: (args.y as number) ?? 0,
-          width: (args.width as number) ?? 100,
-          height: (args.height as number) ?? 100,
+          name: (args.name as string) ?? (isPolygon ? (clampSides(args.sides as number) === 3 ? "三角形" : "多边形") : kind),
+          // 路径的 points 是父容器坐标：先放在 0,0，由 store 归一化并推导节点框
+          x: isPath ? 0 : ((args.x as number) ?? 0),
+          y: isPath ? 0 : ((args.y as number) ?? 0),
+          width: isPath ? 1 : ((args.width as number) ?? 100),
+          height: isPath ? 1 : ((args.height as number) ?? 100),
           text: args.text as string | undefined,
-          style: {
-            ...style,
-            fontSize: args.fontSize as number | undefined,
-            cornerRadius: args.cornerRadius as number | undefined,
-          },
+          vector: isPath ? { closed, anchors: points! } : undefined,
+          sides: isPolygon ? clampSides(args.sides as number) : undefined,
+          style,
         });
         store.apply({ type: "node.create", params: { nodes: [node], parentId } }, "ai:create");
         return JSON.stringify({ ok: true, nodeId: node.id });
       }
       case "update_node": {
         const nodeId = args.nodeId as NodeId;
-        if (!store.doc.nodes[nodeId]) throw new Error(`节点 ${nodeId} 不存在`);
+        const node = store.doc.nodes[nodeId];
+        if (!node) throw new Error(`节点 ${nodeId} 不存在`);
         assertToken(store, args.fillToken as string | undefined, "fillToken");
+        assertToken(store, args.strokeToken as string | undefined, "strokeToken");
+
         const patch: Record<string, unknown> = {};
         for (const k of ["x", "y", "width", "height", "text", "cornerRadius"] as const) {
           if (args[k] !== undefined) patch[k] = args[k];
         }
-        if (args.fillToken !== undefined) patch.style = { fill: { token: args.fillToken as string } };
+
+        const style: NodeStyle = { ...node.style };
+        const before = JSON.stringify(style);
+        applyStyleTokens(style, args);
+        if (JSON.stringify(style) !== before) patch.style = style;
+
+        const points = readPoints(args.points);
+        const closedArg = args.closed !== undefined ? Boolean(args.closed) : undefined;
+        if (args.sides !== undefined) {
+          if (node.type !== "polygon") throw new Error("sides 仅适用于 polygon 节点");
+          patch.sides = clampSides(Number(args.sides));
+        }
+        if (points) {
+          if (node.type !== "path") throw new Error("points 仅适用于 path 节点");
+          if (points.length < 2) throw new Error("路径至少需要 2 个锚点");
+          const anchors = points.map((p) => ({ ...p, x: p.x - node.x, y: p.y - node.y }));
+          patch.vector = { closed: closedArg ?? node.vector?.closed ?? false, anchors };
+        } else if (closedArg !== undefined) {
+          if (!node.vector) throw new Error("closed 仅适用于 path 节点");
+          patch.vector = { ...node.vector, closed: closedArg };
+        }
+
         store.apply({ type: "node.update", params: { nodeId, patch } }, "ai:update");
         return JSON.stringify({ ok: true });
       }

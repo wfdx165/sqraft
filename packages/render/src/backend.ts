@@ -3,7 +3,7 @@
  * 未来 WebGL2 后端实现同一接口即可替换，文档模型零改动。
  */
 
-import type { DocNode, DocState } from "@sqraft/core";
+import type { DocNode, DocState, VectorPath } from "@sqraft/core";
 
 export interface Viewport {
   /** 视口左上角在世界坐标中的位置 */
@@ -32,6 +32,10 @@ export interface RenderBackend {
   drawRect(node: DocNode, fill?: string, stroke?: string, strokeWidth?: number, radius?: number, shadow?: boolean): void;
   drawEllipse(node: DocNode, fill?: string, stroke?: string, strokeWidth?: number): void;
   drawLine(node: DocNode, stroke?: string, strokeWidth?: number): void;
+  /** 矢量路径：闭合时 closePath；fill/stroke 为空则跳过对应绘制 */
+  drawPath(node: DocNode, vector: VectorPath, fill?: string, stroke?: string, strokeWidth?: number): void;
+  /** 参数化多边形：points 为节点本地坐标，闭合描边 */
+  drawPolygon(node: DocNode, points: ReadonlyArray<{ x: number; y: number }>, fill?: string, stroke?: string, strokeWidth?: number): void;
   drawText(node: DocNode, fill?: string): void;
   drawFrameOutline(node: DocNode): void;
   endFrame(): void;

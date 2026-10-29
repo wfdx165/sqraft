@@ -3,6 +3,8 @@
  * 详见 docs/architecture.md §3。本包不依赖任何浏览器/DOM API。
  */
 
+import type { VectorPath } from "./vector";
+
 export type NodeId = string;
 
 export type NodeType =
@@ -54,6 +56,10 @@ export interface DocNode {
   componentId?: NodeId;
   /** 自动布局：仅 frame 可持有（自动布局的唯一宿主） */
   layout?: LayoutSpec;
+  /** 矢量路径：仅 path 使用；锚点本地坐标，手柄为相对偏移 */
+  vector?: VectorPath;
+  /** 多边形边数：仅 polygon 使用，3–12（顶点由包围盒推导） */
+  sides?: number;
   style: NodeStyle;
 }
 

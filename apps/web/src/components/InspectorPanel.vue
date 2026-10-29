@@ -19,9 +19,28 @@ function num(e: Event): number {
   return Number((e.target as HTMLInputElement).value);
 }
 
+/** 类型标签：多边形的叫法跟着边数走（三角形 / 多边形），其余直接显示节点类型。 */
+function typeLabel(n: DocNode): string {
+  if (n.type === "polygon") return (n.sides ?? 3) === 3 ? "三角形" : "多边形";
+  return n.type;
+}
+
+function setSides(e: Event) {
+  if (!node.value) return;
+  const raw = Math.round(num(e));
+  if (!Number.isFinite(raw)) return;
+  const sides = Math.max(3, Math.min(12, raw));
+  dispatch({ type: "node.update", params: { nodeId: node.value.id, patch: { sides } } }, "inspect");
+}
+
 function setNum(key: "x" | "y" | "width" | "height", e: Event) {
   if (!node.value) return;
   dispatch({ type: "node.update", params: { nodeId: node.value.id, patch: { [key]: num(e) } } }, "inspect");
+}
+
+/** 只做展示层舍入：文档保留完整精度（缩放会把 400 算成 399.99999999999994）。 */
+function fmt(v: number): string {
+  return String(Math.round(v * 100) / 100);
 }
 
 function setCornerRadius(e: Event) {
@@ -38,6 +57,46 @@ function setFillToken(e: Event) {
   const fill = token ? { token } : null;
   dispatch(
     { type: "node.update", params: { nodeId: node.value.id, patch: { style: { ...node.value.style, fill } } } },
+    "inspect",
+  );
+}
+
+function strokeTokenOf(n: DocNode): string {
+  return n.style.stroke?.token ?? "";
+}
+
+function setStrokeToken(e: Event) {
+  if (!node.value) return;
+  const token = (e.target as HTMLSelectElement).value;
+  const stroke = token ? { token } : undefined;
+  dispatch(
+    { type: "node.update", params: { nodeId: node.value.id, patch: { style: { ...node.value.style, stroke } } } },
+    "inspect",
+  );
+}
+
+function setStrokeWidth(e: Event) {
+  if (!node.value) return;
+  dispatch(
+    {
+      type: "node.update",
+      params: { nodeId: node.value.id, patch: { style: { ...node.value.style, strokeWidth: Math.max(0, num(e)) } } },
+    },
+    "inspect",
+  );
+}
+
+function canClosePath(n: DocNode): boolean {
+  return Boolean(n.vector?.closed) || (n.vector?.anchors.length ?? 0) >= 3;
+}
+
+function setClosed(e: Event) {
+  const n = node.value;
+  if (!n?.vector) return;
+  const closed = (e.target as HTMLInputElement).checked;
+  if (closed && n.vector.anchors.length < 3) return;
+  dispatch(
+    { type: "node.update", params: { nodeId: n.id, patch: { vector: { ...n.vector, closed } } } },
     "inspect",
   );
 }
@@ -154,7 +213,7 @@ function fillTokenOf(n: DocNode): string {
         <div class="meta-row">
           <label>名称</label>
           <input class="name-input" :value="node.name" spellcheck="false" @change="setName" />
-          <span class="type-tag">{{ node.type }}</span>
+          <span class="type-tag">{{ typeLabel(node) }}</span>
         </div>
         <div class="meta-row">
           <label>ID</label>
@@ -168,10 +227,10 @@ function fillTokenOf(n: DocNode): string {
       <section class="block">
         <div class="label-row"><span class="micro-label">位置与尺寸</span></div>
         <div class="grid">
-          <label>X</label><input class="mono" type="number" :value="node.x" @change="setNum('x', $event)" />
-          <label>Y</label><input class="mono" type="number" :value="node.y" @change="setNum('y', $event)" />
-          <label>W</label><input class="mono" type="number" :value="node.width" @change="setNum('width', $event)" />
-          <label>H</label><input class="mono" type="number" :value="node.height" @change="setNum('height', $event)" />
+          <label>X</label><input class="mono" type="number" :value="fmt(node.x)" @change="setNum('x', $event)" />
+          <label>Y</label><input class="mono" type="number" :value="fmt(node.y)" @change="setNum('y', $event)" />
+          <label>W</label><input class="mono" type="number" :value="fmt(node.width)" @change="setNum('width', $event)" />
+          <label>H</label><input class="mono" type="number" :value="fmt(node.height)" @change="setNum('height', $event)" />
         </div>
       </section>
 
@@ -183,6 +242,31 @@ function fillTokenOf(n: DocNode): string {
             <option value="">（无）</option>
             <option v-for="t in tokenNames" :key="t" :value="t">{{ t }}</option>
           </select>
+        </div>
+        <div class="row">
+          <label>描边</label>
+          <select :value="strokeTokenOf(node)" @change="setStrokeToken">
+            <option value="">（无）</option>
+            <option v-for="t in tokenNames" :key="t" :value="t">{{ t }}</option>
+          </select>
+        </div>
+        <div class="row">
+          <label>线宽</label>
+          <input class="mono" type="number" min="0" step="0.5" :value="node.style.strokeWidth ?? 1" @change="setStrokeWidth($event)" />
+        </div>
+        <div class="row" v-if="node.type === 'path'">
+          <label>闭合</label>
+          <input
+            class="checkbox"
+            type="checkbox"
+            :checked="Boolean(node.vector?.closed)"
+            :disabled="!canClosePath(node)"
+            @change="setClosed"
+          />
+        </div>
+        <div class="row" v-if="node.type === 'polygon'">
+          <label>边数</label>
+          <input class="mono" type="number" min="3" max="12" step="1" :value="node.sides ?? 3" @change="setSides" />
         </div>
         <div class="row" v-if="node.type === 'rect' || node.type === 'frame'">
           <label>圆角</label>
@@ -360,6 +444,14 @@ header {
   font-size: 11px;
   color: var(--text-faint);
   min-width: 30px;
+}
+
+input.checkbox {
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  accent-color: var(--accent);
+  flex: none;
 }
 
 input,

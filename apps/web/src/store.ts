@@ -5,7 +5,7 @@
 import { reactive } from "vue";
 import { DocStore, createEmptyDoc, firstPageId, type Command, type NodeId } from "@sqraft/core";
 
-export type ToolKind = "select" | "frame" | "rect" | "ellipse" | "line" | "text";
+export type ToolKind = "select" | "frame" | "rect" | "ellipse" | "triangle" | "line" | "path" | "text";
 export type PanelTab = "chat" | "pages" | "tokens";
 /** 画布模式：pan = 浏览/平移，edit = 编辑活动页 */
 export type EditorMode = "pan" | "edit";

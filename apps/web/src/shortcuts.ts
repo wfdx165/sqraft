@@ -14,7 +14,9 @@ export type ActionId =
   | "tool.frame"
   | "tool.rect"
   | "tool.ellipse"
+  | "tool.triangle"
   | "tool.line"
+  | "tool.path"
   | "tool.text"
   | "edit.undo"
   | "edit.redo"
@@ -48,7 +50,9 @@ export const ACTIONS: ShortcutAction[] = [
   { id: "tool.frame", group: "工具", label: "画板", default: "F" },
   { id: "tool.rect", group: "工具", label: "矩形", default: "R" },
   { id: "tool.ellipse", group: "工具", label: "椭圆", default: "O" },
+  { id: "tool.triangle", group: "工具", label: "三角形", default: "G" },
   { id: "tool.line", group: "工具", label: "直线", default: "L" },
+  { id: "tool.path", group: "工具", label: "钢笔", default: "P" },
   { id: "tool.text", group: "工具", label: "文本", default: "T" },
   { id: "edit.undo", group: "编辑", label: "撤销", default: "⌘Z" },
   { id: "edit.redo", group: "编辑", label: "重做", default: "⌘⇧Z" },

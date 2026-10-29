@@ -10,6 +10,16 @@ import {
 } from "../src/model";
 import { DocStore } from "../src/store";
 import { solveLayout } from "../src/layout";
+import {
+  flattenVector,
+  hitVector,
+  makeAnchor,
+  normalizeVector,
+  pointInVector,
+  vectorBounds,
+  type VectorPath,
+} from "../src/vector";
+import { clampSides, hitPolygon, polygonPoints } from "../src/polygon";
 
 describe("命令系统", () => {
   it("创建 → 撤销 → 重做 后文档状态一致", () => {
@@ -205,5 +215,240 @@ describe("页面与世界坐标", () => {
   it("nextPagePosition 放在最右侧页面之右", () => {
     const store = new DocStore(createEmptyDoc());
     expect(nextPagePosition(store.doc)).toEqual({ x: DEFAULT_PAGE_WIDTH + PAGE_GAP, y: 0 });
+  });
+});
+
+describe("矢量路径", () => {
+  const line = (): VectorPath => ({
+    closed: false,
+    anchors: [makeAnchor(0, 0), makeAnchor(100, 0)],
+  });
+
+  it("包围盒包含手柄端点，归一化后最小坐标为 0", () => {
+    const vector: VectorPath = {
+      closed: false,
+      anchors: [makeAnchor(20, 30, { outX: 40, outY: -10 }), makeAnchor(120, 30)],
+    };
+    expect(vectorBounds(vector)).toEqual({ x: 20, y: 20, width: 100, height: 10 });
+    const { vector: n, bounds } = normalizeVector(vector.anchors, vector.closed);
+    expect(bounds).toEqual({ x: 20, y: 20, width: 100, height: 10 });
+    expect(n.anchors[0].x).toBe(0);
+    expect(n.anchors[0].y).toBe(10);
+    expect(n.anchors[0].outX).toBe(40);
+  });
+
+  it("创建路径时以父容器坐标归一化并推导节点框", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const path = createNode("path", {
+      name: "P",
+      x: 0,
+      y: 0,
+      vector: { closed: false, anchors: [makeAnchor(30, 40), makeAnchor(130, 90)] },
+    });
+    store.apply({ type: "node.create", params: { nodes: [path], parentId: pageId } });
+    const saved = store.doc.nodes[path.id];
+    expect(saved.x).toBe(30);
+    expect(saved.y).toBe(40);
+    expect(saved.width).toBe(100);
+    expect(saved.height).toBe(50);
+    expect(saved.vector?.anchors[0]).toMatchObject({ x: 0, y: 0 });
+  });
+
+  it("改 vector 时重新推导节点框，撤销恢复上一版几何", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const path = createNode("path", {
+      vector: { closed: false, anchors: [makeAnchor(0, 0), makeAnchor(100, 0)] },
+    });
+    store.apply({ type: "node.create", params: { nodes: [path], parentId: pageId } });
+
+    store.apply({
+      type: "node.update",
+      params: {
+        nodeId: path.id,
+        patch: { vector: { closed: false, anchors: [makeAnchor(10, 10), makeAnchor(10, 60)] } },
+      },
+    });
+    expect(store.doc.nodes[path.id].x).toBe(10);
+    expect(store.doc.nodes[path.id].width).toBe(1);
+    expect(store.doc.nodes[path.id].height).toBe(50);
+
+    store.undo();
+    expect(store.doc.nodes[path.id].x).toBe(0);
+    expect(store.doc.nodes[path.id].width).toBe(100);
+    expect(store.doc.nodes[path.id].height).toBe(1);
+  });
+
+  it("只改宽高时按比例缩放锚点与手柄", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const path = createNode("path", {
+      vector: {
+        closed: false,
+        anchors: [makeAnchor(0, 0, { outX: 10 }), makeAnchor(100, 50)],
+      },
+    });
+    store.apply({ type: "node.create", params: { nodes: [path], parentId: pageId } });
+    store.apply({ type: "node.update", params: { nodeId: path.id, patch: { width: 200, height: 100 } } });
+    const saved = store.doc.nodes[path.id];
+    expect(saved.width).toBe(200);
+    expect(saved.vector?.anchors[1]).toMatchObject({ x: 200, y: 100 });
+    expect(saved.vector?.anchors[0].outX).toBe(20);
+  });
+
+  it("扁平路径垂直缩放后仍保持包围盒与几何一致", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const path = createNode("path", {
+      vector: { closed: false, anchors: [makeAnchor(0, 0), makeAnchor(100, 0)] },
+    });
+    store.apply({ type: "node.create", params: { nodes: [path], parentId: pageId } });
+    store.apply({ type: "node.update", params: { nodeId: path.id, patch: { height: 80 } } });
+    const saved = store.doc.nodes[path.id];
+    expect(saved.height).toBe(1);
+    expect(saved.vector?.anchors.every((a) => a.y === 0)).toBe(true);
+  });
+
+  it("闭合少于 3 个锚点时抛错且不占撤销记录", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const path = createNode("path", { vector: line() });
+    store.apply({ type: "node.create", params: { nodes: [path], parentId: pageId } });
+    expect(() =>
+      store.apply({
+        type: "node.update",
+        params: { nodeId: path.id, patch: { vector: { closed: true, anchors: line().anchors } } },
+      }),
+    ).toThrow();
+    expect(store.doc.nodes[path.id].vector?.closed).toBe(false);
+    store.undo();
+    expect(store.doc.nodes[path.id]).toBeUndefined();
+  });
+
+  it("采样、描边距离与填充内部命中", () => {
+    const square: VectorPath = {
+      closed: true,
+      anchors: [makeAnchor(0, 0), makeAnchor(100, 0), makeAnchor(100, 100), makeAnchor(0, 100)],
+    };
+    expect(flattenVector(square)).toHaveLength(5);
+    expect(hitVector(square, 50, 50, 1, true)).toBe(true);
+    expect(hitVector(square, 50, 50, 1, false)).toBe(false);
+    expect(hitVector(square, 101, 50, 2, true)).toBe(true);
+    expect(hitVector(square, 150, 150, 2, true)).toBe(false);
+    expect(pointInVector(square, 50, 50)).toBe(true);
+  });
+});
+
+describe("参数化多边形", () => {
+  it("边数夹紧到 3–12，非法值回落为 3", () => {
+    expect(clampSides(undefined)).toBe(3);
+    expect(clampSides(2)).toBe(3);
+    expect(clampSides(99)).toBe(12);
+    expect(clampSides(6.4)).toBe(6);
+    expect(clampSides(Number.NaN)).toBe(3);
+  });
+
+  it("三角形顶点朝上且撑满包围盒", () => {
+    const pts = polygonPoints(3, 120, 90);
+    expect(pts).toHaveLength(3);
+    // 顶点在上边中点
+    const apex = pts.reduce((a, b) => (b.y < a.y ? b : a));
+    expect(apex.x).toBeCloseTo(60);
+    expect(apex.y).toBeCloseTo(0);
+    // 底边两点在下边左右角
+    const base = pts.filter((p) => p !== apex).sort((a, b) => a.x - b.x);
+    expect(base[0].x).toBeCloseTo(0);
+    expect(base[0].y).toBeCloseTo(90);
+    expect(base[1].x).toBeCloseTo(120);
+    expect(base[1].y).toBeCloseTo(90);
+  });
+
+  it("改边数只改顶点数，不改包围盒", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const poly = createNode("polygon", { x: 10, y: 20, width: 120, height: 90, sides: 3 });
+    store.apply({ type: "node.create", params: { nodes: [poly], parentId: pageId } });
+    store.apply({ type: "node.update", params: { nodeId: poly.id, patch: { sides: 6 } } });
+    const saved = store.doc.nodes[poly.id];
+    expect(saved.sides).toBe(6);
+    expect(saved.width).toBe(120);
+    expect(saved.height).toBe(90);
+    expect(polygonPoints(saved.sides, saved.width, saved.height)).toHaveLength(6);
+    store.undo();
+    expect(store.doc.nodes[poly.id].sides).toBe(3);
+  });
+
+  it("创建时创建边数夹紧，缩放顶点随包围盒走", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const poly = createNode("polygon", { width: 100, height: 100, sides: 40 });
+    store.apply({ type: "node.create", params: { nodes: [poly], parentId: pageId } });
+    expect(store.doc.nodes[poly.id].sides).toBe(12);
+    store.apply({ type: "node.update", params: { nodeId: poly.id, patch: { width: 200, height: 50 } } });
+    const saved = store.doc.nodes[poly.id];
+    const pts = polygonPoints(saved.sides, saved.width, saved.height);
+    expect(Math.max(...pts.map((p) => p.x))).toBeCloseTo(200);
+    expect(Math.max(...pts.map((p) => p.y))).toBeCloseTo(50);
+  });
+
+  it("命中：填充可点内部，无填充只认描边", () => {
+    const pts = polygonPoints(3, 100, 100);
+    expect(hitPolygon(pts, 50, 60, 1, true)).toBe(true);
+    expect(hitPolygon(pts, 50, 60, 1, false)).toBe(false);
+    expect(hitPolygon(pts, 0, 100, 2, false)).toBe(true);
+    expect(hitPolygon(pts, 50, -10, 2, false)).toBe(false);
+  });
+});
+
+describe("命令原子性与参数不可变", () => {
+  it("批命令中途非法：整批不生效、不进撤销栈", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const before = JSON.stringify(store.doc);
+    const rect = createNode("rect", { name: "R" });
+    const bad = createNode("path", {
+      vector: { closed: true, anchors: [makeAnchor(0, 0), makeAnchor(10, 10)] },
+    });
+    expect(() =>
+      store.apply([
+        { type: "node.create", params: { nodes: [rect], parentId: pageId } },
+        { type: "node.create", params: { nodes: [bad], parentId: pageId } },
+      ]),
+    ).toThrow();
+    expect(JSON.stringify(store.doc)).toBe(before);
+    expect(store.canUndo).toBe(false);
+  });
+
+  it("批命令全部合法时一步撤销整批", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const a = createNode("rect", { name: "A" });
+    const b = createNode("rect", { name: "B" });
+    store.apply([
+      { type: "node.create", params: { nodes: [a], parentId: pageId } },
+      { type: "node.create", params: { nodes: [b], parentId: pageId } },
+    ]);
+    expect(store.doc.nodes[a.id]).toBeTruthy();
+    expect(store.doc.nodes[b.id]).toBeTruthy();
+    store.undo();
+    expect(store.doc.nodes[a.id]).toBeUndefined();
+    expect(store.doc.nodes[b.id]).toBeUndefined();
+  });
+
+  it("node.create 不改写调用方传入的节点对象", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const path = createNode("path", {
+      x: 5,
+      y: 6,
+      vector: { closed: false, anchors: [makeAnchor(30, 40), makeAnchor(130, 90)] },
+    });
+    const snapshot = JSON.stringify(path);
+    store.apply({ type: "node.create", params: { nodes: [path], parentId: pageId } });
+    expect(JSON.stringify(path)).toBe(snapshot);
+    expect(path.parentId).toBeNull();
+    // 文档里是归一化后的副本
+    expect(store.doc.nodes[path.id].x).toBe(35);
   });
 });

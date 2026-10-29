@@ -1,6 +1,6 @@
 /** Canvas 2D 实现的 RenderBackend。 */
 
-import { TEXT_LINE_HEIGHT, type DocNode } from "@sqraft/core";
+import { TEXT_LINE_HEIGHT, type DocNode, type VectorPath } from "@sqraft/core";
 import type { RenderBackend, Viewport } from "./backend";
 
 export class Canvas2DBackend implements RenderBackend {
@@ -122,6 +122,74 @@ export class Canvas2DBackend implements RenderBackend {
     ctx.strokeStyle = stroke;
     ctx.lineWidth = strokeWidth;
     ctx.stroke();
+    ctx.restore();
+  }
+
+  drawPath(node: DocNode, vector: VectorPath, fill?: string, stroke?: string, strokeWidth = 1): void {
+    const anchors = vector.anchors;
+    if (anchors.length < 2) return;
+    const ctx = this.ctx;
+    const a0 = anchors[0];
+    const ox = node.x;
+    const oy = node.y;
+    ctx.save();
+    this.applyRotation(node);
+    ctx.beginPath();
+    ctx.moveTo(ox + a0.x, oy + a0.y);
+    const segments = vector.closed ? anchors.length : anchors.length - 1;
+    for (let i = 0; i < segments; i++) {
+      const a = anchors[i];
+      const b = anchors[(i + 1) % anchors.length];
+      const curved = a.outX !== 0 || a.outY !== 0 || b.inX !== 0 || b.inY !== 0;
+      if (curved) {
+        ctx.bezierCurveTo(ox + a.x + a.outX, oy + a.y + a.outY, ox + b.x + b.inX, oy + b.y + b.inY, ox + b.x, oy + b.y);
+      } else {
+        ctx.lineTo(ox + b.x, oy + b.y);
+      }
+    }
+    if (vector.closed) ctx.closePath();
+    if (fill) {
+      ctx.fillStyle = fill;
+      ctx.fill();
+    }
+    if (stroke) {
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = strokeWidth;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  drawPolygon(
+    node: DocNode,
+    points: ReadonlyArray<{ x: number; y: number }>,
+    fill?: string,
+    stroke?: string,
+    strokeWidth = 1,
+  ): void {
+    if (points.length < 3) return;
+    const ctx = this.ctx;
+    const ox = node.x;
+    const oy = node.y;
+    ctx.save();
+    this.applyRotation(node);
+    ctx.beginPath();
+    ctx.moveTo(ox + points[0].x, oy + points[0].y);
+    for (let i = 1; i < points.length; i++) ctx.lineTo(ox + points[i].x, oy + points[i].y);
+    ctx.closePath();
+    if (fill) {
+      ctx.fillStyle = fill;
+      ctx.fill();
+    }
+    if (stroke) {
+      ctx.strokeStyle = stroke;
+      ctx.lineWidth = strokeWidth;
+      ctx.lineCap = "round";
+      ctx.lineJoin = "round";
+      ctx.stroke();
+    }
     ctx.restore();
   }
 
