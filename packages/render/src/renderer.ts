@@ -14,19 +14,18 @@ function drawSelf(
   backend: RenderBackend,
   ctx: RenderContext,
   node: DocNode,
-  isRootChild: boolean,
   vectorOverride?: VectorPath,
 ): void {
   const fill = resolvePaint(ctx.doc, node.style.fill);
   const stroke = resolvePaint(ctx.doc, node.style.stroke);
   switch (node.type) {
+    // 画板、矩形、组件、实例、插槽共用同一套样式规则：有填充才画底色
+    case "frame":
     case "rect":
     case "component":
+    case "instance":
+    case "slot":
       backend.drawRect(node, fill, stroke, node.style.strokeWidth, node.style.cornerRadius ?? 0);
-      break;
-    case "frame":
-      backend.drawRect(node, "#ffffff", "rgba(0,0,0,0.12)", 1, node.style.cornerRadius ?? 0, true);
-      if (isRootChild) backend.drawFrameOutline(node);
       break;
     case "ellipse":
       backend.drawEllipse(node, fill, stroke, node.style.strokeWidth);
@@ -45,9 +44,6 @@ function drawSelf(
     }
     case "polygon":
       backend.drawPolygon(node, polygonPoints(node.sides, node.width, node.height), fill, stroke, node.style.strokeWidth ?? 1);
-      break;
-    case "instance":
-      backend.drawRect(node, fill ?? "transparent", "rgba(79,70,229,0.6)", 1, node.style.cornerRadius ?? 0);
       break;
     default:
       if (!CONTAINER_TYPES.has(node.type)) {
@@ -73,7 +69,6 @@ function drawNode(
   backend: RenderBackend,
   ctx: RenderContext,
   node: DocNode,
-  isRootChild: boolean,
   options: DrawOptions,
 ): void {
   if (!node.visible) return;
@@ -83,13 +78,13 @@ function drawNode(
   if (node.id !== options.hideTextId && node.id !== options.hidePathId) {
     const vectorOverride =
       options.vectorPreview && options.vectorPreview.id === node.id ? options.vectorPreview.vector : undefined;
-    drawSelf(backend, ctx, changed ? { ...node, ...geo } : node, isRootChild, vectorOverride);
+    drawSelf(backend, ctx, changed ? { ...node, ...geo } : node, vectorOverride);
   }
   if (node.children.length > 0) {
     backend.pushTransform(geo.x, geo.y);
     for (const childId of node.children) {
       const child = ctx.doc.nodes[childId];
-      if (child) drawNode(backend, ctx, child, false, options);
+      if (child) drawNode(backend, ctx, child, options);
     }
     backend.popTransform();
   }
@@ -136,7 +131,7 @@ export function drawDocument(backend: RenderBackend, doc: DocState, options: Dra
     backend.pushTransform(geo.x, geo.y);
     for (const childId of page.children) {
       const child = doc.nodes[childId];
-      if (child) drawNode(backend, ctx, child, true, options);
+      if (child) drawNode(backend, ctx, child, options);
     }
     backend.popTransform();
     if (dimmed) backend.popOpacity();

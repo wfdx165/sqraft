@@ -37,7 +37,6 @@ export interface RenderBackend {
   /** 参数化多边形：points 为节点本地坐标，闭合描边 */
   drawPolygon(node: DocNode, points: ReadonlyArray<{ x: number; y: number }>, fill?: string, stroke?: string, strokeWidth?: number): void;
   drawText(node: DocNode, fill?: string): void;
-  drawFrameOutline(node: DocNode): void;
   endFrame(): void;
 }
 

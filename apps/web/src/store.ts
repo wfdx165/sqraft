@@ -6,7 +6,7 @@ import { reactive } from "vue";
 import { DocStore, createEmptyDoc, firstPageId, type Command, type NodeId } from "@sqraft/core";
 
 export type ToolKind = "select" | "frame" | "rect" | "ellipse" | "triangle" | "line" | "path" | "text";
-export type PanelTab = "chat" | "pages" | "tokens";
+export type PanelTab = "chat" | "pages" | "tokens" | "components";
 /** 画布模式：pan = 浏览/平移，edit = 编辑活动页 */
 export type EditorMode = "pan" | "edit";
 
@@ -21,6 +21,10 @@ export const ui = reactive({
   selection: [] as NodeId[],
   /** 左栏手风琴展开的页面（纯 UI 状态，无"当前页"概念） */
   expandedPageId: firstPageId(docStore.doc) as NodeId | null,
+  /** 图层树里展开的实例（默认折叠） */
+  expandedLayers: {} as Record<NodeId, boolean>,
+  /** 当前进入的实例上下文（栈，Esc 逐级退出） */
+  instanceContext: [] as NodeId[],
   /** 左栏 tab：默认对话（每次刷新都回到对话，不持久化） */
   tab: "chat" as PanelTab,
 });
@@ -34,6 +38,7 @@ docStore.subscribe(() => {
     ui.activePageId = firstPageId(docStore.doc);
   }
   ui.selection = ui.selection.filter((id) => docStore.doc.nodes[id]);
+  ui.instanceContext = ui.instanceContext.filter((id) => docStore.doc.nodes[id]?.type === "instance");
 });
 
 /** 切换模式：拖动模式清空选区（纯浏览）；编辑模式的取景由 CanvasView 负责。 */
@@ -43,6 +48,7 @@ export function switchMode(mode: EditorMode): void {
   if (mode === "pan") {
     ui.selection = [];
     ui.tool = "select";
+    ui.instanceContext = [];
   }
 }
 
@@ -69,11 +75,14 @@ export const hooks: {
   focusPage: (id: NodeId) => void;
   /** AI 建节点的目标页：编辑模式 = 活动页，拖动模式 = 视口中心页。 */
   getActivePageId: () => NodeId | null;
+  /** 在活动页视口中心插入组件实例（由画布实现，面板只负责调用）。 */
+  insertInstance: (componentId: NodeId) => void;
   requestRedraw: () => void;
 } = {
   getScreenshot: async () => "",
   focusNode: () => {},
   focusPage: () => {},
   getActivePageId: () => null,
+  insertInstance: () => {},
   requestRedraw: () => {},
 };

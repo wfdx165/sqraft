@@ -3,10 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import {
   createNode,
   firstPageId,
-  hitPolygon,
-  hitVector,
   makeAnchor,
-  polygonPoints,
   scaleVector,
   TEXT_LINE_HEIGHT,
   worldRect,
@@ -26,6 +23,28 @@ import {
   removeDraftAnchor,
 } from "../canvas/pen";
 import { dispatch, docStore, hooks, select, switchMode, ui } from "../store";
+import { hitTest, pageAt, slotUnder } from "../canvas/hit";
+import { paintDropSlot as paintDrop, paintSlotPlaceholders as paintSlots } from "../canvas/slot-overlay";
+import { drawPageLabels, labelAt, pageLabelRect } from "../canvas/labels";
+import { handlePoints, resizeRect, selectionScreenRect, type ResizeHandle } from "../canvas/selection";
+import { drawPulse, drawSelectionOverlay } from "../canvas/selection-overlay";
+import { useTextEditing } from "../canvas/text-editing";
+import { drawGrid } from "../canvas/grid";
+import { FLY_MS, PULSE_MS, createViewportNav } from "../canvas/viewport-nav";
+import { EQUILATERAL_RATIO, TOOL_NAMES, drawToolOf, type DrawTool } from "../canvas/tools";
+import { cursorFor } from "../canvas/cursor";
+import {
+  createComponentFromSelection as createComponentFromSelectionAction,
+  detachSelection as detachSelectionAction,
+  insertInstance as insertInstanceAction,
+} from "../canvas/component-actions";
+import {
+  computeGuides,
+  drawGuides as paintGuides,
+  pageDragContext,
+  type GapMark,
+  type GuideLine,
+} from "../canvas/guides";
 import { DEFAULT_TEXT_FONT_FAMILY, DEFAULT_TEXT_FONT_SIZE, measureTextSize } from "../text-metrics";
 import { keyOf, registerShortcuts } from "../shortcuts";
 import { vTip } from "../tooltip";
@@ -36,23 +55,10 @@ const zoomPct = ref(100);
 const zoomMenuOpen = ref(false);
 const ZOOM_PRESETS = [0.5, 0.75, 1, 1.5, 2, 4];
 const vp: Viewport = { x: -200, y: -150, zoom: 1, width: 800, height: 600, dpr: window.devicePixelRatio || 1 };
+const { textEdit, textEditEl, syncTextEditSize, startTextEdit, commitTextEdit, cancelTextEdit, onTextEditKey } =
+  useTextEditing(vp, markDirty);
 
-/* 行内编辑浮层（DOM，覆盖在画布上；位置为屏幕坐标） */
-const textEdit = ref<{
-  id: NodeId;
-  value: string;
-  left: number;
-  top: number;
-  width: number;
-  height: number;
-  fontSize: number;
-  fontFamily: string;
-  fontWeight: number;
-  /** 打开时的缩放比例（编辑期间缩放会先提交并关闭） */
-  scale: number;
-} | null>(null);
 const pageRename = ref<{ id: NodeId; value: string; left: number; top: number; width: number } | null>(null);
-const textEditEl = ref<HTMLTextAreaElement | null>(null);
 const renameEl = ref<HTMLInputElement | null>(null);
 /** 悬停的文本节点（仅用于画淡虚线边界，不进文档） */
 const hoverTextId = ref<NodeId | null>(null);
@@ -61,23 +67,6 @@ let ctx: CanvasRenderingContext2D | null = null;
 let backend: Canvas2DBackend | null = null;
 let raf = 0;
 let dirty = true;
-const PULSE_MS = 620;
-const FLY_MS = 420;
-let pulse: { id: NodeId; start: number } | null = null;
-let flight: { from: { x: number; y: number; zoom: number }; to: { x: number; y: number; zoom: number }; start: number } | null = null;
-let didInitialFit = false;
-
-const TOOL_NAMES: Record<string, string> = { frame: "画板", rect: "矩形", ellipse: "椭圆", triangle: "三角形", line: "直线", path: "路径", text: "文本" };
-/** 正三角形的高宽比：⇧ 约束用（√3/2）。 */
-const EQUILATERAL_RATIO = Math.sqrt(3) / 2;
-
-/** 会走「拖出包围盒」创建流程的工具（钢笔单独处理）。 */
-type DrawTool = "frame" | "rect" | "ellipse" | "triangle" | "line" | "text";
-const DRAW_TOOLS: readonly string[] = ["frame", "rect", "ellipse", "triangle", "line", "text"];
-
-function drawToolOf(tool: string): DrawTool | null {
-  return DRAW_TOOLS.includes(tool) ? (tool as DrawTool) : null;
-}
 
 let drag: {
   pointerId: number;
@@ -99,6 +88,8 @@ let drag: {
   snapTargets?: Rect[];
   /** 缩放手柄与起始矩形 */
   handle?: ResizeHandle;
+  /** 拖动时指针下方的实例插槽（松手即填充） */
+  dropSlot?: NodeId | null;
   resizeId?: NodeId;
   startRect?: Rect;
   startAspect?: number;
@@ -111,22 +102,17 @@ let preview: { x: number; y: number; w: number; h: number; valid: boolean } | nu
 
 /** 钢笔 / 锚点编辑的会话状态（纯 UI 状态）。 */
 const pen = createPenState();
+const viewportNav = createViewportNav({ vp, pen, markDirty, commitEditors });
+const { flyTo, focusRect, focusNode, focusPage, activePage, pageAtViewportCenter, ensureActivePage, setActivePage, fitAll, fitActivePage, fitView, visibleRatio } =
+  viewportNav;
+const componentActionDeps = { vp, ensureActivePage, markDirty };
+const insertInstance = (id: NodeId) => insertInstanceAction(componentActionDeps, id);
+const createComponentFromSelection = () => createComponentFromSelectionAction(componentActionDeps);
+const detachSelection = () => detachSelectionAction(componentActionDeps);
 
-type ResizeHandle = "nw" | "n" | "ne" | "e" | "se" | "s" | "sw" | "w";
-const HANDLE_CURSORS: Record<ResizeHandle, string> = {
-  nw: "nwse-resize",
-  n: "ns-resize",
-  ne: "nesw-resize",
-  e: "ew-resize",
-  se: "nwse-resize",
-  s: "ns-resize",
-  sw: "nesw-resize",
-  w: "ew-resize",
-};
 const MIN_PAGE_SIZE = 200;
 const MIN_NODE_SIZE = 8;
 const HANDLE_HIT_PX = 7;
-const ACTIVE_PAGE_ALPHA = 0.35;
 
 /** 缩放中的实时预览（不改文档） */
 let resizePreview: { id: NodeId; x: number; y: number; width: number; height: number } | null = null;
@@ -137,34 +123,20 @@ const hoverLabel = ref(false);
 const dragging = ref(false);
 
 /* 页面参考线（世界坐标，拖拽中计算，绘制时转屏幕） */
-const SNAP_PX = 6;
-const GUIDE_COLOR = "rgba(244, 63, 142, 0.95)";
-const GUIDE_TEXT_COLOR = "#c9166b";
-interface GuideLine {
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-}
-interface GapMark {
-  x1: number;
-  y1: number;
-  x2: number;
-  y2: number;
-  value: number;
-}
 let guideLines: GuideLine[] = [];
 let gapMarks: GapMark[] = [];
 
-const cursor = computed(() => {
-  if (ui.mode === "pan") return dragging.value ? "grabbing" : "grab";
-  if (ui.tool !== "select") return "crosshair";
-  if (hoverHandle.value) return HANDLE_CURSORS[hoverHandle.value];
-  if (hoverLabel.value) return "move";
-  if (hoverTextId.value) return "text";
-  if (hoverInactive.value) return "pointer";
-  return "default";
-});
+const cursor = computed(() =>
+  cursorFor({
+    mode: ui.mode,
+    tool: ui.tool,
+    dragging: dragging.value,
+    hoverHandle: hoverHandle.value,
+    hoverLabel: hoverLabel.value,
+    hoverText: Boolean(hoverTextId.value),
+    hoverInactive: hoverInactive.value,
+  }),
+);
 
 function markDirty() {
   dirty = true;
@@ -172,171 +144,6 @@ function markDirty() {
 
 /** 钢笔逻辑的依赖：文档、UI 状态与命令入口（显式注入，模块内不 import 单例）。 */
 const penDeps = { docStore, ui, dispatch, select, markDirty };
-
-/** 随缩放自适应的点阵背景（屏幕空间绘制）。 */
-function drawGrid(g: CanvasRenderingContext2D, v: Viewport) {
-  let world = 24;
-  while (world * v.zoom < 14) world *= 2;
-  const step = world * v.zoom;
-  const offX = -((v.x * v.zoom) % step + step) % step;
-  const offY = -((v.y * v.zoom) % step + step) % step;
-  g.save();
-  g.setTransform(v.dpr, 0, 0, v.dpr, 0, 0);
-  g.fillStyle = "rgba(15, 23, 42, 0.10)";
-  for (let x = offX; x < v.width; x += step) {
-    for (let y = offY; y < v.height; y += step) {
-      g.fillRect(x, y, 1.3, 1.3);
-    }
-  }
-  g.restore();
-}
-
-const LABEL_FONT = "11px 'Geist Variable', 'PingFang SC', sans-serif";
-
-function drawPageLabels(g: CanvasRenderingContext2D) {
-  g.save();
-  g.setTransform(vp.dpr, 0, 0, vp.dpr, 0, 0);
-  g.font = LABEL_FONT;
-  g.textBaseline = "alphabetic";
-  for (const pageId of docStore.doc.rootIds) {
-    const page = docStore.doc.nodes[pageId];
-    if (!page) continue;
-    // 改名浮层打开时不再画标签，避免重影
-    if (pageRename.value?.id === page.id) continue;
-    const moving = drag && drag.mode === "move" && drag.moved && ui.selection.includes(page.id);
-    const rp = resizePreview && resizePreview.id === page.id ? resizePreview : null;
-    const a = worldToScreen(
-      vp,
-      (rp ? rp.x : page.x) + (moving ? drag!.offsetX : 0),
-      (rp ? rp.y : page.y) + (moving ? drag!.offsetY : 0),
-    );
-    if (a.x > vp.width || a.y > vp.height + 20) continue;
-    const label = page.name;
-    const tw = g.measureText(label).width;
-    g.globalAlpha = ui.mode === "edit" && ui.activePageId !== page.id ? ACTIVE_PAGE_ALPHA : 1;
-    g.fillStyle = "rgba(255,255,255,0.72)";
-    g.beginPath();
-    (g as unknown as { roundRect(x: number, y: number, w: number, h: number, r: number): void }).roundRect(a.x - 6, a.y - 24, tw + 12, 18, 6);
-    g.fill();
-    g.fillStyle = "rgba(23, 23, 28, 0.62)";
-    g.fillText(label, a.x, a.y - 11);
-    g.globalAlpha = 1;
-  }
-  g.restore();
-}
-
-/** 页面名称标签的屏幕矩形（与 drawPageLabels 保持一致）。 */
-function pageLabelRect(page: DocNode): { x: number; y: number; width: number; height: number } {
-  const a = worldToScreen(vp, page.x, page.y);
-  let tw = page.name.length * 11;
-  if (ctx) {
-    ctx.save();
-    ctx.setTransform(vp.dpr, 0, 0, vp.dpr, 0, 0);
-    ctx.font = LABEL_FONT;
-    tw = ctx.measureText(page.name).width;
-    ctx.restore();
-  }
-  return { x: a.x - 6, y: a.y - 24, width: tw + 12, height: 18 };
-}
-
-function labelAt(sx: number, sy: number): DocNode | null {
-  for (const pageId of docStore.doc.rootIds) {
-    const page = docStore.doc.nodes[pageId];
-    if (!page) continue;
-    const r = pageLabelRect(page);
-    if (sx >= r.x && sx <= r.x + r.width && sy >= r.y && sy <= r.y + r.height) return page;
-  }
-  return null;
-}
-
-/** 页面参考线与间距标注（屏幕空间固定像素粗细/字号）。 */
-function drawGuides(g: CanvasRenderingContext2D) {
-  if (guideLines.length === 0 && gapMarks.length === 0) return;
-  g.save();
-  g.setTransform(vp.dpr, 0, 0, vp.dpr, 0, 0);
-
-  g.strokeStyle = GUIDE_COLOR;
-  g.lineWidth = 1;
-  for (const line of guideLines) {
-    const a = worldToScreen(vp, line.x1, line.y1);
-    const b = worldToScreen(vp, line.x2, line.y2);
-    g.beginPath();
-    g.moveTo(Math.round(a.x) + 0.5, Math.round(a.y) + 0.5);
-    g.lineTo(Math.round(b.x) + 0.5, Math.round(b.y) + 0.5);
-    g.stroke();
-  }
-
-  g.font = "10px 'Geist Mono Variable', ui-monospace, monospace";
-  g.textAlign = "center";
-  g.textBaseline = "middle";
-  for (const mark of gapMarks) {
-    const a = worldToScreen(vp, mark.x1, mark.y1);
-    const b = worldToScreen(vp, mark.x2, mark.y2);
-    const horizontal = Math.abs(b.x - a.x) >= Math.abs(b.y - a.y);
-    g.beginPath();
-    g.moveTo(a.x, a.y);
-    g.lineTo(b.x, b.y);
-    // 两端短刻线
-    if (horizontal) {
-      g.moveTo(a.x, a.y - 4);
-      g.lineTo(a.x, a.y + 4);
-      g.moveTo(b.x, b.y - 4);
-      g.lineTo(b.x, b.y + 4);
-    } else {
-      g.moveTo(a.x - 4, a.y);
-      g.lineTo(a.x + 4, a.y);
-      g.moveTo(b.x - 4, b.y);
-      g.lineTo(b.x + 4, b.y);
-    }
-    g.stroke();
-
-    const label = String(mark.value);
-    const w = g.measureText(label).width + 10;
-    const cx = (a.x + b.x) / 2;
-    const cy = (a.y + b.y) / 2;
-    g.fillStyle = "rgba(255, 255, 255, 0.96)";
-    g.beginPath();
-    (g as unknown as { roundRect(x: number, y: number, w: number, h: number, r: number): void }).roundRect(cx - w / 2, cy - 8, w, 16, 4);
-    g.fill();
-    g.fillStyle = GUIDE_TEXT_COLOR;
-    g.fillText(label, cx, cy + 0.5);
-  }
-
-  g.restore();
-}
-
-function handlePoints(r: { x: number; y: number; width: number; height: number }): [ResizeHandle, number, number][] {
-  const cx = r.x + r.width / 2;
-  const cy = r.y + r.height / 2;
-  const x2 = r.x + r.width;
-  const y2 = r.y + r.height;
-  return [
-    ["nw", r.x, r.y],
-    ["n", cx, r.y],
-    ["ne", x2, r.y],
-    ["e", x2, cy],
-    ["se", x2, y2],
-    ["s", cx, y2],
-    ["sw", r.x, y2],
-    ["w", r.x, cy],
-  ];
-}
-
-/** 当前选中对象在屏幕上的矩形（含移动/缩放预览）。 */
-function selectionScreenRect(id: NodeId): { x: number; y: number; width: number; height: number } | null {
-  const r = worldRect(docStore.doc, id);
-  if (!r) return null;
-  if (resizePreview && resizePreview.id === id) {
-    const a = worldToScreen(vp, resizePreview.x, resizePreview.y);
-    const b = worldToScreen(vp, resizePreview.x + resizePreview.width, resizePreview.y + resizePreview.height);
-    return { x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y };
-  }
-  const dx = drag && drag.mode === "move" && drag.moved ? drag.offsetX : 0;
-  const dy = drag && drag.mode === "move" && drag.moved ? drag.offsetY : 0;
-  const a = worldToScreen(vp, r.x + dx, r.y + dy);
-  const b = worldToScreen(vp, r.x + dx + r.width, r.y + dy + r.height);
-  return { x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y };
-}
 
 function draw() {
   if (!ctx || !backend) return;
@@ -376,119 +183,56 @@ function draw() {
   ctx.save();
   ctx.setTransform(vp.dpr, 0, 0, vp.dpr, 0, 0);
 
-  for (const id of ui.selection) {
-    const n = docStore.doc.nodes[id];
-    if (!n) continue;
-    // 行内编辑中的文本只用输入框表示边界
-    if (textEdit.value?.id === id) continue;
-    // 锚点编辑态由 drawPathEditing 接管（不画包围盒手柄与尺寸徽标）
-    if (pen.pathEdit?.id === id) continue;
-    const rect = selectionScreenRect(id);
-    if (!rect) continue;
-    const { x, y, width, height } = rect;
-
-    ctx.strokeStyle = "#4f46e5";
-    ctx.lineWidth = 1.5;
-    ctx.strokeRect(x, y, width, height);
-
-    if (editing && ui.selection.length === 1 && n.type !== "text") {
-      for (const [, hx, hy] of handlePoints(rect)) {
-        ctx.beginPath();
-        ctx.rect(hx - 3, hy - 3, 6, 6);
-        ctx.fillStyle = "#ffffff";
-        ctx.fill();
-        ctx.strokeStyle = "#4f46e5";
-        ctx.lineWidth = 1.25;
-        ctx.stroke();
-      }
-    }
-
-    if (ui.selection.length === 1) {
-      const label = `${Math.round(resizePreview && resizePreview.id === id ? resizePreview.width : n.width)} × ${
-        Math.round(resizePreview && resizePreview.id === id ? resizePreview.height : n.height)
-      }`;
-      ctx.font = "10.5px 'Geist Mono Variable', ui-monospace, monospace";
-      const tw = ctx.measureText(label).width;
-      const bw = tw + 14;
-      const bh = 19;
-      const bx = x + width / 2 - bw / 2;
-      const by = y - bh - 8;
-      ctx.beginPath();
-      (ctx as unknown as { roundRect(x: number, y: number, w: number, h: number, r: number): void }).roundRect(bx, by, bw, bh, 5);
-      ctx.fillStyle = "#4f46e5";
-      ctx.fill();
-      ctx.fillStyle = "#ffffff";
-      ctx.textAlign = "center";
-      ctx.textBaseline = "middle";
-      ctx.fillText(label, bx + bw / 2, by + bh / 2 + 0.5);
-      ctx.textAlign = "left";
-      ctx.textBaseline = "alphabetic";
-    }
-  }
-
-  // 悬停文本：淡紫虚线边界（选中时由上面的实线框接管）
-  if (
-    editing &&
-    hoverTextId.value &&
-    !ui.selection.includes(hoverTextId.value) &&
-    !textEdit.value
-  ) {
-    const r = worldRect(docStore.doc, hoverTextId.value);
-    if (r) {
-      const a = worldToScreen(vp, r.x, r.y);
-      const b = worldToScreen(vp, r.x + r.width, r.y + r.height);
-      ctx.save();
-      ctx.strokeStyle = "rgba(79, 70, 229, 0.45)";
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 3]);
-      ctx.strokeRect(a.x + 0.5, a.y + 0.5, b.x - a.x - 1, b.y - a.y - 1);
-      ctx.restore();
-    }
-  }
+  drawSelectionOverlay(ctx, vp, {
+    selection: ui.selection,
+    editing,
+    drag,
+    resizePreview,
+    textEditId: textEdit.value?.id ?? null,
+    pathEditId: pen.pathEdit?.id ?? null,
+    hoverTextId: hoverTextId.value,
+  });
 
   paintPathEditing(ctx);
   drawDraftPath(ctx, vp, pen.draft, pen.penHover);
-  drawGuides(ctx);
+  paintGuides(ctx, vp, guideLines, gapMarks);
+  paintSlots(ctx, vp, ui.activePageId, ui.mode);
 
   if (preview) drawShapePreview(ctx, vp, preview, drag?.tool ?? ui.tool);
+  paintDrop(ctx, vp, drag?.dropSlot ?? null);
 
+  const pulse = viewportNav.nav.pulse;
   if (pulse) {
     const n = docStore.doc.nodes[pulse.id];
     const t = (performance.now() - pulse.start) / PULSE_MS;
-    if (!n || t >= 1) {
-      pulse = null;
-    } else {
-      const r = worldRect(docStore.doc, pulse.id);
-      if (r) {
-        const a = worldToScreen(vp, r.x, r.y);
-        const b = worldToScreen(vp, r.x + r.width, r.y + r.height);
-        const ease = 1 - (1 - t) * (1 - t);
-        ctx.strokeStyle = `rgba(79, 70, 229, ${(1 - t) * 0.95})`;
-        ctx.lineWidth = 2.5;
-        ctx.shadowColor = "rgba(79, 70, 229, 0.6)";
-        ctx.shadowBlur = 18 * (1 - t);
-        const grow = ease * 6;
-        ctx.strokeRect(a.x - grow, a.y - grow, b.x - a.x + grow * 2, b.y - a.y + grow * 2);
-        ctx.shadowBlur = 0;
-      }
-    }
+    if (!n || t >= 1) viewportNav.nav.pulse = null;
+    else drawPulse(ctx, vp, pulse.id, t);
   }
 
   ctx.restore();
-  drawPageLabels(ctx);
+  drawPageLabels(ctx, vp, {
+    pageRenameId: pageRename.value?.id ?? null,
+    drag,
+    resizePreview,
+    selection: ui.selection,
+    activePageId: ui.activePageId,
+    mode: ui.mode,
+  });
 }
 
 function loop() {
   const now = performance.now();
+  const flight = viewportNav.nav.flight;
   if (flight) {
     const t = Math.min(1, (now - flight.start) / FLY_MS);
     const e = 1 - Math.pow(1 - t, 3);
     vp.x = flight.from.x + (flight.to.x - flight.from.x) * e;
     vp.y = flight.from.y + (flight.to.y - flight.from.y) * e;
     vp.zoom = flight.from.zoom + (flight.to.zoom - flight.from.zoom) * e;
-    if (t >= 1) flight = null;
+    if (t >= 1) viewportNav.nav.flight = null;
     dirty = true;
   }
+  const pulse = viewportNav.nav.pulse;
   if (dirty || (pulse && now - pulse.start < PULSE_MS)) {
     dirty = false;
     draw();
@@ -496,189 +240,7 @@ function loop() {
   raf = requestAnimationFrame(loop);
 }
 
-function resize() {
-  const el = canvasRef.value?.parentElement;
-  if (el) {
-    vp.width = el.clientWidth;
-    vp.height = el.clientHeight;
-    vp.dpr = window.devicePixelRatio || 1;
-    if (!didInitialFit && vp.width > 0) {
-      didInitialFit = true;
-      fitView();
-    }
-    markDirty();
-  }
-}
-
-/** 适配全部页面（拖动模式 / 初始视图）。 */
-function fitAll(padding = 80) {
-  commitEditors();
-  const pages = docStore.doc.rootIds.map((id) => docStore.doc.nodes[id]).filter(Boolean);
-  if (pages.length === 0) return;
-  const minX = Math.min(...pages.map((p) => p.x));
-  const minY = Math.min(...pages.map((p) => p.y));
-  const maxX = Math.max(...pages.map((p) => p.x + p.width));
-  const maxY = Math.max(...pages.map((p) => p.y + p.height));
-  const w = Math.max(1, maxX - minX);
-  const h = Math.max(1, maxY - minY);
-  const zoom = Math.min(Math.max((vp.width - padding * 2) / w, 0.02), Math.max((vp.height - padding * 2) / h, 0.02), 1);
-  vp.zoom = zoom;
-  vp.x = minX + w / 2 - vp.width / (2 * zoom);
-  vp.y = minY + h / 2 - vp.height / (2 * zoom);
-  markDirty();
-}
-
-/** 适配活动页（编辑模式）。 */
-function fitActivePage(padding = 80) {
-  commitEditors();
-  const page = ensureActivePage();
-  if (!page) return;
-  const zoom = Math.min(
-    Math.max((vp.width - padding * 2) / page.width, 0.02),
-    Math.max((vp.height - padding * 2) / page.height, 0.02),
-    1,
-  );
-  vp.zoom = zoom;
-  vp.x = page.x + page.width / 2 - vp.width / (2 * zoom);
-  vp.y = page.y + page.height / 2 - vp.height / (2 * zoom);
-  markDirty();
-}
-
-/** 模式相关的"适配"：编辑模式 = 活动页，拖动模式 = 全部。 */
-function fitView() {
-  if (ui.mode === "edit") fitActivePage();
-  else fitAll();
-}
-
-function activePage(): DocNode | null {
-  const id = ui.activePageId;
-  const node = id ? docStore.doc.nodes[id] : null;
-  return node && node.type === "page" ? node : null;
-}
-
-function pageAtViewportCenter(): DocNode | null {
-  const w = screenToWorld(vp, vp.width / 2, vp.height / 2);
-  const id = pageAt(w.x, w.y);
-  return id ? docStore.doc.nodes[id] : null;
-}
-
-/** 保证编辑模式有一个活动页：记忆 → 视口中心 → 第一页。 */
-function ensureActivePage(): DocNode | null {
-  const existing = activePage();
-  if (existing) return existing;
-  const center = pageAtViewportCenter();
-  const fallback = docStore.doc.nodes[firstPageId(docStore.doc)];
-  const page = center ?? fallback ?? null;
-  if (page) ui.activePageId = page.id;
-  return page;
-}
-
-/** 切换活动页；清掉旧页选区，可选飞行适配。 */
-function setActivePage(id: NodeId, focus = true) {
-  if (ui.activePageId !== id) {
-    ui.activePageId = id;
-    ui.selection = ui.selection.filter((sid) => docStore.doc.nodes[sid]?.parentId === id);
-    pen.pathEdit = null;
-    pen.vectorDrag = null;
-  }
-  if (focus) focusPage(id);
-  markDirty();
-}
-
-function flyTo(worldX: number, worldY: number, zoom: number) {
-  flight = {
-    from: { x: vp.x, y: vp.y, zoom: vp.zoom },
-    to: { x: worldX - vp.width / (2 * zoom), y: worldY - vp.height / (2 * zoom), zoom },
-    start: performance.now(),
-  };
-  markDirty();
-}
-
-/** 图层/页面定位：居中飞行 + 脉冲标记。 */
-function focusRect(id: NodeId, padding = 180) {
-  const r = worldRect(docStore.doc, id);
-  if (!r) return;
-  const zoom = Math.min(
-    Math.max(Math.min((vp.width - padding) / r.width, (vp.height - padding) / r.height), 0.1),
-    1,
-  );
-  flyTo(r.x + r.width / 2, r.y + r.height / 2, zoom);
-  pulse = { id, start: performance.now() };
-}
-
-function focusNode(id: NodeId) {
-  focusRect(id, 180);
-}
-
-function focusPage(id: NodeId) {
-  focusRect(id, 40);
-}
-
-/* ---------- 命中检测（累加容器偏移） ---------- */
-
-/**
- * 形状类节点的几何命中（路径 / 多边形 / 带 vector 的直线）。
- * 返回 null 表示不是形状类节点，交回通用包围盒规则。
- */
-function hitShapeAt(c: DocNode, lx: number, ly: number, tol: number): boolean | null {
-  const isShape = c.type === "path" || c.type === "polygon" || (c.type === "line" && Boolean(c.vector));
-  if (!isShape) return null;
-  // 包围盒预检：细曲线 / 扁直线的空白区域不进入采样
-  if (lx < c.x - tol || ly < c.y - tol || lx > c.x + c.width + tol || ly > c.y + c.height + tol) return false;
-  const filled = Boolean(c.style.fill);
-  // 既无填充也无描边的形状不可见，不参与命中（仍可从图层面板选中）；直线始终有默认描边
-  if (!filled && !c.style.stroke && c.type !== "line") return false;
-  if (c.type === "path" && c.vector) return hitVector(c.vector, lx - c.x, ly - c.y, tol, filled);
-  if (c.type === "polygon") return hitPolygon(polygonPoints(c.sides, c.width, c.height), lx - c.x, ly - c.y, tol, filled);
-  if (c.type === "line" && c.vector) return hitVector(c.vector, lx - c.x, ly - c.y, tol, false);
-  return false;
-}
-
-function hitIn(nodeId: NodeId, lx: number, ly: number): NodeId | null {
-  const node = docStore.doc.nodes[nodeId];
-  if (!node) return null;
-  for (let i = node.children.length - 1; i >= 0; i--) {
-    const c = docStore.doc.nodes[node.children[i]];
-    if (!c || !c.visible) continue;
-    // 形状按真实几何命中：细线/曲线的空白包围盒不抢点击
-    const shapeHit = hitShapeAt(c, lx, ly, 5 / vp.zoom);
-    if (shapeHit !== null) {
-      if (shapeHit) return c.id;
-      continue;
-    }
-    if (lx >= c.x && lx <= c.x + c.width && ly >= c.y && ly <= c.y + c.height) {
-      return hitIn(c.id, lx - c.x, ly - c.y) ?? c.id;
-    }
-  }
-  return null;
-}
-
-interface Hit {
-  id: NodeId;
-  pageId: NodeId;
-  /** 命中非活动页（编辑模式下只切换活动页，不选子节点） */
-  inactive: boolean;
-}
-
-function hitTest(wx: number, wy: number): Hit | null {
-  const editing = ui.mode === "edit";
-  // 编辑模式先按活动页子节点的真实几何命中：形状可以越出页面，露在外面的部分也要能点中
-  if (editing && ui.activePageId) {
-    const page = docStore.doc.nodes[ui.activePageId];
-    if (page) {
-      const deep = hitIn(page.id, wx - page.x, wy - page.y);
-      if (deep) return { id: deep, pageId: page.id, inactive: false };
-    }
-  }
-  for (const pageId of docStore.doc.rootIds) {
-    const page = docStore.doc.nodes[pageId];
-    if (!page) continue;
-    if (wx < page.x || wy < page.y || wx > page.x + page.width || wy > page.y + page.height) continue;
-    if (editing && pageId !== ui.activePageId) return { id: pageId, pageId, inactive: true };
-    return { id: pageId, pageId, inactive: false };
-  }
-  return null;
-}
+const resize = () => viewportNav.resize(canvasRef.value);
 
 function hitHandle(sx: number, sy: number): { handle: ResizeHandle; id: NodeId } | null {
   if (pen.pathEdit) return null;
@@ -686,107 +248,12 @@ function hitHandle(sx: number, sy: number): { handle: ResizeHandle; id: NodeId }
   const id = ui.selection[0];
   const node = docStore.doc.nodes[id];
   if (!node || node.type === "text") return null;
-  const rect = selectionScreenRect(id);
+  const rect = selectionScreenRect(vp, id, resizePreview, drag);
   if (!rect) return null;
   for (const [handle, hx, hy] of handlePoints(rect)) {
     if (Math.abs(sx - hx) <= HANDLE_HIT_PX && Math.abs(sy - hy) <= HANDLE_HIT_PX) return { handle, id };
   }
   return null;
-}
-
-function pageAt(wx: number, wy: number): NodeId | null {
-  for (const pageId of docStore.doc.rootIds) {
-    const page = docStore.doc.nodes[pageId];
-    if (page && wx >= page.x && wx <= page.x + page.width && wy >= page.y && wy <= page.y + page.height) return pageId;
-  }
-  return null;
-}
-
-function unionRects(rects: Rect[]): Rect {
-  const x = Math.min(...rects.map((r) => r.x));
-  const y = Math.min(...rects.map((r) => r.y));
-  const right = Math.max(...rects.map((r) => r.x + r.width));
-  const bottom = Math.max(...rects.map((r) => r.y + r.height));
-  return { x, y, width: right - x, height: bottom - y };
-}
-
-/**
- * 页面间参考线：边/中线吸附 + 与最近页面的间距标注。
- * 只修正拖动偏移（拖动中的视觉），提交时仍是一条 node.update 命令。
- */
-function computePageGuides(dragRects: Rect[], targets: Rect[]) {
-  guideLines = [];
-  gapMarks = [];
-  const d = drag;
-  if (!d || targets.length === 0 || dragRects.length === 0) return;
-  const threshold = SNAP_PX / vp.zoom;
-  const moved = unionRects(dragRects.map((r) => ({ ...r, x: r.x + d.offsetX, y: r.y + d.offsetY })));
-  const movedXs = [moved.x, moved.x + moved.width / 2, moved.x + moved.width];
-  const movedYs = [moved.y, moved.y + moved.height / 2, moved.y + moved.height];
-
-  let bestX: { delta: number; at: number; target: Rect } | null = null;
-  let bestY: { delta: number; at: number; target: Rect } | null = null;
-  for (const t of targets) {
-    for (const ax of [t.x, t.x + t.width / 2, t.x + t.width]) {
-      for (const mx of movedXs) {
-        const delta = ax - mx;
-        if (Math.abs(delta) <= threshold && (!bestX || Math.abs(delta) < Math.abs(bestX.delta))) bestX = { delta, at: ax, target: t };
-      }
-    }
-    for (const ay of [t.y, t.y + t.height / 2, t.y + t.height]) {
-      for (const my of movedYs) {
-        const delta = ay - my;
-        if (Math.abs(delta) <= threshold && (!bestY || Math.abs(delta) < Math.abs(bestY.delta))) bestY = { delta, at: ay, target: t };
-      }
-    }
-  }
-
-  if (bestX) {
-    d.offsetX += bestX.delta;
-    guideLines.push({
-      x1: bestX.at,
-      y1: Math.min(moved.y, bestX.target.y),
-      x2: bestX.at,
-      y2: Math.max(moved.y + moved.height, bestX.target.y + bestX.target.height),
-    });
-  }
-  if (bestY) {
-    d.offsetY += bestY.delta;
-    guideLines.push({
-      x1: Math.min(moved.x, bestY.target.x),
-      y1: bestY.at,
-      x2: Math.max(moved.x + moved.width, bestY.target.x + bestY.target.width),
-      y2: bestY.at,
-    });
-  }
-
-  const box = unionRects(dragRects.map((r) => ({ ...r, x: r.x + d.offsetX, y: r.y + d.offsetY })));
-  let bestH: { gap: number; a: number; b: number; y: number } | null = null;
-  let bestV: { gap: number; a: number; b: number; x: number } | null = null;
-  for (const t of targets) {
-    // 水平间距：两页在纵向有投影重叠
-    const oyTop = Math.max(box.y, t.y);
-    const oyBottom = Math.min(box.y + box.height, t.y + t.height);
-    if (oyBottom - oyTop > 1) {
-      const y = (oyTop + oyBottom) / 2;
-      const gapRight = t.x - (box.x + box.width);
-      const gapLeft = box.x - (t.x + t.width);
-      if (gapRight > 0.5 && (!bestH || gapRight < bestH.gap)) bestH = { gap: gapRight, a: box.x + box.width, b: t.x, y };
-      if (gapLeft > 0.5 && (!bestH || gapLeft < bestH.gap)) bestH = { gap: gapLeft, a: box.x, b: t.x + t.width, y };
-    }
-    // 垂直间距：两页在横向有投影重叠
-    const oxLeft = Math.max(box.x, t.x);
-    const oxRight = Math.min(box.x + box.width, t.x + t.width);
-    if (oxRight - oxLeft > 1) {
-      const x = (oxLeft + oxRight) / 2;
-      const gapBelow = t.y - (box.y + box.height);
-      const gapAbove = box.y - (t.y + t.height);
-      if (gapBelow > 0.5 && (!bestV || gapBelow < bestV.gap)) bestV = { gap: gapBelow, a: box.y + box.height, b: t.y, x };
-      if (gapAbove > 0.5 && (!bestV || gapAbove < bestV.gap)) bestV = { gap: gapAbove, a: box.y, b: t.y + t.height, x };
-    }
-  }
-  if (bestH) gapMarks.push({ x1: bestH.a, y1: bestH.y, x2: bestH.b, y2: bestH.y, value: Math.round(bestH.gap) });
-  if (bestV) gapMarks.push({ x1: bestV.x, y1: bestV.a, x2: bestV.x, y2: bestV.b, value: Math.round(bestV.gap) });
 }
 
 /* ---------- 行内编辑（页面名 / 文本节点） ---------- */
@@ -797,7 +264,7 @@ function commitEditors() {
 }
 
 function startPageRename(page: DocNode) {
-  const r = pageLabelRect(page);
+  const r = pageLabelRect(page, vp, ctx);
   pageRename.value = { id: page.id, value: page.name, left: r.x, top: r.y, width: Math.max(r.width, 96) };
   markDirty();
   void nextTick(() => {
@@ -834,93 +301,6 @@ function onRenameKey(e: KeyboardEvent) {
   }
 }
 
-function syncTextEditSize() {
-  const ed = textEdit.value;
-  if (!ed) return;
-  const size = measureTextSize(ed.value, ed.fontSize, ed.fontFamily, ed.fontWeight);
-  ed.width = Math.max(size.width * ed.scale + 6, 24);
-  ed.height = Math.max(size.height * ed.scale, ed.fontSize * ed.scale * TEXT_LINE_HEIGHT);
-}
-
-function startTextEdit(node: DocNode, selectAll = false) {
-  const r = worldRect(docStore.doc, node.id);
-  if (!r) return;
-  const a = worldToScreen(vp, r.x, r.y);
-  const fontSize = node.style.fontSize ?? DEFAULT_TEXT_FONT_SIZE;
-  const fontFamily = node.style.fontFamily ?? DEFAULT_TEXT_FONT_FAMILY;
-  const fontWeight = node.style.fontWeight ?? 400;
-  const scale = vp.zoom;
-  const size = measureTextSize(node.text ?? "文本", fontSize, fontFamily, fontWeight);
-  // DOM 行盒有半行距，向上补偿使输入文字与画布文字位置一致
-  const halfLeading = ((TEXT_LINE_HEIGHT - 1) * fontSize * scale) / 2;
-  textEdit.value = {
-    id: node.id,
-    value: node.text ?? "",
-    left: a.x,
-    top: a.y - halfLeading,
-    width: Math.max(size.width * scale + 6, 24),
-    height: Math.max(size.height * scale, fontSize * scale * TEXT_LINE_HEIGHT),
-    fontSize,
-    fontFamily,
-    fontWeight,
-    scale,
-  };
-  select([node.id]);
-  markDirty();
-  void nextTick(() => {
-    const el = textEditEl.value;
-    if (!el) return;
-    el.focus();
-    if (selectAll) el.select();
-    else el.setSelectionRange(el.value.length, el.value.length);
-    syncTextEditSize();
-  });
-}
-
-function commitTextEdit() {
-  const ed = textEdit.value;
-  textEdit.value = null;
-  if (!ed) return;
-  const node = docStore.doc.nodes[ed.id];
-  if (!node) {
-    markDirty();
-    return;
-  }
-  const text = ed.value.replace(/\r\n/g, "\n");
-  if (!text.trim()) {
-    dispatch({ type: "node.delete", params: { nodeId: ed.id } }, "edit-text");
-    select(ui.selection.filter((id) => id !== ed.id));
-    markDirty();
-    return;
-  }
-  if (text === (node.text ?? "")) {
-    markDirty();
-    return;
-  }
-  const size = measureTextSize(text, ed.fontSize, ed.fontFamily, ed.fontWeight);
-  dispatch(
-    { type: "node.update", params: { nodeId: ed.id, patch: { text, width: size.width, height: size.height } } },
-    "edit-text",
-  );
-  markDirty();
-}
-
-function cancelTextEdit() {
-  textEdit.value = null;
-  markDirty();
-}
-
-function onTextEditKey(e: KeyboardEvent) {
-  if (e.isComposing) return;
-  if (e.key === "Enter" && !e.shiftKey) {
-    e.preventDefault();
-    commitTextEdit();
-  } else if (e.key === "Escape") {
-    e.preventDefault();
-    cancelTextEdit();
-  }
-}
-
 function onDoubleClick(e: MouseEvent) {
   // 拖动模式只浏览：单击/双击都不改选区、不进编辑
   if (ui.mode === "pan") return;
@@ -949,7 +329,7 @@ function onDoubleClick(e: MouseEvent) {
       }
     }
   }
-  const label = ui.tool === "path" && pen.draft ? null : labelAt(sx, sy);
+  const label = ui.tool === "path" && pen.draft ? null : labelAt(sx, sy, vp, ctx);
   if (label) {
     if (label.id !== ui.activePageId) setActivePage(label.id, false);
     startPageRename(label);
@@ -960,7 +340,7 @@ function onDoubleClick(e: MouseEvent) {
     return;
   }
   const w = screenToWorld(vp, sx, sy);
-  const hit = hitTest(w.x, w.y);
+  const hit = hitTest(vp, w.x, w.y);
   if (!hit) {
     select([]);
     return;
@@ -972,6 +352,14 @@ function onDoubleClick(e: MouseEvent) {
   }
   const node = docStore.doc.nodes[hit.id];
   if (!node) return;
+  if (node.type === "instance") {
+    // 双击进入实例上下文；嵌套实例可继续逐级进入
+    if (ui.instanceContext.at(-1) !== node.id) ui.instanceContext.push(node.id);
+    select([node.id]);
+    ui.expandedPageId = hit.pageId;
+    markDirty();
+    return;
+  }
   if (node.type === "text") {
     startTextEdit(node);
     return;
@@ -1011,6 +399,7 @@ function paintPathEditing(g: CanvasRenderingContext2D): void {
   });
 }
 
+/** 空插槽占位：编辑模式的 UI 叠加层，不进入文档渲染。 */
 function setHoverText(id: NodeId | null) {
   if (hoverTextId.value === id) return;
   hoverTextId.value = id;
@@ -1047,11 +436,11 @@ function updateHover(e: PointerEvent) {
     markDirty();
   }
   const w = screenToWorld(vp, sx, sy);
-  const hit = hitTest(w.x, w.y);
+  const hit = hitTest(vp, w.x, w.y);
   const node = hit && !hit.inactive ? docStore.doc.nodes[hit.id] : null;
   setHoverText(node?.type === "text" ? node.id : null);
   // 页面名称标签是编辑模式下移动整页的唯一入口，用 move 光标提示可拖
-  const onLabel = Boolean(labelAt(sx, sy));
+  const onLabel = Boolean(labelAt(sx, sy, vp, ctx));
   if (hoverLabel.value !== onLabel) {
     hoverLabel.value = onLabel;
     markDirty();
@@ -1083,44 +472,6 @@ function onWindowBlur() {
 }
 
 /** 根据手柄与指针位移计算新矩形（世界坐标；`keepAspect` 对应 Shift）。 */
-function resizeRect(start: Rect, handle: ResizeHandle, dx: number, dy: number, keepAspect: boolean, min: number): Rect {
-  let x = start.x;
-  let y = start.y;
-  let width = start.width;
-  let height = start.height;
-  const right = start.x + start.width;
-  const bottom = start.y + start.height;
-  if (handle.includes("e")) width = start.width + dx;
-  if (handle.includes("s")) height = start.height + dy;
-  if (handle.includes("w")) {
-    x = start.x + dx;
-    width = start.width - dx;
-  }
-  if (handle.includes("n")) {
-    y = start.y + dy;
-    height = start.height - dy;
-  }
-
-  const corner = handle.length === 2;
-  if (corner && keepAspect) {
-    const aspect = start.width / Math.max(1, start.height);
-    if (Math.abs(width - start.width) >= Math.abs(height - start.height)) height = width / aspect;
-    else width = height * aspect;
-    if (handle.includes("w")) x = right - width;
-    if (handle.includes("n")) y = bottom - height;
-  }
-
-  if (width < min) {
-    width = min;
-    if (handle.includes("w")) x = right - min;
-  }
-  if (height < min) {
-    height = min;
-    if (handle.includes("n")) y = bottom - min;
-  }
-  return { x, y, width, height };
-}
-
 function onPointerDown(e: PointerEvent) {
   commitEditors();
   clearHover();
@@ -1179,7 +530,7 @@ function onPointerDown(e: PointerEvent) {
         return;
       }
     }
-    const same = hitTest(w.x, w.y);
+    const same = hitTest(vp, w.x, w.y);
     if (!same || same.id !== pen.pathEdit.id) {
       pen.pathEdit = null;
       markDirty();
@@ -1213,7 +564,7 @@ function onPointerDown(e: PointerEvent) {
 
   // 2) 页面名称标签：选中并开始移动整页——这是页面唯一的拖动入口
   //    钢笔草稿期间标签不再是拖动入口，否则画到页顶会误移动整页
-  const label = ui.tool === "path" && pen.draft ? null : labelAt(sx, sy);
+  const label = ui.tool === "path" && pen.draft ? null : labelAt(sx, sy, vp, ctx);
   if (label) {
     if (label.id !== ui.activePageId) setActivePage(label.id, false);
     select([label.id]);
@@ -1277,7 +628,7 @@ function onPointerDown(e: PointerEvent) {
   }
 
   // 4) 选择
-  const hit = hitTest(w.x, w.y);
+  const hit = hitTest(vp, w.x, w.y);
   if (!hit) {
     select([]);
     return;
@@ -1289,6 +640,19 @@ function onPointerDown(e: PointerEvent) {
     ui.expandedPageId = hit.pageId;
     markDirty();
     return;
+  }
+  // 在实例上下文里点了上下文之外的节点：先退出上下文
+  if (ui.instanceContext.length) {
+    let inside = false;
+    let cur: DocNode | undefined = docStore.doc.nodes[hit.id];
+    while (cur) {
+      if (cur.id === ui.instanceContext.at(-1)) {
+        inside = true;
+        break;
+      }
+      cur = cur.parentId ? docStore.doc.nodes[cur.parentId] : undefined;
+    }
+    if (!inside) ui.instanceContext = [];
   }
   if (e.shiftKey) {
     const set = new Set(ui.selection);
@@ -1308,25 +672,6 @@ function onPointerDown(e: PointerEvent) {
   // 页面间参考线只对页面生效（普通图层拖动时通常为空）
   const { dragPages, snapTargets } = pageDragContext(ui.selection);
   drag = { ...base, startX: w.x, startY: w.y, mode: "move", dragPages, snapTargets };
-}
-
-/** 拖动页面的参考线上下文：只有页面参与边/中线对齐与间距标注。 */
-function pageDragContext(selection: readonly NodeId[]): { dragPages: Rect[]; snapTargets: Rect[] } {
-  const dragPages = selection
-    .map((id) => docStore.doc.nodes[id])
-    .filter((n): n is DocNode => Boolean(n) && n!.type === "page")
-    .map((n) => worldRect(docStore.doc, n.id))
-    .filter((r): r is Rect => Boolean(r));
-  const snapTargets =
-    dragPages.length === 0
-      ? []
-      : docStore.doc.rootIds
-          .filter((pid) => !selection.includes(pid))
-          .map((pid) => docStore.doc.nodes[pid])
-          .filter((p): p is DocNode => Boolean(p) && p!.type === "page")
-          .map((p) => worldRect(docStore.doc, p.id))
-          .filter((r): r is Rect => Boolean(r));
-  return { dragPages, snapTargets };
 }
 
 function onPointerMove(e: PointerEvent) {
@@ -1429,7 +774,15 @@ function onPointerMove(e: PointerEvent) {
     }
     drag.offsetX = w.x - drag.startX;
     drag.offsetY = w.y - drag.startY;
-    if (drag.dragPages?.length) computePageGuides(drag.dragPages, drag.snapTargets ?? []);
+    const slot = slotUnder(vp, w.x, w.y, ui.selection);
+    if (drag.dropSlot !== slot) drag.dropSlot = slot;
+    if (drag.dragPages?.length) {
+      const guides = computeGuides(drag.dragPages, drag.snapTargets ?? [], { dx: drag.offsetX, dy: drag.offsetY }, vp.zoom);
+      drag.offsetX = guides.dx;
+      drag.offsetY = guides.dy;
+      guideLines = guides.lines;
+      gapMarks = guides.gaps;
+    }
   } else if (drag.mode === "resize") {
     if (!drag.resizeId || !drag.startRect || !drag.handle) return;
     if (!drag.moved) {
@@ -1524,15 +877,32 @@ function onPointerUp() {
     markDirty();
     return;
   }
-  if (drag.mode === "move" && drag.moved && (drag.offsetX || drag.offsetY)) {
-    const ids = [...ui.selection];
-    const cmds = ids
-      .filter((id) => docStore.doc.nodes[id])
-      .map((id) => {
-        const n = docStore.doc.nodes[id];
-        return { type: "node.update" as const, params: { nodeId: id, patch: { x: n.x + drag!.offsetX, y: n.y + drag!.offsetY } } };
-      });
-    if (cmds.length) dispatch(cmds, "move");
+  if (drag.mode === "move" && drag.moved) {
+    let filled = false;
+    if (drag.dropSlot) {
+      try {
+        dispatch(
+          {
+            type: "slot.fill",
+            params: { slotId: drag.dropSlot, nodeIds: [...ui.selection], dx: drag.offsetX, dy: drag.offsetY },
+          },
+          "slot-fill",
+        );
+        filled = true;
+      } catch {
+        filled = false;
+      }
+    }
+    if (!filled && (drag.offsetX || drag.offsetY)) {
+      const ids = [...ui.selection];
+      const cmds = ids
+        .filter((id) => docStore.doc.nodes[id])
+        .map((id) => {
+          const n = docStore.doc.nodes[id];
+          return { type: "node.update" as const, params: { nodeId: id, patch: { x: n.x + drag!.offsetX, y: n.y + drag!.offsetY } } };
+        });
+      if (cmds.length) dispatch(cmds, "move");
+    }
   } else if (drag.mode === "create" && preview && drag.pageId) {
     const pageId = drag.pageId;
     const page = docStore.doc.nodes[pageId];
@@ -1573,7 +943,8 @@ function onPointerUp() {
           width: w,
           height: h,
           sides: isTriangle ? 3 : undefined,
-          style: { fill: { token: "color/primary" } },
+          // 画板默认白底（color/surface），形状默认主色
+          style: { fill: { token: tool === "frame" ? "color/surface" : "color/primary" } },
         });
     let startEdit = false;
     if (tool === "text") {
@@ -1734,6 +1105,12 @@ function onKey(e: KeyboardEvent) {
     markDirty();
     return;
   }
+  if (ui.instanceContext.length) {
+    ui.instanceContext.pop();
+    select(ui.instanceContext.length ? [ui.instanceContext.at(-1)!] : []);
+    markDirty();
+    return;
+  }
   if (ui.selection.length) {
     select([]);
     return;
@@ -1766,17 +1143,6 @@ function deleteSelection() {
   select(ui.selection.filter((s) => !ids.includes(s)));
 }
 
-/** 活动页在视口内的可见面积占比（0–1）。 */
-function visibleRatio(node: DocNode): number {
-  const x1 = vp.x;
-  const y1 = vp.y;
-  const x2 = vp.x + vp.width / vp.zoom;
-  const y2 = vp.y + vp.height / vp.zoom;
-  const ix = Math.max(0, Math.min(node.x + node.width, x2) - Math.max(node.x, x1));
-  const iy = Math.max(0, Math.min(node.y + node.height, y2) - Math.max(node.y, y1));
-  return (ix * iy) / Math.max(1, node.width * node.height);
-}
-
 let unsub = () => {};
 let ro: ResizeObserver | null = null;
 let stopModeWatch = () => {};
@@ -1786,13 +1152,24 @@ let stopShortcuts = () => {};
 onMounted(() => {
   ctx = canvasRef.value!.getContext("2d");
   backend = new Canvas2DBackend(ctx!);
-  hooks.getScreenshot = async () => canvasRef.value!.toDataURL("image/png");
+  hooks.getScreenshot = async () => {
+    // 离屏重绘文档，不包含选中框、参考线、插槽占位等 UI 叠加层
+    const off = document.createElement("canvas");
+    const offCtx = off.getContext("2d");
+    if (!offCtx) return "";
+    const offBackend = new Canvas2DBackend(offCtx);
+    offBackend.beginFrame(vp);
+    drawDocument(offBackend, docStore.doc);
+    offBackend.endFrame();
+    return off.toDataURL("image/png");
+  };
   hooks.focusNode = focusNode;
   hooks.focusPage = focusPage;
   hooks.getActivePageId = () => {
     if (ui.mode === "edit") return ensureActivePage()?.id ?? null;
     return pageAtViewportCenter()?.id ?? null;
   };
+  hooks.insertInstance = insertInstance;
   hooks.requestRedraw = markDirty;
   unsub = docStore.subscribe(markDirty);
   stopShortcuts = registerShortcuts({
@@ -1811,6 +1188,8 @@ onMounted(() => {
     "edit.undo": () => docStore.undo(),
     "edit.redo": () => docStore.redo(),
     "edit.delete": deleteSelection,
+    "component.create": createComponentFromSelection,
+    "component.detach": detachSelection,
     "view.zoomIn": () => zoomStep(1.2),
     "view.zoomOut": () => zoomStep(1 / 1.2),
     "view.zoomReset": resetZoom,
@@ -1835,7 +1214,7 @@ onMounted(() => {
       if (mode === "edit") {
         const page = ensureActivePage();
         // 现在编辑模式也能滚动了：只有活动页看不见（或几乎看不见）才强制适配
-        if (page && visibleRatio(page) < 0.15) fitActivePage();
+        if (page && visibleRatio(vp, page) < 0.15) fitActivePage();
       }
       markDirty();
     },

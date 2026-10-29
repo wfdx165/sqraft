@@ -5,14 +5,12 @@ import type { RenderBackend, Viewport } from "./backend";
 
 export class Canvas2DBackend implements RenderBackend {
   private ctx: CanvasRenderingContext2D;
-  private vp: Viewport | null = null;
 
   constructor(ctx: CanvasRenderingContext2D) {
     this.ctx = ctx;
   }
 
   beginFrame(vp: Viewport): void {
-    this.vp = vp;
     const canvas = this.ctx.canvas;
     const pw = Math.round(vp.width * vp.dpr);
     const ph = Math.round(vp.height * vp.dpr);
@@ -212,15 +210,6 @@ export class Canvas2DBackend implements RenderBackend {
     for (let i = 0; i < lines.length; i++) {
       ctx.fillText(lines[i], tx, node.y + i * lineHeight);
     }
-    ctx.restore();
-  }
-
-  drawFrameOutline(node: DocNode): void {
-    const ctx = this.ctx;
-    ctx.save();
-    ctx.strokeStyle = "rgba(0,0,0,0.25)";
-    ctx.lineWidth = 1 / (this.vp?.zoom ?? 1);
-    ctx.strokeRect(node.x, node.y, node.width, node.height);
     ctx.restore();
   }
 

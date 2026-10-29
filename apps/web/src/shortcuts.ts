@@ -21,6 +21,8 @@ export type ActionId =
   | "edit.undo"
   | "edit.redo"
   | "edit.delete"
+  | "component.create"
+  | "component.detach"
   | "view.zoomIn"
   | "view.zoomOut"
   | "view.zoomReset"
@@ -29,7 +31,7 @@ export type ActionId =
   | "file.open"
   | "file.save";
 
-export type ActionGroup = "模式" | "工具" | "编辑" | "视图" | "其它";
+export type ActionGroup = "模式" | "工具" | "编辑" | "组件" | "视图" | "其它";
 
 export interface ShortcutAction {
   id: ActionId;
@@ -39,7 +41,7 @@ export interface ShortcutAction {
   default: string;
 }
 
-export const GROUP_ORDER: ActionGroup[] = ["模式", "工具", "编辑", "视图", "其它"];
+export const GROUP_ORDER: ActionGroup[] = ["模式", "工具", "编辑", "组件", "视图", "其它"];
 
 /**
  * `V` 同时是"编辑模式"与"选择工具"：合并成一个动作，避免两条同键记录。
@@ -57,6 +59,8 @@ export const ACTIONS: ShortcutAction[] = [
   { id: "edit.undo", group: "编辑", label: "撤销", default: "⌘Z" },
   { id: "edit.redo", group: "编辑", label: "重做", default: "⌘⇧Z" },
   { id: "edit.delete", group: "编辑", label: "删除选中", default: "Delete" },
+  { id: "component.create", group: "组件", label: "创建组件", default: "⌘⌥K" },
+  { id: "component.detach", group: "组件", label: "脱离实例", default: "⌘⌥B" },
   { id: "view.zoomIn", group: "视图", label: "放大", default: "⌘+" },
   { id: "view.zoomOut", group: "视图", label: "缩小", default: "⌘−" },
   { id: "view.zoomReset", group: "视图", label: "缩放回到 100%", default: "⌘0" },

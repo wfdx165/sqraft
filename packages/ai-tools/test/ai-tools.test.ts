@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createEmptyDoc, DocStore, firstPageId } from "@sqraft/core";
+import { createEmptyDoc, createNode, DocStore, firstPageId } from "@sqraft/core";
 import { makeExecutor, type ToolExecutor } from "../src/index";
 
 /** 每个用例一份干净文档 + 执行器（getActivePageId 固定为第一页）。 */
@@ -157,6 +157,12 @@ describe("AI 工具：多边形", () => {
 });
 
 describe("AI 工具：样式纪律", () => {
+  it("画板缺省填充 color/surface（与 GUI 一致）", async () => {
+    const { store, run } = setup();
+    const created = await call(run, "create_node", { kind: "frame" });
+    expect(store.doc.nodes[created.nodeId as string].style.fill).toEqual({ token: "color/surface" });
+  });
+
   it("字面量色值被拒绝，Token 引用通过", async () => {
     const { run } = setup();
     await expect(run("create_node", { kind: "rect", fillToken: "#ff0000" })).rejects.toThrow(/禁止使用字面量色值/);
@@ -176,5 +182,208 @@ describe("AI 工具：样式纪律", () => {
     expect(store.doc.nodes[id].style.fill).toEqual({ token: "color/primary" });
     expect(store.doc.nodes[id].style.stroke).toEqual({ token: "color/text" });
     expect(store.doc.nodes[id].style.strokeWidth).toBe(3);
+  });
+});
+
+describe("AI 工具：组件 / 插槽 / 实例", () => {
+  it("create_node 支持 component/slot，create_instance 物化整棵子树", async () => {
+    const { store, run, pageId } = setup();
+    const comp = await call(run, "create_node", { kind: "component", width: 120, height: 80 });
+    const compId = comp.nodeId as string;
+    expect(store.doc.nodes[compId].type).toBe("component");
+    expect(store.doc.nodes[compId].name).toBe("组件 1");
+
+    await call(run, "create_node", { kind: "text", parentId: compId, text: "标题" });
+    const slot = await call(run, "create_node", { kind: "slot", parentId: compId, name: "body" });
+    const slotId = slot.nodeId as string;
+    expect(store.doc.nodes[slotId].type).toBe("slot");
+    expect(store.doc.nodes[slotId].name).toBe("body");
+
+    const inst = await call(run, "create_instance", { componentId: compId, parentId: pageId, x: 10, y: 20 });
+    const instId = inst.nodeId as string;
+    const instNode = store.doc.nodes[instId];
+    expect(instNode.type).toBe("instance");
+    expect(instNode.componentId).toBe(compId);
+    expect(instNode.children).toHaveLength(2);
+
+    const doc = await call(run, "read_document");
+    const flat = JSON.parse((doc.pages as Array<{ subtree: string }>)[0].subtree) as Array<Record<string, unknown>>;
+    expect(flat.find((n) => n.id === compId)?.type).toBe("component");
+    expect(flat.find((n) => n.id === slotId)?.type).toBe("slot");
+    expect(flat.find((n) => n.id === instId)?.componentId).toBe(compId);
+    expect(flat.find((n) => n.id === instId)?.children).toHaveLength(2);
+  });
+
+  it("read_document 回传 propertyDefs / propValues / overrides / slotFilled", async () => {
+    const { store, run, pageId } = setup();
+    const comp = await call(run, "create_node", { kind: "component", width: 120, height: 80 });
+    const compId = comp.nodeId as string;
+    const text = await call(run, "create_node", { kind: "text", parentId: compId, text: "标题" });
+    const textId = text.nodeId as string;
+    const slot = await call(run, "create_node", { kind: "slot", parentId: compId, name: "body" });
+    const slotId = slot.nodeId as string;
+    const inst = await call(run, "create_instance", { componentId: compId, parentId: pageId });
+    const instId = inst.nodeId as string;
+
+    const instNode = store.doc.nodes[instId];
+    const textClone = instNode.children.find((id) => store.doc.nodes[id].mainId === textId)!;
+    const slotClone = instNode.children.find((id) => store.doc.nodes[id].mainId === slotId)!;
+
+    store.apply({
+      type: "property.define",
+      params: { componentId: compId, targetMainId: textId, id: "p1", type: "text" },
+    });
+    store.apply({ type: "property.set", params: { instanceId: instId, propertyId: "p1", value: "AI 标题" } });
+    store.apply({ type: "node.update", params: { nodeId: instId, patch: { width: 200 } } });
+
+    const user = createNode("rect", { name: "插槽内容", width: 20, height: 20 });
+    store.apply({ type: "node.create", params: { nodes: [user], parentId: pageId } });
+    store.apply({ type: "slot.fill", params: { slotId: slotClone, nodeIds: [user.id] } });
+
+    const doc = await call(run, "read_document");
+    const flat = JSON.parse((doc.pages as Array<{ subtree: string }>)[0].subtree) as Array<Record<string, unknown>>;
+    const compNode = flat.find((n) => n.id === compId)!;
+    expect((compNode.propertyDefs as Array<{ id: string }>)[0].id).toBe("p1");
+    const instance = flat.find((n) => n.id === instId)!;
+    expect(instance.propValues).toMatchObject({ p1: "AI 标题" });
+    expect(instance.overrides).toBeTruthy();
+    expect(flat.find((n) => n.id === textClone)?.text).toBe("AI 标题");
+    expect(flat.find((n) => n.id === slotClone)?.slotFilled).toBe(true);
+  });
+
+
+  it("create_instance 进入未填充插槽时填充插槽", async () => {
+    const { store, run } = setup();
+    const a = await call(run, "create_node", { kind: "component" });
+    const slot = await call(run, "create_node", { kind: "slot", parentId: a.nodeId, name: "body" });
+    const b = await call(run, "create_node", { kind: "component" });
+    const inst = await call(run, "create_instance", { componentId: a.nodeId });
+    const instNode = store.doc.nodes[inst.nodeId as string];
+    const slotClone = instNode.children.find((id) => store.doc.nodes[id].mainId === slot.nodeId)!;
+    const child = await call(run, "create_instance", { componentId: b.nodeId, parentId: slotClone });
+    expect(store.doc.nodes[slotClone].slotFilled).toBe(true);
+    expect(store.doc.nodes[slotClone].children).toEqual([child.nodeId]);
+    expect(store.doc.nodes[child.nodeId as string].parentId).toBe(slotClone);
+  });
+
+  it("组件与插槽的创建约束", async () => {
+    const { run, pageId } = setup();
+    const frame = await call(run, "create_node", { kind: "frame" });
+    await expect(
+      run("create_node", { kind: "component", parentId: frame.nodeId }),
+    ).rejects.toThrow(/页面顶层/);
+
+    const comp = await call(run, "create_node", { kind: "component" });
+    await expect(run("create_node", { kind: "slot", parentId: pageId, name: "body" })).rejects.toThrow(
+      /主组件内/,
+    );
+    await expect(run("create_node", { kind: "slot", parentId: comp.nodeId })).rejects.toThrow(/name/);
+    await call(run, "create_node", { kind: "slot", parentId: comp.nodeId, name: "body" });
+    await expect(
+      run("create_node", { kind: "slot", parentId: comp.nodeId, name: "body" }),
+    ).rejects.toThrow(/已存在/);
+
+    const inst = await call(run, "create_instance", { componentId: comp.nodeId });
+    await expect(
+      run("create_node", { kind: "slot", parentId: inst.nodeId, name: "footer" }),
+    ).rejects.toThrow(/主组件内/);
+  });
+});
+
+describe("AI 工具：属性 / 插槽 / 替换 / 脱离", () => {
+  function flatOf(doc: Record<string, unknown>): Array<Record<string, unknown>> {
+    return JSON.parse((doc.pages as Array<{ subtree: string }>)[0].subtree) as Array<Record<string, unknown>>;
+  }
+
+  it("define_property + set_instance_prop 读写文本属性", async () => {
+    const { store, run } = setup();
+    const comp = await call(run, "create_node", { kind: "component" });
+    const compId = comp.nodeId as string;
+    const text = await call(run, "create_node", { kind: "text", parentId: compId, name: "标题", text: "标题" });
+    const textId = text.nodeId as string;
+    const inst = await call(run, "create_instance", { componentId: compId });
+    const instId = inst.nodeId as string;
+
+    const prop = await call(run, "define_property", {
+      componentId: compId,
+      targetNodeId: textId,
+      type: "text",
+      name: "标题文案",
+    });
+    expect(prop.name).toBe("标题文案");
+
+    await call(run, "set_instance_prop", { instanceId: instId, propertyId: prop.propertyId, value: "AI 标题" });
+    let flat = flatOf(await call(run, "read_document"));
+    const cloneId = store.doc.nodes[instId].children.find((id) => store.doc.nodes[id].mainId === textId)!;
+    expect(flat.find((n) => n.id === cloneId)?.text).toBe("AI 标题");
+    expect(flat.find((n) => n.id === instId)?.propValues).toMatchObject({ [prop.propertyId as string]: "AI 标题" });
+
+    await call(run, "set_instance_prop", { instanceId: instId, propertyId: prop.propertyId, value: null });
+    flat = flatOf(await call(run, "read_document"));
+    expect(flat.find((n) => n.id === cloneId)?.text).toBe("标题");
+
+    await expect(
+      run("set_instance_prop", { instanceId: instId, propertyId: "nope", value: "x" }),
+    ).rejects.toThrow(/属性不存在/);
+  });
+
+  it("fill_slot 按名字填充实例插槽", async () => {
+    const { store, run, pageId } = setup();
+    const comp = await call(run, "create_node", { kind: "component" });
+    const compId = comp.nodeId as string;
+    const slot = await call(run, "create_node", { kind: "slot", parentId: compId, name: "body" });
+    const slotId = slot.nodeId as string;
+    const inst = await call(run, "create_instance", { componentId: compId });
+    const instId = inst.nodeId as string;
+    const slotClone = store.doc.nodes[instId].children.find((id) => store.doc.nodes[id].mainId === slotId)!;
+
+    const user = await call(run, "create_node", { kind: "rect", parentId: pageId, name: "内容" });
+    await call(run, "fill_slot", { instanceId: instId, slotName: "body", nodeIds: [user.nodeId] });
+    const flat = flatOf(await call(run, "read_document"));
+    expect(flat.find((n) => n.id === slotClone)?.slotFilled).toBe(true);
+    expect(flat.find((n) => n.id === user.nodeId)?.parentId).toBe(slotClone);
+
+    await expect(
+      run("fill_slot", { instanceId: instId, slotName: "nope", nodeIds: [user.nodeId] }),
+    ).rejects.toThrow(/插槽/);
+  });
+
+  it("swap_instance 与 detach_instance", async () => {
+    const { store, run } = setup();
+    const a = await call(run, "create_node", { kind: "component", width: 100, height: 50 });
+    const b = await call(run, "create_node", { kind: "component", width: 200, height: 90 });
+    const inst = await call(run, "create_instance", { componentId: a.nodeId });
+    const instId = inst.nodeId as string;
+
+    await call(run, "swap_instance", { instanceId: instId, componentId: b.nodeId });
+    expect(store.doc.nodes[instId].componentId).toBe(b.nodeId);
+    expect(store.doc.nodes[instId].width).toBe(200);
+
+    await call(run, "detach_instance", { instanceId: instId });
+    expect(store.doc.nodes[instId].type).toBe("frame");
+    expect(store.doc.nodes[instId].componentId).toBeUndefined();
+
+    await expect(
+      run("swap_instance", { instanceId: instId, componentId: "nope" }),
+    ).rejects.toThrow(/实例不存在|目标组件不存在/);
+  });
+
+  it("update_node 编辑实例内部自动记覆盖，母版同步不覆盖它", async () => {
+    const { store, run } = setup();
+    const comp = await call(run, "create_node", { kind: "component" });
+    const compId = comp.nodeId as string;
+    const text = await call(run, "create_node", { kind: "text", parentId: compId, name: "标题", text: "标题" });
+    const textId = text.nodeId as string;
+    const inst = await call(run, "create_instance", { componentId: compId });
+    const instId = inst.nodeId as string;
+    const cloneId = store.doc.nodes[instId].children.find((id) => store.doc.nodes[id].mainId === textId)!;
+
+    await call(run, "update_node", { nodeId: cloneId, text: "AI 覆盖" });
+    let flat = flatOf(await call(run, "read_document"));
+    expect(flat.find((n) => n.id === instId)?.overrides).toBeTruthy();
+
+    await call(run, "update_node", { nodeId: textId, text: "母版新文案" });
+    flat = flatOf(await call(run, "read_document"));
+    expect(flat.find((n) => n.id === cloneId)?.text).toBe("AI 覆盖");
   });
 });

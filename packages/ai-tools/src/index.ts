@@ -3,8 +3,17 @@
  * 纪律：样式只接受 Token 引用，字面量色值在工具层直接拒绝。
  */
 
-import type { Command, DocStore, NodeId, NodeStyle, VectorAnchor } from "@sqraft/core";
-import { clampSides, createNode, firstPageId, makeAnchor, validateVector, walkSubtree } from "@sqraft/core";
+import type { Command, DocNode, DocStore, NodeId, NodeStyle, VectorAnchor } from "@sqraft/core";
+import {
+  clampSides,
+  createNode,
+  firstPageId,
+  makeAnchor,
+  newId,
+  nextComponentName,
+  validateVector,
+  walkSubtree,
+} from "@sqraft/core";
 
 export interface ToolDefinition {
   name: string;
@@ -16,7 +25,8 @@ export interface ToolDefinition {
 export const tools: ToolDefinition[] = [
   {
     name: "read_document",
-    description: "读取当前文档的页面与节点树紧凑摘要。返回 JSON 字符串。",
+    description:
+      "读取当前文档的页面与节点树紧凑摘要。组件节点带 propertyDefs，实例带 componentId / propValues / overrides，插槽带 slotFilled。返回 JSON 字符串。",
     readonly: true,
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
@@ -29,13 +39,13 @@ export const tools: ToolDefinition[] = [
   {
     name: "create_node",
     description:
-      "在父节点下创建一个节点。kind 支持 frame/rect/ellipse/polygon/line/path/text。polygon 是参数化多边形，用 sides 指定边数（3–12，默认 3，3 即三角形），顶点由 width/height 包围盒推导。path 用 points 描述锚点（父容器坐标，手柄为相对锚点的偏移），闭合路径至少 3 个锚点、开放路径至少 2 个。样式颜色必须用 fillToken / strokeToken（Token 名），不允许字面量色值。",
+      "在父节点下创建一个节点。kind 支持 frame/rect/ellipse/polygon/line/path/text/component/slot。component 只能建在页面顶层；slot 必须位于主组件内并提供唯一名字。polygon 是参数化多边形，用 sides 指定边数（3–12，默认 3，3 即三角形），顶点由 width/height 包围盒推导。path 用 points 描述锚点（父容器坐标，手柄为相对锚点的偏移），闭合路径至少 3 个锚点、开放路径至少 2 个。样式颜色必须用 fillToken / strokeToken（Token 名），不允许字面量色值。",
     input_schema: {
       type: "object",
       properties: {
         parentId: { type: "string", description: "父节点 id；省略则建到当前页面" },
-        kind: { type: "string", enum: ["frame", "rect", "ellipse", "polygon", "line", "path", "text"] },
-        name: { type: "string" },
+        kind: { type: "string", enum: ["frame", "rect", "ellipse", "polygon", "line", "path", "text", "component", "slot"] },
+        name: { type: "string", description: "slot 必填且组件内唯一" },
         x: { type: "number" },
         y: { type: "number" },
         width: { type: "number" },
@@ -68,6 +78,89 @@ export const tools: ToolDefinition[] = [
         },
       },
       required: ["kind"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "create_instance",
+    description:
+      "插入一个组件实例，自动物化整棵子树。parentId 省略时放到当前页面；x/y 是相对父容器的坐标。",
+    input_schema: {
+      type: "object",
+      properties: {
+        componentId: { type: "string" },
+        parentId: { type: "string" },
+        x: { type: "number" },
+        y: { type: "number" },
+        name: { type: "string" },
+      },
+      required: ["componentId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "define_property",
+    description:
+      "在组件母版的图层上创建组件属性。type=text 要求目标为文本图层，boolean 控制可见性，instance 控制嵌套实例替换成哪个组件。返回 propertyId。",
+    input_schema: {
+      type: "object",
+      properties: {
+        componentId: { type: "string" },
+        targetNodeId: { type: "string" },
+        type: { type: "string", enum: ["text", "boolean", "instance"] },
+        name: { type: "string", description: "显示名；省略则用图层名" },
+      },
+      required: ["componentId", "targetNodeId", "type"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "set_instance_prop",
+    description:
+      "设置或清除实例的属性值。文本用字符串、布尔用 true/false、实例替换用组件 id；null 表示清除并回落到母版值。",
+    input_schema: {
+      type: "object",
+      properties: {
+        instanceId: { type: "string" },
+        propertyId: { type: "string" },
+        value: { description: "字符串 / 布尔 / 组件 id；null 清除" },
+      },
+      required: ["instanceId", "propertyId", "value"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "fill_slot",
+    description:
+      "把已有节点填入实例的具名插槽。首次填充会整体替换默认内容；节点保持世界坐标。",
+    input_schema: {
+      type: "object",
+      properties: {
+        instanceId: { type: "string" },
+        slotName: { type: "string" },
+        nodeIds: { type: "array", items: { type: "string" }, minItems: 1 },
+      },
+      required: ["instanceId", "slotName", "nodeIds"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "swap_instance",
+    description: "把实例替换成另一个组件；位置不变，同名已填充插槽内容保留。",
+    input_schema: {
+      type: "object",
+      properties: { instanceId: { type: "string" }, componentId: { type: "string" } },
+      required: ["instanceId", "componentId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "detach_instance",
+    description: "把实例脱离为普通画板，不再受母版影响。",
+    input_schema: {
+      type: "object",
+      properties: { instanceId: { type: "string" } },
+      required: ["instanceId"],
       additionalProperties: false,
     },
   },
@@ -140,6 +233,8 @@ function serializeSubtree(store: DocStore, id: NodeId): string {
       id: n.id,
       type: n.type,
       name: n.name,
+      parentId: n.parentId,
+      children: n.children,
       x: n.x,
       y: n.y,
       w: n.width,
@@ -147,6 +242,12 @@ function serializeSubtree(store: DocStore, id: NodeId): string {
       text: n.text,
       ...(n.type === "polygon" ? { sides: n.sides ?? 3 } : {}),
       ...(n.vector ? { vector: n.vector } : {}),
+      ...(n.componentId ? { componentId: n.componentId } : {}),
+      ...(n.mainId ? { mainId: n.mainId } : {}),
+      ...(n.propValues ? { propValues: n.propValues } : {}),
+      ...(n.overrides ? { overrides: n.overrides } : {}),
+      ...(n.slotFilled !== undefined ? { slotFilled: n.slotFilled } : {}),
+      ...(n.propertyDefs ? { propertyDefs: n.propertyDefs } : {}),
     }),
   );
   return JSON.stringify(out);
@@ -186,6 +287,14 @@ export function assertToken(store: DocStore, token: string | undefined, field: s
   }
 }
 
+function findSlotByName(store: DocStore, instanceId: NodeId, name: string): NodeId | null {
+  let found: NodeId | null = null;
+  walkSubtree(store.doc, instanceId, (n) => {
+    if (!found && n.type === "slot" && n.name === name) found = n.id;
+  });
+  return found;
+}
+
 export function makeExecutor(
   store: DocStore,
   getScreenshot: () => Promise<string>,
@@ -201,13 +310,44 @@ export function makeExecutor(
         return JSON.stringify({ tokens: store.doc.tokens });
       }
       case "create_node": {
-        const kind = String(args.kind) as "frame" | "rect" | "ellipse" | "polygon" | "line" | "path" | "text";
+        const kind = String(args.kind) as
+          | "frame" | "rect" | "ellipse" | "polygon" | "line" | "path" | "text" | "component" | "slot";
         const isPath = kind === "path";
         const isPolygon = kind === "polygon";
+        const isComponent = kind === "component";
+        const isSlot = kind === "slot";
         assertToken(store, args.fillToken as string | undefined, "fillToken");
         assertToken(store, args.strokeToken as string | undefined, "strokeToken");
         const parentId = (args.parentId as NodeId | undefined) ?? getActivePageId?.() ?? firstPageId(store.doc);
         if (!parentId || !store.doc.nodes[parentId]) throw new Error("parentId 不存在");
+
+        let name = args.name as string | undefined;
+        if (isComponent) {
+          const parent = store.doc.nodes[parentId];
+          if (!parent || parent.type !== "page") throw new Error("主组件必须位于页面顶层");
+          name = name ?? nextComponentName(store.doc);
+        }
+        if (isSlot) {
+          const trimmed = String(name ?? "").trim();
+          if (!trimmed) throw new Error("kind=slot 必须提供唯一的 name");
+          name = trimmed;
+          let componentId: NodeId | null = null;
+          let cur: DocNode | undefined = store.doc.nodes[parentId];
+          while (cur) {
+            if (cur.type === "instance" || cur.type === "slot") break;
+            if (cur.type === "component") {
+              componentId = cur.id;
+              break;
+            }
+            cur = cur.parentId ? store.doc.nodes[cur.parentId] : undefined;
+          }
+          if (!componentId) throw new Error("插槽必须位于主组件内");
+          let used = false;
+          walkSubtree(store.doc, componentId, (n) => {
+            if (n.type === "slot" && n.name === trimmed) used = true;
+          });
+          if (used) throw new Error(`插槽名 "${trimmed}" 已存在`);
+        }
 
         const points = readPoints(args.points);
         const closed = Boolean(args.closed);
@@ -233,9 +373,11 @@ export function makeExecutor(
           if (style.stroke && style.strokeWidth === undefined) style.strokeWidth = 2;
         }
         if (isPolygon && !style.fill && !style.stroke) style.fill = { token: "color/primary" };
+        // 画板与 GUI 工具一致：默认白底
+        if (kind === "frame" && !style.fill && !style.stroke) style.fill = { token: "color/surface" };
 
         const node = createNode(kind, {
-          name: (args.name as string) ?? (isPolygon ? (clampSides(args.sides as number) === 3 ? "三角形" : "多边形") : kind),
+          name: name ?? (isPolygon ? (clampSides(args.sides as number) === 3 ? "三角形" : "多边形") : kind),
           // 路径的 points 是父容器坐标：先放在 0,0，由 store 归一化并推导节点框
           x: isPath ? 0 : ((args.x as number) ?? 0),
           y: isPath ? 0 : ((args.y as number) ?? 0),
@@ -248,6 +390,84 @@ export function makeExecutor(
         });
         store.apply({ type: "node.create", params: { nodes: [node], parentId } }, "ai:create");
         return JSON.stringify({ ok: true, nodeId: node.id });
+      }
+      case "create_instance": {
+        const componentId = String(args.componentId);
+        const master = store.doc.nodes[componentId];
+        if (!master || master.type !== "component") throw new Error(`组件 ${componentId} 不存在`);
+        const parentId = (args.parentId as NodeId | undefined) ?? getActivePageId?.() ?? firstPageId(store.doc);
+        if (!parentId || !store.doc.nodes[parentId]) throw new Error("parentId 不存在");
+        const nodeId = newId();
+        store.apply(
+          {
+            type: "instance.create",
+            params: {
+              componentId,
+              parentId,
+              nodeId,
+              x: Number(args.x ?? 0),
+              y: Number(args.y ?? 0),
+              name: args.name as string | undefined,
+            },
+          },
+          "ai:instance",
+        );
+        return JSON.stringify({ ok: true, nodeId });
+      }
+      case "define_property": {
+        const componentId = String(args.componentId);
+        const targetNodeId = String(args.targetNodeId);
+        const type = String(args.type);
+        if (type !== "text" && type !== "boolean" && type !== "instance") {
+          throw new Error("type 必须是 text / boolean / instance");
+        }
+        const id = newId();
+        store.apply(
+          {
+            type: "property.define",
+            params: {
+              componentId,
+              targetMainId: targetNodeId,
+              id,
+              type,
+              name: args.name as string | undefined,
+            },
+          },
+          "ai:property",
+        );
+        const def = store.doc.nodes[componentId]?.propertyDefs?.find((d) => d.id === id);
+        return JSON.stringify({ ok: true, propertyId: id, name: def?.name });
+      }
+      case "set_instance_prop": {
+        const instanceId = String(args.instanceId);
+        const propertyId = String(args.propertyId);
+        const value = args.value === undefined ? null : (args.value as string | boolean | null);
+        store.apply(
+          { type: "property.set", params: { instanceId, propertyId, value } },
+          "ai:property",
+        );
+        return JSON.stringify({ ok: true });
+      }
+      case "fill_slot": {
+        const instanceId = String(args.instanceId);
+        const slotName = String(args.slotName);
+        const slotId = findSlotByName(store, instanceId, slotName);
+        if (!slotId) throw new Error(`实例里没有名为 "${slotName}" 的插槽`);
+        const nodeIds = Array.isArray(args.nodeIds) ? args.nodeIds.map(String) : [];
+        if (nodeIds.length === 0) throw new Error("nodeIds 不能为空");
+        store.apply({ type: "slot.fill", params: { slotId, nodeIds } }, "ai:slot");
+        return JSON.stringify({ ok: true, slotId });
+      }
+      case "swap_instance": {
+        const instanceId = String(args.instanceId);
+        const componentId = String(args.componentId);
+        store.apply({ type: "instance.swap", params: { instanceId, componentId } }, "ai:swap");
+        return JSON.stringify({ ok: true });
+      }
+      case "detach_instance": {
+        const instanceId = String(args.instanceId);
+        store.apply({ type: "component.detach", params: { instanceId } }, "ai:detach");
+        return JSON.stringify({ ok: true });
       }
       case "update_node": {
         const nodeId = args.nodeId as NodeId;

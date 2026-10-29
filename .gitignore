@@ -5,3 +5,4 @@ dist/
 .vite/
 *.log
 .playwright-mcp/
+.scratch/

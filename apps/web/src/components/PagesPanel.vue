@@ -5,6 +5,7 @@ import {
   getPages,
   nextPageName,
   nextPagePosition,
+  overridePatchOf,
   DEFAULT_PAGE_HEIGHT,
   DEFAULT_PAGE_WIDTH,
   type DocNode,
@@ -33,6 +34,8 @@ const rows = computed<Row[]>(() => {
     const node = docStore.doc.nodes[id];
     if (!node) return;
     if (node.type !== "page") out.push({ node, depth });
+    // 实例默认折叠，展开后才显示内部图层
+    if (node.type === "instance" && !ui.expandedLayers[node.id]) return;
     for (const c of node.children) visit(c, depth + 1);
   };
   for (const c of docStore.doc.nodes[pageId].children) visit(c, 0);
@@ -51,8 +54,9 @@ const iconOf: Record<string, string> = {
   path: "pen",
   text: "text",
   group: "group",
-  component: "rect",
-  instance: "rect",
+  component: "component",
+  instance: "component",
+  slot: "slot",
 };
 
 /* ---------- 页面操作 ---------- */
@@ -120,7 +124,16 @@ function addPage() {
 
 function deletePage(page: DocNode) {
   if (pages.value.length <= 1) return;
-  if (!window.confirm(`删除页面「${page.name}」及其全部图层？`)) return;
+  let components = 0;
+  const visit = (id: NodeId) => {
+    const node = docStore.doc.nodes[id];
+    if (!node) return;
+    if (node.type === "component") components += 1;
+    for (const childId of node.children) visit(childId);
+  };
+  visit(page.id);
+  const extra = components ? `页面内有 ${components} 个主组件，引用它们的实例会自动脱离。` : "";
+  if (!window.confirm(`删除页面「${page.name}」及其全部图层？${extra}`)) return;
   dispatch({ type: "node.delete", params: { nodeId: page.id } }, "delete-page");
   if (ui.expandedPageId === page.id) ui.expandedPageId = docStore.doc.rootIds[0] ?? null;
   hooks.requestRedraw();
@@ -143,6 +156,15 @@ function onLayerClick(row: Row, e: MouseEvent) {
     select([row.node.id]);
     hooks.focusNode(row.node.id); // 选中 + 定位 + 脉冲标记
   }
+}
+
+function hasOverride(node: DocNode): boolean {
+  const patch = overridePatchOf(docStore.doc, node.id);
+  return Boolean(patch && Object.keys(patch).length);
+}
+
+function toggleLayer(id: NodeId): void {
+  ui.expandedLayers[id] = !ui.expandedLayers[id];
 }
 
 function onLayerDelete(id: NodeId) {
@@ -196,11 +218,25 @@ function onLayerDelete(id: NodeId) {
             :key="row.node.id"
             class="row"
             :class="{ selected: ui.selection.includes(row.node.id) }"
-            :style="{ paddingLeft: 24 + row.depth * 12 + 'px' }"
+            :style="{ paddingLeft: 18 + row.depth * 12 + 'px' }"
             @click="onLayerClick(row, $event)"
           >
+            <button
+              v-if="row.node.type === 'instance'"
+              class="disclosure"
+              :class="{ open: ui.expandedLayers[row.node.id] }"
+              title="展开 / 折叠"
+              @click.stop="toggleLayer(row.node.id)"
+            >
+              <Icon name="chevron" :size="10" />
+            </button>
+            <span v-else class="disclosure-spacer" />
             <Icon class="type" :name="iconOf[row.node.type] ?? 'rect'" :size="13" />
             <span class="name">{{ row.node.name }}</span>
+            <span v-if="row.node.type === 'slot'" class="slot-state">
+              {{ row.node.slotFilled ? "已填充" : row.node.children.length ? "默认" : "空插槽" }}
+            </span>
+            <span v-if="hasOverride(row.node)" class="ovr" title="有覆盖" />
             <button class="act" title="删除" @click.stop="onLayerDelete(row.node.id)"><Icon name="close" :size="11" /></button>
           </div>
         </div>
@@ -363,6 +399,47 @@ header {
   background: var(--accent-soft);
   color: var(--text);
   box-shadow: inset 2px 0 0 var(--accent);
+}
+
+.disclosure {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  transform: rotate(-90deg);
+  transition: transform var(--dur-fast) var(--ease);
+}
+
+.disclosure.open {
+  transform: rotate(0deg);
+}
+
+.disclosure-spacer {
+  flex: none;
+  width: 14px;
+}
+
+.ovr {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.slot-state {
+  flex: none;
+  font-size: 9.5px;
+  color: var(--text-faint);
+  border: 1px solid var(--hairline);
+  border-radius: 4px;
+  padding: 0 4px;
 }
 
 .type {

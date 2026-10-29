@@ -20,6 +20,7 @@ import {
   type VectorPath,
 } from "../src/vector";
 import { clampSides, hitPolygon, polygonPoints } from "../src/polygon";
+import { materializeInstance } from "../src/component";
 
 describe("命令系统", () => {
   it("创建 → 撤销 → 重做 后文档状态一致", () => {
@@ -450,5 +451,1293 @@ describe("命令原子性与参数不可变", () => {
     expect(path.parentId).toBeNull();
     // 文档里是归一化后的副本
     expect(store.doc.nodes[path.id].x).toBe(35);
+  });
+});
+
+describe("组件：创建与实例物化", () => {
+  function setup() {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const frame = createNode("frame", {
+      name: "卡片",
+      width: 200,
+      height: 120,
+      style: { fill: { token: "color/surface" } },
+    });
+    store.apply({ type: "node.create", params: { nodes: [frame], parentId: pageId } });
+    const title = createNode("text", {
+      name: "标题",
+      x: 10,
+      y: 10,
+      width: 80,
+      height: 24,
+      text: "标题",
+      style: { fill: { token: "color/text" } },
+    });
+    store.apply({ type: "node.create", params: { nodes: [title], parentId: frame.id } });
+    return { store, pageId, frame, title };
+  }
+
+  it("页面顶层的画板转为主组件，命名「组件 N」，撤销恢复", () => {
+    const { store, frame } = setup();
+    store.apply({ type: "component.create", params: { nodeIds: [frame.id] } });
+    expect(store.doc.nodes[frame.id].type).toBe("component");
+    expect(store.doc.nodes[frame.id].name).toBe("组件 1");
+    store.undo();
+    expect(store.doc.nodes[frame.id].type).toBe("frame");
+    expect(store.doc.nodes[frame.id].name).toBe("卡片");
+  });
+
+  it("嵌套画板转组件时提升到页面顶层，世界坐标不变", () => {
+    const { store, pageId, frame } = setup();
+    const nested = createNode("frame", { name: "内层画板", x: 15, y: 20, width: 60, height: 40 });
+    store.apply({ type: "node.create", params: { nodes: [nested], parentId: frame.id } });
+    const before = worldRect(store.doc, nested.id)!;
+
+    store.apply({ type: "component.create", params: { nodeIds: [nested.id] } });
+    const made = store.doc.nodes[nested.id];
+    expect(made.type).toBe("component");
+    expect(made.parentId).toBe(pageId);
+    const after = worldRect(store.doc, nested.id)!;
+    expect(after).toEqual(before);
+
+    store.undo();
+    expect(store.doc.nodes[nested.id].type).toBe("frame");
+    expect(store.doc.nodes[nested.id].parentId).toBe(frame.id);
+    expect(worldRect(store.doc, nested.id)).toEqual(before);
+  });
+
+  it("插入实例物化整棵子树，mainId 与派生 id 正确，撤销删整棵", () => {
+    const { store, pageId, frame, title } = setup();
+    store.apply({ type: "component.create", params: { nodeIds: [frame.id] } });
+    const instanceId = createNode("instance").id;
+    store.apply({
+      type: "instance.create",
+      params: { componentId: frame.id, parentId: pageId, nodeId: instanceId, x: 50, y: 60 },
+    });
+
+    const root = store.doc.nodes[instanceId];
+    expect(root.type).toBe("instance");
+    expect(root.componentId).toBe(frame.id);
+    expect(root.mainId).toBe(frame.id);
+    expect(root.x).toBe(50);
+    expect(root.y).toBe(60);
+    expect(root.width).toBe(200);
+    expect(root.style.fill).toEqual({ token: "color/surface" });
+    expect(root.children).toHaveLength(1);
+    expect(store.doc.nodes[pageId].children).toContain(instanceId);
+
+    const clone = store.doc.nodes[root.children[0]];
+    expect(clone.id).toBe(`${instanceId}:${title.id}`);
+    expect(clone.mainId).toBe(title.id);
+    expect(clone.parentId).toBe(instanceId);
+    expect(clone.text).toBe("标题");
+    expect(clone.style.fill).toEqual({ token: "color/text" });
+
+    store.undo();
+    expect(store.doc.nodes[instanceId]).toBeUndefined();
+    expect(store.doc.nodes[`${instanceId}:${title.id}`]).toBeUndefined();
+    expect(store.doc.nodes[pageId].children).not.toContain(instanceId);
+  });
+
+  it("组件不能直接或间接包含自身", () => {
+    const { store, frame } = setup();
+    store.apply({ type: "component.create", params: { nodeIds: [frame.id] } });
+    const before = JSON.stringify(store.doc);
+    const instanceId = createNode("instance").id;
+    expect(() =>
+      store.apply({
+        type: "instance.create",
+        params: { componentId: frame.id, parentId: frame.id, nodeId: instanceId, x: 0, y: 0 },
+      }),
+    ).toThrow(/包含自身/);
+    expect(JSON.stringify(store.doc)).toBe(before);
+  });
+
+  it("两个实例各自派生独立 id，互不串味", () => {
+    const { store, pageId, frame } = setup();
+    store.apply({ type: "component.create", params: { nodeIds: [frame.id] } });
+    const a = createNode("instance").id;
+    const b = createNode("instance").id;
+    store.apply({
+      type: "instance.create",
+      params: { componentId: frame.id, parentId: pageId, nodeId: a, x: 0, y: 0 },
+    });
+    store.apply({
+      type: "instance.create",
+      params: { componentId: frame.id, parentId: pageId, nodeId: b, x: 300, y: 0 },
+    });
+    const aChild = store.doc.nodes[a].children[0];
+    const bChild = store.doc.nodes[b].children[0];
+    expect(aChild.startsWith(`${a}:`)).toBe(true);
+    expect(bChild.startsWith(`${b}:`)).toBe(true);
+    expect(aChild).not.toBe(bChild);
+  });
+
+  it("同一实例重复物化得到完全相同的派生 id", () => {
+    const { store, pageId, frame } = setup();
+    store.apply({ type: "component.create", params: { nodeIds: [frame.id] } });
+    const ids = (): string[] =>
+      materializeInstance(store.doc, frame.id, "n_fixed", pageId, 0, 0).map((n) => n.id);
+    expect(ids()).toEqual(ids());
+  });
+});
+
+describe("组件：母版同步", () => {
+  function setup() {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const master = createNode("frame", {
+      name: "卡片",
+      width: 200,
+      height: 120,
+      style: { fill: { token: "color/surface" } },
+    });
+    store.apply({ type: "node.create", params: { nodes: [master], parentId: pageId } });
+    const label = createNode("text", {
+      name: "标题",
+      x: 10,
+      y: 10,
+      width: 80,
+      height: 24,
+      text: "标题",
+      style: { fill: { token: "color/text" } },
+    });
+    store.apply({ type: "node.create", params: { nodes: [label], parentId: master.id } });
+    store.apply({ type: "component.create", params: { nodeIds: [master.id] } });
+    const instanceId = createNode("instance").id;
+    store.apply({
+      type: "instance.create",
+      params: { componentId: master.id, parentId: pageId, nodeId: instanceId, x: 300, y: 0 },
+    });
+    return { store, pageId, master, label, instanceId, cloneId: `${instanceId}:${label.id}` };
+  }
+
+  it("母版文案改动同步到实例，一次撤销同时回退", () => {
+    const { store, label, cloneId } = setup();
+    store.apply({ type: "node.update", params: { nodeId: label.id, patch: { text: "新标题" } } });
+    expect(store.doc.nodes[cloneId].text).toBe("新标题");
+
+    store.undo();
+    expect(store.doc.nodes[label.id].text).toBe("标题");
+    expect(store.doc.nodes[cloneId].text).toBe("标题");
+
+    store.redo();
+    expect(store.doc.nodes[cloneId].text).toBe("新标题");
+  });
+
+  it("母版尺寸与样式同步到实例根", () => {
+    const { store, master, instanceId } = setup();
+    store.apply({
+      type: "node.update",
+      params: { nodeId: master.id, patch: { width: 260, style: { fill: { token: "color/primary" } } } },
+    });
+    expect(store.doc.nodes[instanceId].width).toBe(260);
+    expect(store.doc.nodes[instanceId].style.fill).toEqual({ token: "color/primary" });
+
+    store.undo();
+    expect(store.doc.nodes[instanceId].width).toBe(200);
+    expect(store.doc.nodes[instanceId].style.fill).toEqual({ token: "color/surface" });
+  });
+
+  it("母版新增、重排、删除子节点时实例跟随，派生 id 稳定", () => {
+    const { store, master, label, instanceId } = setup();
+    const extra = createNode("rect", { name: "角标", x: 5, y: 5, width: 20, height: 20 });
+    store.apply({ type: "node.create", params: { nodes: [extra], parentId: master.id } });
+    const extraClone = `${instanceId}:${extra.id}`;
+    expect(store.doc.nodes[instanceId].children).toContain(extraClone);
+    expect(store.doc.nodes[extraClone].mainId).toBe(extra.id);
+
+    // 重排
+    store.apply({
+      type: "node.update",
+      params: { nodeId: master.id, patch: { children: [extra.id, label.id] } },
+    });
+    expect(store.doc.nodes[instanceId].children).toEqual([extraClone, `${instanceId}:${label.id}`]);
+
+    // 删除
+    store.apply({ type: "node.delete", params: { nodeId: extra.id } });
+    expect(store.doc.nodes[extraClone]).toBeUndefined();
+    expect(store.doc.nodes[instanceId].children).toEqual([`${instanceId}:${label.id}`]);
+
+    // 撤销删除：母版与实例一起恢复
+    store.undo();
+    expect(store.doc.nodes[extra.id]).toBeTruthy();
+    expect(store.doc.nodes[extraClone]).toBeTruthy();
+  });
+
+  it("字段级覆盖在母版同步时保留", () => {
+    const { store, label, instanceId, cloneId } = setup();
+    store.apply({
+      type: "node.update",
+      params: {
+        nodeId: instanceId,
+        patch: { overrides: { [label.id]: { style: { fill: { token: "color/primary" } } } } },
+      },
+    });
+    // 覆盖只在下一次同步时落到克隆上
+    store.apply({ type: "node.update", params: { nodeId: label.id, patch: { text: "新标题" } } });
+    expect(store.doc.nodes[cloneId].text).toBe("新标题");
+    expect(store.doc.nodes[cloneId].style.fill).toEqual({ token: "color/primary" });
+
+    // 清掉覆盖后再次同步，回到母版样式
+    store.apply({ type: "node.update", params: { nodeId: instanceId, patch: { overrides: {} } } });
+    store.apply({ type: "node.update", params: { nodeId: label.id, patch: { text: "再改一次" } } });
+    expect(store.doc.nodes[cloneId].style.fill).toEqual({ token: "color/text" });
+  });
+
+  it("嵌套组件按依赖顺序级联同步，一次撤销全部回退", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+
+    const bMaster = createNode("frame", {
+      name: "B",
+      width: 100,
+      height: 50,
+      style: { fill: { token: "color/surface" } },
+    });
+    store.apply({ type: "node.create", params: { nodes: [bMaster], parentId: pageId } });
+    const bText = createNode("text", {
+      name: "B 文案",
+      x: 5,
+      y: 5,
+      width: 40,
+      height: 20,
+      text: "B",
+      style: { fill: { token: "color/text" } },
+    });
+    store.apply({ type: "node.create", params: { nodes: [bText], parentId: bMaster.id } });
+    store.apply({ type: "component.create", params: { nodeIds: [bMaster.id] } });
+
+    const aMaster = createNode("frame", {
+      name: "A",
+      width: 300,
+      height: 200,
+      style: { fill: { token: "color/surface" } },
+    });
+    store.apply({ type: "node.create", params: { nodes: [aMaster], parentId: pageId } });
+    store.apply({ type: "component.create", params: { nodeIds: [aMaster.id] } });
+
+    // A 母版里放一个 B 的实例
+    const bInA = createNode("instance").id;
+    store.apply({
+      type: "instance.create",
+      params: { componentId: bMaster.id, parentId: aMaster.id, nodeId: bInA, x: 20, y: 20 },
+    });
+
+    // A 的实例
+    const aInstance = createNode("instance").id;
+    store.apply({
+      type: "instance.create",
+      params: { componentId: aMaster.id, parentId: pageId, nodeId: aInstance, x: 500, y: 0 },
+    });
+    const nestedB = `${aInstance}:${bInA}`;
+    const nestedText = `${nestedB}:${bText.id}`;
+    expect(store.doc.nodes[nestedText].text).toBe("B");
+
+    // 改 B 的母版：B 的实例（含 A 母版里的那个）→ A 母版变化 → A 的实例
+    store.apply({ type: "node.update", params: { nodeId: bText.id, patch: { text: "B2" } } });
+    expect(store.doc.nodes[`${bInA}:${bText.id}`].text).toBe("B2");
+    expect(store.doc.nodes[nestedText].text).toBe("B2");
+    store.undo();
+    expect(store.doc.nodes[bText.id].text).toBe("B");
+    expect(store.doc.nodes[`${bInA}:${bText.id}`].text).toBe("B");
+    expect(store.doc.nodes[nestedText].text).toBe("B");
+  });
+});
+
+describe("组件：任意选区创建", () => {
+  function blank() {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    return { store, pageId };
+  }
+
+  it("多选包一层组件，尺寸取并集，世界坐标不变，一次撤销回退", () => {
+    const { store, pageId } = blank();
+    const frame = createNode("frame", {
+      name: "A",
+      x: 100,
+      y: 100,
+      width: 100,
+      height: 80,
+      style: { fill: { token: "color/surface" } },
+    });
+    const rect = createNode("rect", {
+      name: "B",
+      x: 250,
+      y: 160,
+      width: 60,
+      height: 40,
+      style: { fill: { token: "color/primary" } },
+    });
+    store.apply({ type: "node.create", params: { nodes: [frame], parentId: pageId } });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+    const worldFrame = worldRect(store.doc, frame.id)!;
+    const worldRectB = worldRect(store.doc, rect.id)!;
+
+    const componentId = createNode("component").id;
+    store.apply({
+      type: "component.create",
+      params: { nodeIds: [rect.id, frame.id], componentId },
+    });
+
+    const comp = store.doc.nodes[componentId];
+    expect(comp.type).toBe("component");
+    expect(comp.parentId).toBe(pageId);
+    expect(comp.x).toBe(100);
+    expect(comp.y).toBe(100);
+    expect(comp.width).toBe(210);
+    expect(comp.height).toBe(100);
+    expect(comp.children).toEqual([rect.id, frame.id]);
+    expect(worldRect(store.doc, rect.id)).toEqual(worldRectB);
+    expect(worldRect(store.doc, frame.id)).toEqual(worldFrame);
+
+    store.undo();
+    expect(store.doc.nodes[componentId]).toBeUndefined();
+    expect(store.doc.nodes[rect.id].parentId).toBe(pageId);
+    expect(store.doc.nodes[frame.id].parentId).toBe(pageId);
+    expect(worldRect(store.doc, rect.id)).toEqual(worldRectB);
+    expect(worldRect(store.doc, frame.id)).toEqual(worldFrame);
+  });
+
+  it("单个非容器节点也会被包成组件", () => {
+    const { store, pageId } = blank();
+    const rect = createNode("rect", { name: "R", x: 10, y: 20, width: 30, height: 40 });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+    const componentId = createNode("component").id;
+    store.apply({ type: "component.create", params: { nodeIds: [rect.id], componentId } });
+    const comp = store.doc.nodes[componentId];
+    expect(comp.width).toBe(30);
+    expect(comp.height).toBe(40);
+    expect(comp.children).toEqual([rect.id]);
+    expect(store.doc.nodes[rect.id].x).toBe(0);
+    expect(store.doc.nodes[rect.id].y).toBe(0);
+    expect(worldRect(store.doc, rect.id)).toEqual({ x: 10, y: 20, width: 30, height: 40 });
+  });
+
+  it("选区包含祖先与后代时只处理最外层节点", () => {
+    const { store, pageId } = blank();
+    const frame = createNode("frame", { name: "A", x: 0, y: 0, width: 100, height: 100 });
+    store.apply({ type: "node.create", params: { nodes: [frame], parentId: pageId } });
+    const child = createNode("rect", { name: "B", x: 10, y: 10, width: 20, height: 20 });
+    store.apply({ type: "node.create", params: { nodes: [child], parentId: frame.id } });
+
+    store.apply({ type: "component.create", params: { nodeIds: [frame.id, child.id] } });
+    expect(store.doc.nodes[frame.id].type).toBe("component");
+    expect(store.doc.nodes[child.id].parentId).toBe(frame.id);
+    expect(store.doc.nodes[frame.id].children).toEqual([child.id]);
+  });
+
+  it("跨页面选区与组件嵌套组件都被拒绝，且文档不变", () => {
+    const { store, pageId } = blank();
+    const page2 = createNode("page", { name: "页面 2", x: 2000, width: 800, height: 600 });
+    store.apply({ type: "node.create", params: { nodes: [page2], parentId: null } });
+    const a = createNode("rect", { name: "A", width: 10, height: 10 });
+    const b = createNode("rect", { name: "B", width: 10, height: 10 });
+    store.apply({ type: "node.create", params: { nodes: [a], parentId: pageId } });
+    store.apply({ type: "node.create", params: { nodes: [b], parentId: page2.id } });
+
+    const before = JSON.stringify(store.doc);
+    expect(() =>
+      store.apply({
+        type: "component.create",
+        params: { nodeIds: [a.id, b.id], componentId: createNode("component").id },
+      }),
+    ).toThrow(/同一页面/);
+    expect(JSON.stringify(store.doc)).toBe(before);
+
+    const nestedMaster = createNode("frame", { name: "母版", width: 50, height: 50 });
+    store.apply({ type: "node.create", params: { nodes: [nestedMaster], parentId: pageId } });
+    store.apply({ type: "component.create", params: { nodeIds: [nestedMaster.id] } });
+    const inner = createNode("frame", { name: "内层", width: 20, height: 20 });
+    store.apply({ type: "node.create", params: { nodes: [inner], parentId: nestedMaster.id } });
+    expect(() => store.apply({ type: "component.create", params: { nodeIds: [inner.id] } })).toThrow(
+      /组件不能嵌套组件/,
+    );
+    expect(store.doc.nodes[inner.id].type).toBe("frame");
+  });
+});
+
+describe("组件：实例覆盖", () => {
+  function setup() {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const master = createNode("frame", {
+      name: "卡片",
+      width: 200,
+      height: 120,
+      style: { fill: { token: "color/surface" } },
+    });
+    store.apply({ type: "node.create", params: { nodes: [master], parentId: pageId } });
+    const label = createNode("text", {
+      name: "标题",
+      x: 10,
+      y: 10,
+      width: 80,
+      height: 24,
+      text: "标题",
+      style: { fill: { token: "color/text" } },
+    });
+    store.apply({ type: "node.create", params: { nodes: [label], parentId: master.id } });
+    store.apply({ type: "component.create", params: { nodeIds: [master.id] } });
+    const instanceId = createNode("instance").id;
+    store.apply({
+      type: "instance.create",
+      params: { componentId: master.id, parentId: pageId, nodeId: instanceId, x: 300, y: 0 },
+    });
+    return { store, pageId, master, label, instanceId, cloneId: `${instanceId}:${label.id}` };
+  }
+
+  it("编辑实例内部字段写入覆盖，改回母版值自动清除，撤销一致", () => {
+    const { store, label, instanceId, cloneId } = setup();
+    store.apply({ type: "node.update", params: { nodeId: cloneId, patch: { text: "实例文案" } } });
+    expect(store.doc.nodes[instanceId].overrides?.[label.id]?.text).toBe("实例文案");
+
+    store.apply({ type: "node.update", params: { nodeId: cloneId, patch: { text: "标题" } } });
+    expect(store.doc.nodes[instanceId].overrides?.[label.id]).toBeUndefined();
+
+    // 撤销回到「有覆盖」状态
+    store.undo();
+    expect(store.doc.nodes[cloneId].text).toBe("实例文案");
+    expect(store.doc.nodes[instanceId].overrides?.[label.id]?.text).toBe("实例文案");
+    store.undo();
+    expect(store.doc.nodes[cloneId].text).toBe("标题");
+    expect(store.doc.nodes[instanceId].overrides?.[label.id]).toBeUndefined();
+  });
+
+  it("样式覆盖按子字段记录，母版改其它字段仍然同步", () => {
+    const { store, label, instanceId, cloneId } = setup();
+    const clone = store.doc.nodes[cloneId];
+    store.apply({
+      type: "node.update",
+      params: { nodeId: cloneId, patch: { style: { ...clone.style, fill: { token: "color/primary" } } } },
+    });
+    expect(store.doc.nodes[instanceId].overrides?.[label.id]?.style).toEqual({
+      fill: { token: "color/primary" },
+    });
+
+    store.apply({ type: "node.update", params: { nodeId: label.id, patch: { text: "新标题" } } });
+    expect(store.doc.nodes[cloneId].text).toBe("新标题");
+    expect(store.doc.nodes[cloneId].style.fill).toEqual({ token: "color/primary" });
+  });
+
+  it("实例根的尺寸覆盖优先于母版同步，可逐字段重置", () => {
+    const { store, master, instanceId } = setup();
+    store.apply({ type: "node.update", params: { nodeId: instanceId, patch: { width: 400 } } });
+    expect(store.doc.nodes[instanceId].overrides?.[master.id]?.width).toBe(400);
+
+    store.apply({ type: "node.update", params: { nodeId: master.id, patch: { width: 260 } } });
+    expect(store.doc.nodes[instanceId].width).toBe(400);
+
+    store.apply({
+      type: "instance.resetOverride",
+      params: { instanceId, mainId: master.id, fields: ["width"] },
+    });
+    expect(store.doc.nodes[instanceId].width).toBe(260);
+    expect(store.doc.nodes[instanceId].overrides?.[master.id]).toBeUndefined();
+  });
+
+  it("属性绑定的字段不写覆盖", () => {
+    const { store, master, label, instanceId, cloneId } = setup();
+    store.apply({
+      type: "node.update",
+      params: {
+        nodeId: master.id,
+        patch: {
+          propertyDefs: [{ id: "p1", name: "标题", type: "text", targetMainId: label.id }],
+        },
+      },
+    });
+    store.apply({ type: "node.update", params: { nodeId: cloneId, patch: { text: "属性文案" } } });
+    expect(store.doc.nodes[instanceId].overrides?.[label.id]).toBeUndefined();
+  });
+
+  it("实例名跟随母版改名，手动改名后不再跟随", () => {
+    const { store, master, instanceId } = setup();
+    store.apply({ type: "node.update", params: { nodeId: master.id, patch: { name: "按钮" } } });
+    expect(store.doc.nodes[instanceId].name).toBe("按钮");
+
+    store.apply({ type: "node.update", params: { nodeId: instanceId, patch: { name: "主按钮" } } });
+    expect(store.doc.nodes[instanceId].overrides?.[master.id]?.name).toBe("主按钮");
+
+    store.apply({ type: "node.update", params: { nodeId: master.id, patch: { name: "新按钮" } } });
+    expect(store.doc.nodes[instanceId].name).toBe("主按钮");
+
+    store.apply({
+      type: "instance.resetOverride",
+      params: { instanceId, mainId: master.id, fields: ["name"] },
+    });
+    expect(store.doc.nodes[instanceId].name).toBe("新按钮");
+  });
+
+  it("全部重置恢复所有覆盖字段，撤销可整体回退", () => {
+    const { store, master, label, instanceId, cloneId } = setup();
+    store.apply({ type: "node.update", params: { nodeId: cloneId, patch: { text: "实例文案" } } });
+    store.apply({ type: "node.update", params: { nodeId: instanceId, patch: { width: 400 } } });
+    expect(Object.keys(store.doc.nodes[instanceId].overrides ?? {})).toHaveLength(2);
+
+    store.apply({ type: "instance.resetOverride", params: { instanceId } });
+    expect(store.doc.nodes[instanceId].width).toBe(200);
+    expect(store.doc.nodes[cloneId].text).toBe("标题");
+    expect(store.doc.nodes[instanceId].overrides).toBeUndefined();
+
+    store.undo();
+    expect(store.doc.nodes[instanceId].width).toBe(400);
+    expect(store.doc.nodes[cloneId].text).toBe("实例文案");
+    expect(store.doc.nodes[instanceId].overrides?.[label.id]?.text).toBe("实例文案");
+    expect(store.doc.nodes[instanceId].overrides?.[master.id]?.width).toBe(400);
+  });
+});
+
+describe("组件：插槽", () => {
+  function setup() {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const master = createNode("frame", {
+      name: "卡片",
+      width: 300,
+      height: 200,
+      style: { fill: { token: "color/surface" } },
+    });
+    store.apply({ type: "node.create", params: { nodes: [master], parentId: pageId } });
+    const content = createNode("frame", { name: "内容区", x: 20, y: 60, width: 260, height: 120 });
+    store.apply({ type: "node.create", params: { nodes: [content], parentId: master.id } });
+    const label = createNode("text", {
+      name: "默认文案",
+      x: 10,
+      y: 10,
+      width: 80,
+      height: 24,
+      text: "默认文案",
+      style: { fill: { token: "color/text" } },
+    });
+    store.apply({ type: "node.create", params: { nodes: [label], parentId: content.id } });
+    store.apply({ type: "component.create", params: { nodeIds: [master.id] } });
+    store.apply({ type: "slot.create", params: { nodeId: content.id, name: "body" } });
+
+    const instanceId = createNode("instance").id;
+    store.apply({
+      type: "instance.create",
+      params: { componentId: master.id, parentId: pageId, nodeId: instanceId, x: 400, y: 0 },
+    });
+    const slotClone = `${instanceId}:${content.id}`;
+    const labelClone = `${slotClone}:${label.id}`;
+
+    const rect = createNode("rect", {
+      name: "用户内容",
+      x: 600,
+      y: 400,
+      width: 80,
+      height: 40,
+      style: { fill: { token: "color/primary" } },
+    });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+    return { store, pageId, master, content, label, instanceId, slotClone, labelClone, rect };
+  }
+
+  it("容器转插槽保留默认内容，实例物化出未填充插槽", () => {
+    const { store, content, slotClone, labelClone } = setup();
+    expect(store.doc.nodes[content.id].type).toBe("slot");
+    expect(store.doc.nodes[content.id].name).toBe("body");
+    const slot = store.doc.nodes[slotClone];
+    expect(slot.type).toBe("slot");
+    expect(slot.mainId).toBe(content.id);
+    expect(slot.slotFilled).toBeUndefined();
+    expect(slot.children).toEqual([labelClone]);
+    expect(store.doc.nodes[labelClone].mainId).toBe(store.doc.nodes[labelClone].mainId);
+  });
+
+  it("母版默认内容、插槽名与尺寸同步到未填充实例", () => {
+    const { store, content, label, slotClone, labelClone } = setup();
+    store.apply({ type: "node.update", params: { nodeId: label.id, patch: { text: "新默认" } } });
+    expect(store.doc.nodes[labelClone].text).toBe("新默认");
+
+    store.apply({ type: "node.update", params: { nodeId: content.id, patch: { name: "footer" } } });
+    expect(store.doc.nodes[slotClone].name).toBe("footer");
+
+    store.apply({ type: "node.update", params: { nodeId: content.id, patch: { width: 240 } } });
+    expect(store.doc.nodes[slotClone].width).toBe(240);
+  });
+
+  it("填充替换默认内容，母版同步不覆盖已填充内容，撤销恢复", () => {
+    const { store, slotClone, labelClone, rect } = setup();
+    const before = worldRect(store.doc, rect.id)!;
+    store.apply({ type: "slot.fill", params: { slotId: slotClone, nodeIds: [rect.id] } });
+
+    const slot = store.doc.nodes[slotClone];
+    expect(slot.slotFilled).toBe(true);
+    expect(slot.children).toEqual([rect.id]);
+    expect(store.doc.nodes[labelClone]).toBeUndefined();
+    expect(store.doc.nodes[rect.id].parentId).toBe(slotClone);
+    expect(worldRect(store.doc, rect.id)).toEqual(before);
+
+    // 母版默认内容变化不影响已填充插槽
+    store.apply({ type: "node.update", params: { nodeId: store.doc.nodes[slotClone].mainId!, patch: { name: "body2" } } });
+    expect(store.doc.nodes[slotClone].name).toBe("body2");
+    expect(store.doc.nodes[slotClone].children).toEqual([rect.id]);
+
+    store.undo();
+    expect(store.doc.nodes[slotClone].name).toBe("body");
+    store.undo();
+    expect(store.doc.nodes[slotClone].slotFilled).toBeUndefined();
+    expect(store.doc.nodes[slotClone].children).toEqual([labelClone]);
+    expect(store.doc.nodes[rect.id].parentId).not.toBe(slotClone);
+  });
+
+  it("清空插槽恢复默认内容，撤销回到已填充", () => {
+    const { store, slotClone, labelClone, rect } = setup();
+    store.apply({ type: "slot.fill", params: { slotId: slotClone, nodeIds: [rect.id] } });
+    store.apply({ type: "slot.clear", params: { slotId: slotClone } });
+
+    const slot = store.doc.nodes[slotClone];
+    expect(slot.slotFilled).toBe(false);
+    expect(slot.children).toEqual([labelClone]);
+    expect(store.doc.nodes[labelClone].text).toBe("默认文案");
+    expect(store.doc.nodes[rect.id]).toBeUndefined();
+
+    store.undo();
+    expect(store.doc.nodes[slotClone].slotFilled).toBe(true);
+    expect(store.doc.nodes[slotClone].children).toEqual([rect.id]);
+    expect(store.doc.nodes[rect.id]).toBeTruthy();
+  });
+
+  it("删除已填充的母版插槽被拒绝，清空后允许", () => {
+    const { store, content, slotClone, rect } = setup();
+    store.apply({ type: "slot.fill", params: { slotId: slotClone, nodeIds: [rect.id] } });
+    const before = JSON.stringify(store.doc);
+    expect(() => store.apply({ type: "node.delete", params: { nodeId: content.id } })).toThrow(/已被实例填充/);
+    expect(JSON.stringify(store.doc)).toBe(before);
+
+    store.apply({ type: "slot.clear", params: { slotId: slotClone } });
+    store.apply({ type: "node.delete", params: { nodeId: content.id } });
+    expect(store.doc.nodes[content.id]).toBeUndefined();
+    expect(store.doc.nodes[slotClone]).toBeUndefined();
+  });
+
+  it("在未填充的实例插槽里新建节点会替换默认内容并标记已填充", () => {
+    const { store, slotClone, labelClone } = setup();
+    const created = createNode("rect", { name: "新建内容", x: 5, y: 5, width: 20, height: 20 });
+    store.apply({ type: "node.create", params: { nodes: [created], parentId: slotClone } });
+    expect(store.doc.nodes[slotClone].slotFilled).toBe(true);
+    expect(store.doc.nodes[slotClone].children).toEqual([created.id]);
+    expect(store.doc.nodes[labelClone]).toBeUndefined();
+    expect(store.doc.nodes[created.id].parentId).toBe(slotClone);
+  });
+
+  it("插槽名唯一、不能嵌套插槽、实例内不能创建插槽", () => {
+    const { store, master, content, instanceId } = setup();
+    const other = createNode("frame", { name: "其它区", x: 20, y: 20, width: 100, height: 30 });
+    store.apply({ type: "node.create", params: { nodes: [other], parentId: master.id } });
+    store.apply({ type: "slot.create", params: { nodeId: other.id, name: "footer" } });
+    expect(() => store.apply({ type: "node.update", params: { nodeId: content.id, patch: { name: "footer" } } })).toThrow(
+      /已存在/,
+    );
+
+    const wrapper = createNode("frame", { name: "包裹", x: 0, y: 0, width: 100, height: 100 });
+    store.apply({ type: "node.create", params: { nodes: [wrapper], parentId: master.id } });
+    store.apply({
+      type: "node.reparent",
+      params: { nodeId: content.id, parentId: wrapper.id, x: 0, y: 0 },
+    });
+    expect(() => store.apply({ type: "slot.create", params: { nodeId: wrapper.id } })).toThrow(/不能嵌套插槽/);
+
+    const extra = createNode("frame", { name: "额外区", x: 0, y: 0, width: 20, height: 20 });
+    store.apply({ type: "node.create", params: { nodes: [extra], parentId: master.id } });
+    const extraClone = `${instanceId}:${extra.id}`;
+    expect(store.doc.nodes[extraClone].type).toBe("frame");
+    expect(() => store.apply({ type: "slot.create", params: { nodeId: extraClone } })).toThrow(/实例内部/);
+
+    const outside = createNode("frame", { name: "页面画板", x: 900, y: 0, width: 50, height: 50 });
+    store.apply({ type: "node.create", params: { nodes: [outside], parentId: store.doc.rootIds[0] } });
+    expect(() => store.apply({ type: "slot.create", params: { nodeId: outside.id } })).toThrow(/主组件内/);
+  });
+});
+
+describe("组件：属性", () => {
+  function setup() {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const master = createNode("frame", {
+      name: "卡片",
+      width: 300,
+      height: 200,
+      style: { fill: { token: "color/surface" } },
+    });
+    store.apply({ type: "node.create", params: { nodes: [master], parentId: pageId } });
+    const label = createNode("text", {
+      name: "标题",
+      x: 10,
+      y: 10,
+      width: 80,
+      height: 24,
+      text: "标题",
+      style: { fill: { token: "color/text" } },
+    });
+    store.apply({ type: "node.create", params: { nodes: [label], parentId: master.id } });
+    const badge = createNode("rect", {
+      name: "角标",
+      x: 200,
+      y: 10,
+      width: 40,
+      height: 20,
+      style: { fill: { token: "color/primary" } },
+    });
+    store.apply({ type: "node.create", params: { nodes: [badge], parentId: master.id } });
+    store.apply({ type: "component.create", params: { nodeIds: [master.id] } });
+    const instanceId = createNode("instance").id;
+    store.apply({
+      type: "instance.create",
+      params: { componentId: master.id, parentId: pageId, nodeId: instanceId, x: 400, y: 0 },
+    });
+    return {
+      store,
+      pageId,
+      master,
+      label,
+      badge,
+      instanceId,
+      labelClone: `${instanceId}:${label.id}`,
+      badgeClone: `${instanceId}:${badge.id}`,
+    };
+  }
+
+  it("文本属性优先于母版与覆盖；清除后回落母版", () => {
+    const { store, master, label, instanceId, labelClone } = setup();
+    // 先制造一个文本覆盖
+    store.apply({ type: "node.update", params: { nodeId: labelClone, patch: { text: "旧覆盖" } } });
+    expect(store.doc.nodes[instanceId].overrides?.[label.id]?.text).toBe("旧覆盖");
+
+    store.apply({
+      type: "property.define",
+      params: { componentId: master.id, targetMainId: label.id, id: "p_text", type: "text" },
+    });
+    // 属性创建时清掉同字段的旧覆盖，并回到母版值
+    expect(store.doc.nodes[instanceId].overrides?.[label.id]).toBeUndefined();
+    expect(store.doc.nodes[labelClone].text).toBe("标题");
+    expect(store.doc.nodes[master.id].propertyDefs?.[0]).toMatchObject({
+      id: "p_text",
+      name: "标题",
+      type: "text",
+      targetMainId: label.id,
+    });
+
+    store.apply({ type: "property.set", params: { instanceId, propertyId: "p_text", value: "实例标题" } });
+    expect(store.doc.nodes[labelClone].text).toBe("实例标题");
+    expect(store.doc.nodes[instanceId].overrides?.[label.id]?.text).toBeUndefined();
+
+    // 母版文案变了，属性值仍然优先
+    store.apply({ type: "node.update", params: { nodeId: label.id, patch: { text: "新母版" } } });
+    expect(store.doc.nodes[labelClone].text).toBe("实例标题");
+
+    // 清除属性值 → 回落母版
+    store.apply({ type: "property.set", params: { instanceId, propertyId: "p_text", value: null } });
+    expect(store.doc.nodes[labelClone].text).toBe("新母版");
+
+    store.undo();
+    expect(store.doc.nodes[labelClone].text).toBe("实例标题");
+  });
+
+  it("布尔属性控制图层可见性", () => {
+    const { store, master, badge, instanceId, badgeClone } = setup();
+    store.apply({
+      type: "property.define",
+      params: { componentId: master.id, targetMainId: badge.id, id: "p_badge", type: "boolean" },
+    });
+    store.apply({ type: "property.set", params: { instanceId, propertyId: "p_badge", value: false } });
+    expect(store.doc.nodes[badgeClone].visible).toBe(false);
+    store.apply({ type: "property.set", params: { instanceId, propertyId: "p_badge", value: null } });
+    expect(store.doc.nodes[badgeClone].visible).toBe(true);
+  });
+
+  it("属性改名保留实例值；删除属性回落母版并清掉实例值", () => {
+    const { store, master, label, instanceId, labelClone } = setup();
+    store.apply({
+      type: "property.define",
+      params: { componentId: master.id, targetMainId: label.id, id: "p_text", type: "text" },
+    });
+    store.apply({ type: "property.set", params: { instanceId, propertyId: "p_text", value: "实例标题" } });
+    store.apply({ type: "property.rename", params: { componentId: master.id, propertyId: "p_text", name: "主标题" } });
+    expect(store.doc.nodes[labelClone].text).toBe("实例标题");
+    expect(store.doc.nodes[master.id].propertyDefs?.[0].name).toBe("主标题");
+
+    store.apply({ type: "property.delete", params: { componentId: master.id, propertyId: "p_text" } });
+    expect(store.doc.nodes[master.id].propertyDefs).toBeUndefined();
+    expect(store.doc.nodes[instanceId].propValues).toBeUndefined();
+    expect(store.doc.nodes[labelClone].text).toBe("标题");
+
+    store.undo();
+    expect(store.doc.nodes[master.id].propertyDefs?.[0].id).toBe("p_text");
+    expect(store.doc.nodes[instanceId].propValues?.p_text).toBe("实例标题");
+    expect(store.doc.nodes[labelClone].text).toBe("实例标题");
+  });
+
+  it("属性定义校验类型、目标与重名", () => {
+    const { store, master, label, badge } = setup();
+    expect(() =>
+      store.apply({
+        type: "property.define",
+        params: { componentId: master.id, targetMainId: badge.id, id: "p1", type: "text" },
+      }),
+    ).toThrow(/文本图层/);
+    expect(() =>
+      store.apply({
+        type: "property.define",
+        params: { componentId: master.id, targetMainId: label.id, id: "p1", type: "instance" },
+      }),
+    ).toThrow(/嵌套实例/);
+    store.apply({
+      type: "property.define",
+      params: { componentId: master.id, targetMainId: label.id, id: "p1", type: "text", name: "标题" },
+    });
+    expect(() =>
+      store.apply({
+        type: "property.define",
+        params: { componentId: master.id, targetMainId: label.id, id: "p2", type: "text" },
+      }),
+    ).toThrow(/已经有组件属性/);
+    expect(() =>
+      store.apply({
+        type: "property.define",
+        params: { componentId: master.id, targetMainId: badge.id, id: "p2", type: "boolean", name: "标题" },
+      }),
+    ).toThrow(/已存在/);
+  });
+
+  it("实例替换属性切换嵌套实例，清除后回到默认组件", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+
+    const bMaster = createNode("frame", { name: "B", width: 100, height: 50 });
+    store.apply({ type: "node.create", params: { nodes: [bMaster], parentId: pageId } });
+    const bText = createNode("text", { name: "B 文案", x: 5, y: 5, width: 40, height: 20, text: "B" });
+    store.apply({ type: "node.create", params: { nodes: [bText], parentId: bMaster.id } });
+    store.apply({ type: "component.create", params: { nodeIds: [bMaster.id] } });
+
+    const cMaster = createNode("frame", { name: "C", width: 180, height: 80 });
+    store.apply({ type: "node.create", params: { nodes: [cMaster], parentId: pageId } });
+    const cRect = createNode("rect", { name: "C 内容", width: 60, height: 30 });
+    store.apply({ type: "node.create", params: { nodes: [cRect], parentId: cMaster.id } });
+    store.apply({ type: "component.create", params: { nodeIds: [cMaster.id] } });
+
+    const aMaster = createNode("frame", { name: "A", width: 300, height: 200 });
+    store.apply({ type: "node.create", params: { nodes: [aMaster], parentId: pageId } });
+    store.apply({ type: "component.create", params: { nodeIds: [aMaster.id] } });
+    const bInA = createNode("instance").id;
+    store.apply({
+      type: "instance.create",
+      params: { componentId: bMaster.id, parentId: aMaster.id, nodeId: bInA, x: 10, y: 10 },
+    });
+    store.apply({
+      type: "property.define",
+      params: { componentId: aMaster.id, targetMainId: bInA, id: "p_inst", type: "instance" },
+    });
+
+    const aInstance = createNode("instance").id;
+    store.apply({
+      type: "instance.create",
+      params: { componentId: aMaster.id, parentId: pageId, nodeId: aInstance, x: 500, y: 0 },
+    });
+    const nestedB = `${aInstance}:${bInA}`;
+    expect(store.doc.nodes[nestedB].componentId).toBe(bMaster.id);
+    expect(store.doc.nodes[nestedB].children).toEqual([`${nestedB}:${bText.id}`]);
+
+    store.apply({ type: "property.set", params: { instanceId: aInstance, propertyId: "p_inst", value: cMaster.id } });
+    expect(store.doc.nodes[nestedB].componentId).toBe(cMaster.id);
+    expect(store.doc.nodes[nestedB].width).toBe(180);
+    expect(store.doc.nodes[nestedB].height).toBe(80);
+    expect(store.doc.nodes[nestedB].children).toEqual([`${nestedB}:${cRect.id}`]);
+
+    store.apply({ type: "property.set", params: { instanceId: aInstance, propertyId: "p_inst", value: null } });
+    expect(store.doc.nodes[nestedB].componentId).toBe(bMaster.id);
+    expect(store.doc.nodes[nestedB].children).toEqual([`${nestedB}:${bText.id}`]);
+
+    // 换成包含 A 的组件会形成循环
+    expect(() =>
+      store.apply({ type: "property.set", params: { instanceId: aInstance, propertyId: "p_inst", value: aMaster.id } }),
+    ).toThrow(/循环/);
+  });
+});
+
+describe("组件：属性目标删除", () => {
+  it("删除母版目标图层时属性与实例值一起清理，撤销恢复", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const master = createNode("frame", { name: "卡片", width: 200, height: 120 });
+    store.apply({ type: "node.create", params: { nodes: [master], parentId: pageId } });
+    const label = createNode("text", { name: "标题", width: 80, height: 24, text: "标题" });
+    store.apply({ type: "node.create", params: { nodes: [label], parentId: master.id } });
+    store.apply({ type: "component.create", params: { nodeIds: [master.id] } });
+    const instanceId = createNode("instance").id;
+    store.apply({
+      type: "instance.create",
+      params: { componentId: master.id, parentId: pageId, nodeId: instanceId, x: 300, y: 0 },
+    });
+    const cloneId = `${instanceId}:${label.id}`;
+    store.apply({
+      type: "property.define",
+      params: { componentId: master.id, targetMainId: label.id, id: "p_text", type: "text" },
+    });
+    store.apply({ type: "property.set", params: { instanceId, propertyId: "p_text", value: "实例标题" } });
+
+    store.apply({ type: "node.delete", params: { nodeId: label.id } });
+    expect(store.doc.nodes[master.id].propertyDefs).toBeUndefined();
+    expect(store.doc.nodes[instanceId].propValues).toBeUndefined();
+    expect(store.doc.nodes[cloneId]).toBeUndefined();
+
+    store.undo();
+    expect(store.doc.nodes[label.id]).toBeTruthy();
+    expect(store.doc.nodes[master.id].propertyDefs?.[0]?.id).toBe("p_text");
+    expect(store.doc.nodes[instanceId].propValues?.p_text).toBe("实例标题");
+    expect(store.doc.nodes[cloneId]?.text).toBe("实例标题");
+  });
+});
+
+describe("组件：替换、脱离与删除", () => {
+  function makeComponent(store: DocStore, pageId: string, name: string, w = 200, h = 100) {
+    const master = createNode("frame", { name, width: w, height: h });
+    store.apply({ type: "node.create", params: { nodes: [master], parentId: pageId } });
+    const body = createNode("frame", { name: "body", x: 10, y: 10, width: w - 20, height: h - 20 });
+    store.apply({ type: "node.create", params: { nodes: [body], parentId: master.id } });
+    store.apply({ type: "component.create", params: { nodeIds: [master.id] } });
+    store.apply({ type: "slot.create", params: { nodeId: body.id, name: "body" } });
+    return { master, body };
+  }
+
+  function setupFilled() {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const a = makeComponent(store, pageId, "A", 200, 100);
+    const c = makeComponent(store, pageId, "C", 240, 120);
+    const instanceId = createNode("instance").id;
+    store.apply({
+      type: "instance.create",
+      params: { componentId: a.master.id, parentId: pageId, nodeId: instanceId, x: 400, y: 0 },
+    });
+    const slotClone = `${instanceId}:${a.body.id}`;
+    const content = createNode("rect", { name: "内容", x: 700, y: 400, width: 50, height: 30 });
+    store.apply({ type: "node.create", params: { nodes: [content], parentId: pageId } });
+    store.apply({ type: "slot.fill", params: { slotId: slotClone, nodeIds: [content.id] } });
+    return { store, pageId, a, c, instanceId, slotClone, content };
+  }
+
+  it("替换组件保留同名已填充插槽内容，尺寸取新组件，可撤销", () => {
+    const { store, a, c, instanceId, slotClone, content } = setupFilled();
+    store.apply({ type: "instance.swap", params: { instanceId, componentId: c.master.id } });
+
+    const root = store.doc.nodes[instanceId];
+    expect(root.componentId).toBe(c.master.id);
+    expect(root.mainId).toBe(c.master.id);
+    expect(root.width).toBe(240);
+    expect(root.height).toBe(120);
+    expect(root.overrides).toBeUndefined();
+    expect(root.children).toEqual([slotClone]);
+
+    const slot = store.doc.nodes[slotClone];
+    expect(slot.mainId).toBe(c.body.id);
+    expect(slot.slotFilled).toBe(true);
+    expect(slot.children).toEqual([content.id]);
+    expect(store.doc.nodes[content.id].parentId).toBe(slotClone);
+
+    store.undo();
+    expect(store.doc.nodes[instanceId].componentId).toBe(a.master.id);
+    expect(store.doc.nodes[instanceId].width).toBe(200);
+    expect(store.doc.nodes[slotClone].slotFilled).toBe(true);
+    expect(store.doc.nodes[content.id]).toBeTruthy();
+  });
+
+  it("替换到没有同名插槽的组件时旧内容删除，撤销恢复", () => {
+    const { store, pageId, instanceId, slotClone, content } = setupFilled();
+    const d = createNode("frame", { name: "D", width: 120, height: 60 });
+    store.apply({ type: "node.create", params: { nodes: [d], parentId: pageId } });
+    store.apply({ type: "component.create", params: { nodeIds: [d.id] } });
+
+    store.apply({ type: "instance.swap", params: { instanceId, componentId: d.id } });
+    expect(store.doc.nodes[instanceId].children).toEqual([]);
+    expect(store.doc.nodes[slotClone]).toBeUndefined();
+    expect(store.doc.nodes[content.id]).toBeUndefined();
+
+    store.undo();
+    expect(store.doc.nodes[slotClone].slotFilled).toBe(true);
+    expect(store.doc.nodes[content.id]).toBeTruthy();
+  });
+
+  it("脱离实例：根转画板、插槽转容器、空槽删除、嵌套实例保留，可撤销", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+
+    // B 组件（嵌套实例用）
+    const bMaster = createNode("frame", { name: "B", width: 80, height: 40 });
+    store.apply({ type: "node.create", params: { nodes: [bMaster], parentId: pageId } });
+    store.apply({ type: "component.create", params: { nodeIds: [bMaster.id] } });
+
+    // A 组件：一个有内容的插槽 + 一个空插槽 + 一个 B 实例
+    const aMaster = createNode("frame", { name: "A", width: 300, height: 200 });
+    store.apply({ type: "node.create", params: { nodes: [aMaster], parentId: pageId } });
+    const body = createNode("frame", { name: "body", x: 10, y: 10, width: 200, height: 80 });
+    store.apply({ type: "node.create", params: { nodes: [body], parentId: aMaster.id } });
+    const empty = createNode("frame", { name: "footer", x: 10, y: 120, width: 200, height: 50 });
+    store.apply({ type: "node.create", params: { nodes: [empty], parentId: aMaster.id } });
+    store.apply({ type: "component.create", params: { nodeIds: [aMaster.id] } });
+    store.apply({ type: "slot.create", params: { nodeId: body.id, name: "body" } });
+    store.apply({ type: "slot.create", params: { nodeId: empty.id, name: "footer" } });
+    const bInA = createNode("instance").id;
+    store.apply({
+      type: "instance.create",
+      params: { componentId: bMaster.id, parentId: aMaster.id, nodeId: bInA, x: 230, y: 20 },
+    });
+
+    const instanceId = createNode("instance").id;
+    store.apply({
+      type: "instance.create",
+      params: { componentId: aMaster.id, parentId: pageId, nodeId: instanceId, x: 500, y: 0 },
+    });
+    const bodyClone = `${instanceId}:${body.id}`;
+    const emptyClone = `${instanceId}:${empty.id}`;
+    const bClone = `${instanceId}:${bInA}`;
+    const user = createNode("rect", { name: "用户内容", x: 900, y: 400, width: 40, height: 20 });
+    store.apply({ type: "node.create", params: { nodes: [user], parentId: pageId } });
+    store.apply({ type: "slot.fill", params: { slotId: bodyClone, nodeIds: [user.id] } });
+
+    store.apply({ type: "component.detach", params: { instanceId } });
+    const root = store.doc.nodes[instanceId];
+    expect(root.type).toBe("frame");
+    expect(root.componentId).toBeUndefined();
+    expect(root.mainId).toBeUndefined();
+    expect(root.overrides).toBeUndefined();
+    expect(root.width).toBe(300);
+    expect(store.doc.nodes[bodyClone].type).toBe("frame");
+    expect(store.doc.nodes[bodyClone].children).toEqual([user.id]);
+    expect(store.doc.nodes[emptyClone]).toBeUndefined();
+    expect(store.doc.nodes[bClone].type).toBe("instance");
+    expect(store.doc.nodes[bClone].componentId).toBe(bMaster.id);
+    expect(store.doc.nodes[bClone].mainId).toBe(bMaster.id);
+
+    store.undo();
+    expect(store.doc.nodes[instanceId].type).toBe("instance");
+    expect(store.doc.nodes[bodyClone].type).toBe("slot");
+    expect(store.doc.nodes[bodyClone].slotFilled).toBe(true);
+    expect(store.doc.nodes[emptyClone]).toBeTruthy();
+  });
+
+  it("删除主组件时实例自动脱离；删除含组件的页面同理", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const master = createNode("frame", { name: "A", width: 100, height: 60 });
+    store.apply({ type: "node.create", params: { nodes: [master], parentId: pageId } });
+    store.apply({ type: "component.create", params: { nodeIds: [master.id] } });
+    const instanceId = createNode("instance").id;
+    store.apply({
+      type: "instance.create",
+      params: { componentId: master.id, parentId: pageId, nodeId: instanceId, x: 300, y: 0 },
+    });
+
+    store.apply({ type: "node.delete", params: { nodeId: master.id } });
+    expect(store.doc.nodes[master.id]).toBeUndefined();
+    expect(store.doc.nodes[instanceId].type).toBe("frame");
+    expect(store.doc.nodes[instanceId].componentId).toBeUndefined();
+
+    store.undo();
+    expect(store.doc.nodes[master.id].type).toBe("component");
+    expect(store.doc.nodes[instanceId].type).toBe("instance");
+    expect(store.doc.nodes[instanceId].componentId).toBe(master.id);
+
+    // 页面删除：组件在页面 2，实例在页面 1
+    const page2 = createNode("page", { name: "页面 2", x: 3000, width: 800, height: 600 });
+    store.apply({ type: "node.create", params: { nodes: [page2], parentId: null } });
+    const master2 = createNode("frame", { name: "B", width: 100, height: 60 });
+    store.apply({ type: "node.create", params: { nodes: [master2], parentId: page2.id } });
+    store.apply({ type: "component.create", params: { nodeIds: [master2.id] } });
+    const instance2 = createNode("instance").id;
+    store.apply({
+      type: "instance.create",
+      params: { componentId: master2.id, parentId: pageId, nodeId: instance2, x: 500, y: 0 },
+    });
+
+    store.apply({ type: "node.delete", params: { nodeId: page2.id } });
+    expect(store.doc.nodes[page2.id]).toBeUndefined();
+    expect(store.doc.nodes[instance2].type).toBe("frame");
+
+    store.undo();
+    expect(store.doc.nodes[page2.id]).toBeTruthy();
+    expect(store.doc.nodes[instance2].type).toBe("instance");
+  });
+});
+
+describe("组件：嵌套实例替换与覆盖作用域", () => {
+  function setupNested() {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+
+    const bMaster = createNode("frame", { name: "B", width: 100, height: 50 });
+    store.apply({ type: "node.create", params: { nodes: [bMaster], parentId: pageId } });
+    const bText = createNode("text", { name: "B 内容", text: "B", width: 40, height: 20 });
+    store.apply({ type: "node.create", params: { nodes: [bText], parentId: bMaster.id } });
+    store.apply({ type: "component.create", params: { nodeIds: [bMaster.id] } });
+
+    const cMaster = createNode("frame", { name: "C", width: 120, height: 60 });
+    store.apply({ type: "node.create", params: { nodes: [cMaster], parentId: pageId } });
+    const cRect = createNode("rect", { name: "C 内容", width: 60, height: 30 });
+    store.apply({ type: "node.create", params: { nodes: [cRect], parentId: cMaster.id } });
+    store.apply({ type: "component.create", params: { nodeIds: [cMaster.id] } });
+
+    const aMaster = createNode("frame", { name: "A", width: 300, height: 200 });
+    store.apply({ type: "node.create", params: { nodes: [aMaster], parentId: pageId } });
+    store.apply({ type: "component.create", params: { nodeIds: [aMaster.id] } });
+    const bInA = createNode("instance").id;
+    store.apply({
+      type: "instance.create",
+      params: { componentId: bMaster.id, parentId: aMaster.id, nodeId: bInA, x: 10, y: 10 },
+    });
+    const aInst = createNode("instance").id;
+    store.apply({
+      type: "instance.create",
+      params: { componentId: aMaster.id, parentId: pageId, nodeId: aInst, x: 400, y: 0 },
+    });
+    const nested = `${aInst}:${bInA}`;
+    return { store, pageId, aMaster, bMaster, bText, cMaster, cRect, bInA, aInst, nested };
+  }
+
+  it("直接替换嵌套实例后，外层母版同步不回退、不破坏 C 的子树", () => {
+    const { store, aMaster, cMaster, cRect, aInst, bInA, nested } = setupNested();
+    store.apply({ type: "instance.swap", params: { instanceId: nested, componentId: cMaster.id } });
+    expect(store.doc.nodes[nested].componentId).toBe(cMaster.id);
+
+    store.apply({ type: "node.update", params: { nodeId: aMaster.id, patch: { name: "A2" } } });
+    expect(store.doc.nodes[nested].componentId).toBe(cMaster.id);
+    expect(store.doc.nodes[nested].width).toBe(120);
+    expect(store.doc.nodes[nested].children).toEqual([`${nested}:${cRect.id}`]);
+    expect(store.doc.nodes[aInst].overrides?.[bInA]?.componentId).toBe(cMaster.id);
+  });
+
+  it("实例替换属性后，外层母版同步不回退、不覆盖 C 的尺寸与子树", () => {
+    const { store, aMaster, cMaster, cRect, bInA, aInst, nested } = setupNested();
+    store.apply({
+      type: "property.define",
+      params: { componentId: aMaster.id, targetMainId: bInA, id: "p_inst", type: "instance" },
+    });
+    store.apply({ type: "property.set", params: { instanceId: aInst, propertyId: "p_inst", value: cMaster.id } });
+    expect(store.doc.nodes[nested].componentId).toBe(cMaster.id);
+
+    store.apply({ type: "node.update", params: { nodeId: aMaster.id, patch: { name: "A2" } } });
+    expect(store.doc.nodes[nested].componentId).toBe(cMaster.id);
+    expect(store.doc.nodes[nested].width).toBe(120);
+    expect(store.doc.nodes[nested].children).toEqual([`${nested}:${cRect.id}`]);
+  });
+
+  it("嵌套实例的位置覆盖写入外层实例，并在外层同步时保留", () => {
+    const { store, aMaster, nested, aInst, bInA } = setupNested();
+    store.apply({ type: "node.update", params: { nodeId: nested, patch: { x: 50, y: 60 } } });
+    expect(store.doc.nodes[aInst].overrides?.[bInA]?.x).toBe(50);
+    expect(store.doc.nodes[aInst].overrides?.[bInA]?.y).toBe(60);
+
+    store.apply({ type: "node.update", params: { nodeId: aMaster.id, patch: { name: "A2" } } });
+    expect(store.doc.nodes[nested].x).toBe(50);
+    expect(store.doc.nodes[nested].y).toBe(60);
+  });
+
+  it("嵌套实例的尺寸覆盖写入自身，并在外层同步/母版变化时保留", () => {
+    const { store, aMaster, bMaster, nested } = setupNested();
+    store.apply({ type: "node.update", params: { nodeId: nested, patch: { width: 140, height: 70 } } });
+    expect(store.doc.nodes[nested].overrides?.[store.doc.nodes[nested].componentId!]?.width).toBe(140);
+
+    store.apply({ type: "node.update", params: { nodeId: aMaster.id, patch: { name: "A2" } } });
+    expect(store.doc.nodes[nested].width).toBe(140);
+    expect(store.doc.nodes[nested].height).toBe(70);
+
+    store.apply({ type: "node.update", params: { nodeId: bMaster.id, patch: { width: 90, height: 45 } } });
+    expect(store.doc.nodes[nested].width).toBe(140);
+    expect(store.doc.nodes[nested].height).toBe(70);
+  });
+
+  it("重置嵌套实例的 componentId 覆盖会换回外层母版组件，撤销恢复", () => {
+    const { store, bMaster, bText, cMaster, cRect, aInst, bInA, nested } = setupNested();
+    store.apply({ type: "instance.swap", params: { instanceId: nested, componentId: cMaster.id } });
+    store.apply({
+      type: "instance.resetOverride",
+      params: { instanceId: aInst, mainId: bInA, fields: ["componentId"] },
+    });
+    expect(store.doc.nodes[nested].componentId).toBe(bMaster.id);
+    expect(store.doc.nodes[nested].children).toEqual([`${nested}:${bText.id}`]);
+    expect(store.doc.nodes[aInst].overrides?.[bInA]?.componentId).toBeUndefined();
+
+    store.undo();
+    expect(store.doc.nodes[nested].componentId).toBe(cMaster.id);
+    expect(store.doc.nodes[nested].children).toEqual([`${nested}:${cRect.id}`]);
+  });
+
+  it("componentId 被属性绑定时拒绝直接替换", () => {
+    const { store, aMaster, cMaster, bInA, nested } = setupNested();
+    store.apply({
+      type: "property.define",
+      params: { componentId: aMaster.id, targetMainId: bInA, id: "p_inst", type: "instance" },
+    });
+    expect(() =>
+      store.apply({ type: "instance.swap", params: { instanceId: nested, componentId: cMaster.id } }),
+    ).toThrow(/属性|实例不存在/);
+  });
+});
+
+describe("组件：插槽插入与实例内容保护", () => {
+  it("instance.create 进入未填充插槽时清默认、置 filled，并在母版同步后保留", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const master = createNode("frame", { name: "A", width: 200, height: 100 });
+    store.apply({ type: "node.create", params: { nodes: [master], parentId: pageId } });
+    const slot = createNode("slot", { name: "body", x: 10, y: 10, width: 180, height: 80 });
+    store.apply({ type: "node.create", params: { nodes: [slot], parentId: master.id } });
+    const def = createNode("text", { name: "默认", text: "默认", width: 40, height: 20 });
+    store.apply({ type: "node.create", params: { nodes: [def], parentId: slot.id } });
+    store.apply({ type: "component.create", params: { nodeIds: [master.id] } });
+    const inst = createNode("instance").id;
+    store.apply({ type: "instance.create", params: { componentId: master.id, parentId: pageId, nodeId: inst, x: 300, y: 0 } });
+    const slotClone = `${inst}:${slot.id}`;
+    const defClone = `${slotClone}:${def.id}`;
+
+    const b = createNode("frame", { name: "B", width: 50, height: 50 });
+    store.apply({ type: "node.create", params: { nodes: [b], parentId: pageId } });
+    store.apply({ type: "component.create", params: { nodeIds: [b.id] } });
+    const child = createNode("instance").id;
+    store.apply({ type: "instance.create", params: { componentId: b.id, parentId: slotClone, nodeId: child, x: 0, y: 0 } });
+
+    expect(store.doc.nodes[slotClone].slotFilled).toBe(true);
+    expect(store.doc.nodes[slotClone].children).toEqual([child]);
+    expect(store.doc.nodes[defClone]).toBeUndefined();
+
+    store.apply({ type: "node.update", params: { nodeId: master.id, patch: { name: "A2" } } });
+    expect(store.doc.nodes[slotClone].children).toEqual([child]);
+    expect(store.doc.nodes[child]).toBeTruthy();
+
+    store.undo(); // 撤销母版重命名
+    store.undo(); // 撤销插槽插入
+    expect(store.doc.nodes[child]).toBeUndefined();
+    expect(store.doc.nodes[slotClone].slotFilled).toBeUndefined();
+    expect(store.doc.nodes[slotClone].children).toEqual([defClone]);
+  });
+
+  it("实例内容不能创建组件；顶层实例本身可以整体包组件", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const master = createNode("frame", { name: "A", width: 200, height: 100 });
+    store.apply({ type: "node.create", params: { nodes: [master], parentId: pageId } });
+    const text = createNode("text", { name: "T", text: "hi", width: 40, height: 20 });
+    store.apply({ type: "node.create", params: { nodes: [text], parentId: master.id } });
+    store.apply({ type: "component.create", params: { nodeIds: [master.id] } });
+    const inst = createNode("instance").id;
+    store.apply({ type: "instance.create", params: { componentId: master.id, parentId: pageId, nodeId: inst, x: 300, y: 0 } });
+    const clone = `${inst}:${text.id}`;
+    const before = JSON.stringify(store.doc);
+    expect(() =>
+      store.apply({
+        type: "component.create",
+        params: { nodeIds: [clone], componentId: createNode("component").id },
+      }),
+    ).toThrow(/实例内部/);
+    expect(JSON.stringify(store.doc)).toBe(before);
+
+    const wrapper = createNode("component").id;
+    store.apply({ type: "component.create", params: { nodeIds: [inst], componentId: wrapper } });
+    expect(store.doc.nodes[wrapper].children).toEqual([inst]);
+    expect(store.doc.nodes[inst].type).toBe("instance");
   });
 });

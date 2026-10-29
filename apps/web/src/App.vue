@@ -6,6 +6,7 @@ import InspectorPanel from "./components/InspectorPanel.vue";
 import CanvasView from "./components/CanvasView.vue";
 import ChatPanel from "./components/ChatPanel.vue";
 import DesignSystemPanel from "./components/DesignSystemPanel.vue";
+import ComponentsPanel from "./components/ComponentsPanel.vue";
 import ShortcutsPanel from "./components/ShortcutsPanel.vue";
 import { ui } from "./store";
 import { installShortcuts, keyOf, shortcutUi } from "./shortcuts";
@@ -27,11 +28,13 @@ onBeforeUnmount(() => uninstall());
           对话 <kbd>{{ keyOf("chat.focus") }}</kbd>
         </button>
         <button :class="{ on: ui.tab === 'pages' }" @click="ui.tab = 'pages'">页面</button>
+        <button :class="{ on: ui.tab === 'components' }" @click="ui.tab = 'components'">组件</button>
         <button :class="{ on: ui.tab === 'tokens' }" @click="ui.tab = 'tokens'">设计系统</button>
       </div>
       <div class="tab-body">
         <ChatPanel v-show="ui.tab === 'chat'" />
         <PagesPanel v-show="ui.tab === 'pages'" />
+        <ComponentsPanel v-show="ui.tab === 'components'" />
         <DesignSystemPanel v-show="ui.tab === 'tokens'" />
       </div>
     </aside>
