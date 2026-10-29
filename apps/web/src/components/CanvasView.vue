@@ -48,8 +48,12 @@ import {
 import {
   computeGuides,
   drawGuides as paintGuides,
-  pageDragContext,
+  guideContextFor,
+  guideContextForParent,
+  snapDrawRect,
+  snapResizeRect,
   type GapMark,
+  type GuideContext,
   type GuideLine,
 } from "../canvas/guides";
 import { keyOf, registerShortcuts } from "../shortcuts";
@@ -88,10 +92,10 @@ let drag: {
   offsetX: number;
   offsetY: number;
   pageId?: NodeId;
-  /** 正在被拖动的页面矩形（仅页面参与参考线） */
-  dragPages?: Rect[];
-  /** 其它页面矩形（对齐/间距候选） */
-  snapTargets?: Rect[];
+  /** 参考线上下文（同父兄弟 + 父内容区 + 父边界；跨父容器时为 null） */
+  guide?: GuideContext | null;
+  /** 参与吸附的移动根矩形（拖动开始时固定，世界坐标） */
+  snapRects?: Rect[];
   /** 缩放手柄与起始矩形 */
   handle?: ResizeHandle;
   /** 拖动时指针下方的实例插槽（松手即填充） */
@@ -263,6 +267,17 @@ function hitHandle(sx: number, sy: number): { handle: ResizeHandle; id: NodeId }
     if (Math.abs(sx - hx) <= HANDLE_HIT_PX && Math.abs(sy - hy) <= HANDLE_HIT_PX) return { handle, id };
   }
   return null;
+}
+
+/** 参与吸附的移动根矩形：父节点也被选中的子节点不重复参与。 */
+function snapRectsOf(ids: readonly NodeId[]): Rect[] {
+  return ids
+    .filter((id) => {
+      const n = docStore.doc.nodes[id];
+      return Boolean(n) && (!n!.parentId || !ids.includes(n!.parentId));
+    })
+    .map((id) => worldRect(docStore.doc, id))
+    .filter((r): r is Rect => Boolean(r));
 }
 
 /* ---------- 行内编辑（页面名 / 文本节点） ---------- */
@@ -553,6 +568,7 @@ function onPointerDown(e: PointerEvent) {
         handle: handleHit.handle,
         resizeId: node.id,
         startRect,
+        guide: guideContextFor([node.id]),
         startVector: node.vector
           ? { closed: node.vector.closed, anchors: node.vector.anchors.map((a) => ({ ...a })) }
           : undefined,
@@ -569,7 +585,7 @@ function onPointerDown(e: PointerEvent) {
     if (label.id !== ui.activePageId) setActivePage(label.id, false);
     select([label.id]);
     ui.expandedPageId = label.id;
-    drag = { ...base, startX: w.x, startY: w.y, mode: "move", ...pageDragContext([label.id]) };
+    drag = { ...base, startX: w.x, startY: w.y, mode: "move", guide: guideContextFor([label.id]), snapRects: snapRectsOf([label.id]) };
     markDirty();
     return;
   }
@@ -683,9 +699,9 @@ function onPointerDown(e: PointerEvent) {
     }
   }
 
-  // 页面间参考线只对页面生效（普通图层拖动时通常为空）
-  const { dragPages, snapTargets } = pageDragContext(ui.selection);
-  drag = { ...base, startX: w.x, startY: w.y, mode: "move", dragPages, snapTargets };
+  // 容器内参考线：同父兄弟 + 父内容区 + 父边界（页面拖动时父容器为空，候选是其它页面）
+  const guide = guideContextFor(ui.selection);
+  drag = { ...base, startX: w.x, startY: w.y, mode: "move", guide, snapRects: snapRectsOf(ui.selection) };
 }
 
 function onPointerMove(e: PointerEvent) {
@@ -797,12 +813,16 @@ function onPointerMove(e: PointerEvent) {
     drag.offsetY = w.y - drag.startY;
     const slot = slotUnder(vp, w.x, w.y, ui.selection);
     if (drag.dropSlot !== slot) drag.dropSlot = slot;
-    if (drag.dragPages?.length) {
-      const guides = computeGuides(drag.dragPages, drag.snapTargets ?? [], { dx: drag.offsetX, dy: drag.offsetY }, vp.zoom);
+    // ⌥ 临时关闭吸附：既不修正偏移，也不画线
+    if (!e.altKey && drag.guide && drag.snapRects?.length) {
+      const guides = computeGuides(drag.snapRects, drag.guide.targets, { dx: drag.offsetX, dy: drag.offsetY }, vp.zoom);
       drag.offsetX = guides.dx;
       drag.offsetY = guides.dy;
       guideLines = guides.lines;
       gapMarks = guides.gaps;
+    } else {
+      guideLines = [];
+      gapMarks = [];
     }
   } else if (drag.mode === "resize") {
     if (!drag.resizeId || !drag.startRect || !drag.handle) return;
@@ -813,7 +833,26 @@ function onPointerMove(e: PointerEvent) {
     const node = docStore.doc.nodes[drag.resizeId];
     const min = node?.type === "page" ? MIN_PAGE_SIZE : MIN_NODE_SIZE;
     const delta = localDelta(drag.resizeId, w.x - drag.startX, w.y - drag.startY);
-    const next = resizeRect(drag.startRect, drag.handle, delta.dx, delta.dy, e.shiftKey, min);
+    let next = resizeRect(drag.startRect, drag.handle, delta.dx, delta.dy, e.shiftKey, min);
+    // 缩放参考线：只吸被拖动的边；⇧ 等比 / ⌥ 临时关闭时不吸附
+    if (!e.altKey && !e.shiftKey && node && drag.guide) {
+      const origin = worldRect(docStore.doc, node.id);
+      const ox = origin ? origin.x - node.x : 0;
+      const oy = origin ? origin.y - node.y : 0;
+      const snapped = snapResizeRect(
+        { x: ox + next.x, y: oy + next.y, width: next.width, height: next.height },
+        drag.handle,
+        drag.guide.targets,
+        vp.zoom,
+        min,
+      );
+      next = { x: snapped.rect.x - ox, y: snapped.rect.y - oy, width: snapped.rect.width, height: snapped.rect.height };
+      guideLines = snapped.lines;
+      gapMarks = snapped.gaps;
+    } else {
+      guideLines = [];
+      gapMarks = [];
+    }
     resizePreview = { id: drag.resizeId, ...next };
     if (drag.startVector && drag.startRect) {
       const sx = next.width / Math.max(1, drag.startRect.width);
@@ -831,6 +870,31 @@ function onPointerMove(e: PointerEvent) {
       else pw = sx * (Math.abs(ph) / EQUILATERAL_RATIO);
     }
     preview = { x: drag.startX, y: drag.startY, w: pw, h: ph, valid: Boolean(drag.pageId) };
+    // 绘制参考线：只吸指针那一角，起点（锚）不动；⌥ 临时关闭
+    const page = drag.pageId ? docStore.doc.nodes[drag.pageId] : null;
+    if (!e.altKey && page) {
+      const x0 = Math.min(preview.x, preview.x + preview.w);
+      const y0 = Math.min(preview.y, preview.y + preview.h);
+      const w0 = Math.abs(preview.w);
+      const h0 = Math.abs(preview.h);
+      const parent = containerAt(x0 + w0 / 2, y0 + h0 / 2) ?? page;
+      const context = guideContextForParent(parent.id);
+      const snapped = snapDrawRect(
+        { x: x0, y: y0, width: w0, height: h0 },
+        preview.w >= 0,
+        preview.h >= 0,
+        context.targets,
+        vp.zoom,
+      );
+      const px = preview.w >= 0 ? snapped.rect.x + snapped.rect.width : snapped.rect.x;
+      const py = preview.h >= 0 ? snapped.rect.y + snapped.rect.height : snapped.rect.y;
+      preview = { ...preview, w: px - drag.startX, h: py - drag.startY };
+      guideLines = snapped.lines;
+      gapMarks = snapped.gaps;
+    } else {
+      guideLines = [];
+      gapMarks = [];
+    }
   }
   markDirty();
 }
@@ -953,7 +1017,10 @@ function onPointerUp() {
   } else if (drag.mode === "create" && preview && drag.pageId && drag.tool) {
     try {
       const built = buildCreatedNode({ tool: drag.tool, pageId: drag.pageId, preview });
-      dispatch({ type: "node.create", params: { nodes: [built.node], parentId: built.parentId } }, "create");
+      dispatch(
+        { type: "node.create", params: { nodes: [built.node], parentId: built.parentId, index: built.index } },
+        "create",
+      );
       ui.tool = "select";
       select([built.node.id]);
       const startEdit = built.startEdit;

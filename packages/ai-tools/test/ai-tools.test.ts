@@ -163,6 +163,27 @@ describe("AI 工具：样式纪律", () => {
     expect(store.doc.nodes[created.nodeId as string].style.fill).toEqual({ token: "color/surface" });
   });
 
+  it("新建画板 / 组件默认开启自动布局（纵向、gap 10、padding 10）", async () => {
+    const { store, run } = setup();
+    const frame = await call(run, "create_node", { kind: "frame" });
+    const frameLayout = store.doc.nodes[frame.nodeId as string].layout;
+    expect(frameLayout).toMatchObject({
+      direction: "vertical",
+      gap: 10,
+      padding: { top: 10, right: 10, bottom: 10, left: 10 },
+    });
+    const component = await call(run, "create_node", { kind: "component", width: 120, height: 80 });
+    expect(store.doc.nodes[component.nodeId as string].layout?.gap).toBe(10);
+
+    // 显式给了 layout 的就按给的来
+    const custom = await call(run, "create_node", { kind: "frame", layout: { direction: "horizontal", gap: 4 } });
+    expect(store.doc.nodes[custom.nodeId as string].layout).toMatchObject({ direction: "horizontal", gap: 4 });
+
+    // 非容器不写布局
+    const rect = await call(run, "create_node", { kind: "rect" });
+    expect(store.doc.nodes[rect.nodeId as string].layout).toBeUndefined();
+  });
+
   it("字面量色值被拒绝，Token 引用通过", async () => {
     const { run } = setup();
     await expect(run("create_node", { kind: "rect", fillToken: "#ff0000" })).rejects.toThrow(/禁止使用字面量色值/);

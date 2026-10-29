@@ -4,6 +4,7 @@ import {
   createNode,
   resolvePaint,
   worldRect,
+  defaultLayoutFor,
   nextPagePosition,
   worldQuad,
   DEFAULT_PAGE_WIDTH,
@@ -2060,6 +2061,28 @@ describe("布局：尺寸安全与 stretch 语义", () => {
     );
     expect(r.items.find((i) => i.id === "hug")?.height).toBe(20);
     expect(r.items.find((i) => i.id === "stretch")?.height).toBe(100);
+  });
+});
+
+describe("新建容器的默认自动布局", () => {
+  it("只给 frame / component 默认值，createNode 本身保持纯净", () => {
+    expect(defaultLayoutFor("frame")).toMatchObject({
+      direction: "vertical",
+      gap: 10,
+      padding: { top: 10, right: 10, bottom: 10, left: 10 },
+    });
+    expect(defaultLayoutFor("component")?.gap).toBe(10);
+    expect(defaultLayoutFor("rect")).toBeUndefined();
+    expect(createNode("frame").layout).toBeUndefined();
+  });
+
+  it("每次返回独立副本，改一个不影响另一个", () => {
+    const a = defaultLayoutFor("frame")!;
+    a.gap = 99;
+    a.padding.left = 99;
+    const b = defaultLayoutFor("frame")!;
+    expect(b.gap).toBe(10);
+    expect(b.padding.left).toBe(10);
   });
 });
 

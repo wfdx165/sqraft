@@ -397,6 +397,23 @@ export function createLayoutSpec(patch: Partial<LayoutSpec> = {}): LayoutSpec {
   };
 }
 
+/** 新建容器的默认自动布局：纵向、gap 10、四边 padding 10（对齐 Figma 开启自动布局的默认值）。 */
+export function defaultLayoutSpec(): LayoutSpec {
+  return createLayoutSpec({
+    direction: "vertical",
+    gap: 10,
+    padding: { top: 10, right: 10, bottom: 10, left: 10 },
+  });
+}
+
+/**
+ * 新建容器的默认布局：只用于“从工具栏 / AI 新建”的入口。
+ * 由既有节点转成的组件、实例物化、历史文档迁移都保持原几何，不套默认布局。
+ */
+export function defaultLayoutFor(type: NodeType): LayoutSpec | undefined {
+  return type === "frame" || type === "component" ? defaultLayoutSpec() : undefined;
+}
+
 /** 新建页面的摆放位置：最右侧页面之右，与首屏顶部对齐。 */
 export function nextPagePosition(state: DocState): { x: number; y: number } {
   const pages = getPages(state);

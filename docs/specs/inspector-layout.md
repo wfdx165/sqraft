@@ -60,6 +60,7 @@ interface LayoutSpec {
 ## 自动布局
 
 - 仅 frame/component 可拥有 `layout`；实例继承并可逐字段覆盖，不能增删。
+- **新建** frame/component 默认开启布局：纵向、gap 10、四边 padding 10、尺寸 fixed（旧文档与转换来的组件不套默认值）。检查器保留“移除布局”，移除后子项保持当前几何。
 - 容器可 Fixed/Hug；`Fill` 仅作为布局容器的子项出现；hug 轴上子项 fill 退化为 fixed；group 恒 hug（只读）。
 - 交叉轴 `stretch` 只拉伸 `fixed` / `fill` 子项；`hug` 与文本自动尺寸保持内容尺寸，避免与测量写回互相覆盖。
 - 隐藏子项退出排布；锁定子项仍参与排布。

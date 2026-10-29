@@ -8,6 +8,7 @@ import {
   clampSides,
   createLayoutSpec,
   createNode,
+  defaultLayoutFor,
   firstPageId,
   makeAnchor,
   newId,
@@ -544,6 +545,8 @@ export function makeExecutor(
           style,
           ...applyNodeArgs(args),
         });
+        // 与 GUI 一致：新建画板 / 组件默认开启自动布局（AI 显式给了 layout 则以其为准）
+        if ((kind === "frame" || kind === "component") && !node.layout) node.layout = defaultLayoutFor(kind);
         // 文本：自动尺寸由宿主注入的测量函数决定
         if (kind === "text" && measureText && (node.textAutoResize ?? "auto-width") !== "fixed") {
           const size = measureText(node, node.style, node.text ?? "");

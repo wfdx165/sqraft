@@ -2,7 +2,7 @@
  * 选中框、缩放手柄、尺寸徽标与悬停文本边界。
  * 屏幕空间叠加层；不参与文档渲染。
  */
-import { worldQuad, worldRect, type NodeId } from "@sqraft/core";
+import { worldRect, type NodeId } from "@sqraft/core";
 import { worldToScreen, type Viewport } from "@sqraft/render";
 import { docStore } from "../store";
 import { handlePointsOfQuad, selectionQuad, selectionScreenRect, type MovePreview, type ResizePreview } from "./selection";
@@ -52,7 +52,7 @@ export function drawSelectionOverlay(
     const rect = selectionScreenRect(vp, id, opts.resizePreview, opts.drag);
     const quad = selectionQuad(vp, id, opts.resizePreview, opts.drag);
     if (!rect || !quad) continue;
-    const { x, y, width, height } = rect;
+    const { x, y, width } = rect;
 
     g.strokeStyle = "#4f46e5";
     g.lineWidth = 1.5;
@@ -74,7 +74,8 @@ export function drawSelectionOverlay(
       }
     }
 
-    if (opts.selection.length === 1) {
+    if (opts.selection.length === 1 && !(opts.drag?.mode === "move" && opts.drag.moved)) {
+      // 拖动中隐藏尺寸徽标：间距标签正好落在对象上方，两者会叠在一起（尺寸看检查器或缩放时）
       const label = `${Math.round(opts.resizePreview && opts.resizePreview.id === id ? opts.resizePreview.width : n.width)} × ${
         Math.round(opts.resizePreview && opts.resizePreview.id === id ? opts.resizePreview.height : n.height)
       }`;

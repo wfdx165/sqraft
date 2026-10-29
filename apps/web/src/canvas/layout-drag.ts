@@ -6,6 +6,7 @@
 import { worldRect, type DocNode, type NodeId } from "@sqraft/core";
 import { docStore } from "../store";
 import type { GuideLine } from "./guides";
+import { contentBoxOf } from "./guides";
 import { pageAt } from "./hit";
 
 /** 自动布局父容器（没有则 null）。 */
@@ -42,10 +43,10 @@ export function reorderIndexAt(parentId: NodeId, wx: number, wy: number, ignore:
   return index;
 }
 
-/** 重排序的插入指示线（世界坐标）。 */
+/** 重排序的插入指示线（世界坐标）：横跨父容器的内容区（padding 内框），顺带提示可用范围。 */
 export function reorderGuide(parentId: NodeId, wx: number, wy: number): GuideLine[] {
   const parent = docStore.doc.nodes[parentId];
-  const r = parent ? worldRect(docStore.doc, parentId) : null;
+  const r = parent ? contentBoxOf(parent) : null;
   if (!parent?.layout || !r) return [];
   return parent.layout.direction === "horizontal"
     ? [{ x1: wx, y1: r.y, x2: wx, y2: r.y + r.height }]

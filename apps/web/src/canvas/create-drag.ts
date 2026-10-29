@@ -2,11 +2,11 @@
  * 绘图工具落笔：把拖拽出的包围盒转成真实节点。
  * 返回待提交的节点与父容器；命令、选区与编辑态由 CanvasView 负责。
  */
-import { createNode, worldRect, type DocNode, type NodeId } from "@sqraft/core";
+import { createNode, defaultLayoutFor, worldRect, type DocNode, type NodeId } from "@sqraft/core";
 import { docStore } from "../store";
 import { DEFAULT_TEXT_FONT_FAMILY, DEFAULT_TEXT_FONT_SIZE, textSizeOf } from "../text-metrics";
 import { nextPolygonName } from "./pen";
-import { containerAt } from "./layout-drag";
+import { containerAt, reorderIndexAt } from "./layout-drag";
 import { TOOL_NAMES, type DrawTool } from "./tools";
 
 export interface CreateDragInput {
@@ -18,6 +18,8 @@ export interface CreateDragInput {
 export interface CreatedNode {
   node: DocNode;
   parentId: NodeId;
+  /** 父容器有自动布局时，按落点算出的插入位置 */
+  index?: number;
   startEdit: boolean;
 }
 
@@ -70,6 +72,8 @@ export function buildCreatedNode(input: CreateDragInput): CreatedNode {
           width: w,
           height: h,
           sides: isTriangle ? 3 : undefined,
+          // 新建画板/组件默认开启自动布局（纵向、gap 10、padding 10）
+          layout: defaultLayoutFor(isTriangle ? "polygon" : tool),
           // 画板默认白底（color/surface），形状默认主色
           style: { fill: { token: tool === "frame" ? "color/surface" : "color/primary" } },
         },
@@ -92,5 +96,8 @@ export function buildCreatedNode(input: CreateDragInput): CreatedNode {
     startEdit = true;
   }
 
-  return { node, parentId: parent.id, startEdit };
+  // 父容器有自动布局：按落点算出插入位置（与拖动重排序共用同一套投影）
+  const index = parent.layout ? reorderIndexAt(parent.id, x0 + w / 2, y0 + h / 2, []) : undefined;
+
+  return { node, parentId: parent.id, index, startEdit };
 }
