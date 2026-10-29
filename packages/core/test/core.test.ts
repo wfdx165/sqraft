@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { createEmptyDoc, createNode, resolvePaint } from "../src/model";
+import {
+  createEmptyDoc,
+  createNode,
+  resolvePaint,
+  worldRect,
+  nextPagePosition,
+  DEFAULT_PAGE_WIDTH,
+  PAGE_GAP,
+} from "../src/model";
 import { DocStore } from "../src/store";
 import { solveLayout } from "../src/layout";
 
@@ -58,6 +66,59 @@ describe("命令系统", () => {
       return JSON.stringify({ nodes: store.doc.nodes, tokens: store.doc.tokens });
     };
     expect(run()).toBe(run());
+  });
+});
+
+describe("Token 改名", () => {
+  it("改名后节点引用跟随，撤销后路径与引用双双还原", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const rect = createNode("rect", { name: "R", style: { fill: { token: "color/primary" }, stroke: { token: "color/primary" } } });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+
+    store.apply({ type: "token.rename", params: { from: "color/primary", to: "brand/primary" } });
+    expect(store.doc.tokens["color/primary"]).toBeUndefined();
+    expect(store.doc.tokens["brand/primary"]).toEqual({ type: "color", value: "#3366ff" });
+    expect(store.doc.nodes[rect.id].style.fill?.token).toBe("brand/primary");
+    expect(store.doc.nodes[rect.id].style.stroke?.token).toBe("brand/primary");
+    // 改名不改变渲染结果
+    expect(resolvePaint(store.doc, store.doc.nodes[rect.id].style.fill)).toBe("#3366ff");
+
+    store.undo();
+    expect(store.doc.tokens["brand/primary"]).toBeUndefined();
+    expect(store.doc.tokens["color/primary"]).toEqual({ type: "color", value: "#3366ff" });
+    expect(store.doc.nodes[rect.id].style.fill?.token).toBe("color/primary");
+    expect(store.doc.nodes[rect.id].style.stroke?.token).toBe("color/primary");
+
+    store.redo();
+    expect(store.doc.tokens["brand/primary"]).toBeTruthy();
+    expect(store.doc.nodes[rect.id].style.fill?.token).toBe("brand/primary");
+  });
+
+  it("只改引用了该 Token 的节点，其它节点不动", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const a = createNode("rect", { name: "A", style: { fill: { token: "color/text" } } });
+    const b = createNode("rect", { name: "B", style: { fill: { token: "color/primary" } } });
+    store.apply([
+      { type: "node.create", params: { nodes: [a], parentId: pageId } },
+      { type: "node.create", params: { nodes: [b], parentId: pageId } },
+    ]);
+
+    store.apply({ type: "token.rename", params: { from: "color/text", to: "ink/text" } });
+    expect(store.doc.nodes[a.id].style.fill?.token).toBe("ink/text");
+    expect(store.doc.nodes[b.id].style.fill?.token).toBe("color/primary");
+  });
+
+  it("源不存在或目标重名时抛错且不改文档", () => {
+    const store = new DocStore(createEmptyDoc());
+    const before = JSON.stringify(store.doc.tokens);
+    expect(() => store.apply({ type: "token.rename", params: { from: "color/nope", to: "x/y" } })).toThrow();
+    expect(() => store.apply({ type: "token.rename", params: { from: "color/primary", to: "color/text" } })).toThrow();
+    expect(() => store.apply({ type: "token.rename", params: { from: "color/primary", to: "color/primary" } })).toThrow();
+    expect(JSON.stringify(store.doc.tokens)).toBe(before);
+    // 失败不占撤销记录
+    expect(store.canUndo).toBe(false);
   });
 });
 
@@ -125,5 +186,24 @@ describe("Token 解析", () => {
     expect(resolvePaint(doc, { token: "color/primary" })).toBe("#3366ff");
     expect(resolvePaint(doc, { value: "#123456" })).toBe("#123456");
     expect(resolvePaint(doc, { token: "color/missing" })).toBe("#ff00ff");
+  });
+});
+
+describe("页面与世界坐标", () => {
+  it("worldRect 累加页面与容器偏移", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = store.doc.rootIds[0];
+    const frame = createNode("frame", { x: 100, y: 50 });
+    const rect = createNode("rect", { x: 10, y: 20 });
+    rect.parentId = frame.id;
+    frame.children = [rect.id];
+    store.apply({ type: "node.create", params: { nodes: [frame, rect], parentId: pageId } });
+    const r = worldRect(store.doc, rect.id);
+    expect(r).toMatchObject({ x: 110, y: 70, width: rect.width, height: rect.height });
+  });
+
+  it("nextPagePosition 放在最右侧页面之右", () => {
+    const store = new DocStore(createEmptyDoc());
+    expect(nextPagePosition(store.doc)).toEqual({ x: DEFAULT_PAGE_WIDTH + PAGE_GAP, y: 0 });
   });
 });

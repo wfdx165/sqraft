@@ -1,7 +1,16 @@
 <script setup lang="ts">
-import { computed, ref } from "vue";
-import { createNode, getPages, nextPageName, type DocNode, type NodeId } from "@sqraft/core";
-import { currentPageId, dispatch, docStore, hooks, select, ui } from "../store";
+import { computed, ref, watch } from "vue";
+import {
+  createNode,
+  getPages,
+  nextPageName,
+  nextPagePosition,
+  DEFAULT_PAGE_HEIGHT,
+  DEFAULT_PAGE_WIDTH,
+  type DocNode,
+  type NodeId,
+} from "@sqraft/core";
+import { dispatch, docStore, hooks, select, ui } from "../store";
 import Icon from "./Icon.vue";
 
 interface Row {
@@ -14,16 +23,11 @@ const pages = computed(() => {
   return getPages(docStore.doc);
 });
 
-const activePage = computed(() => {
-  void ui.version;
-  return currentPageId();
-});
-
 /** 当前页面下的图层树（手风琴：仅展开活动页面） */
 const rows = computed<Row[]>(() => {
   void ui.version;
-  const pageId = activePage.value;
-  if (!pageId) return [];
+  const pageId = ui.expandedPageId;
+  if (!pageId || !docStore.doc.nodes[pageId]) return [];
   const out: Row[] = [];
   const visit = (id: NodeId, depth: number) => {
     const node = docStore.doc.nodes[id];
@@ -50,15 +54,33 @@ const iconOf: Record<string, string> = {
 
 /* ---------- 页面操作 ---------- */
 
-function switchPage(id: NodeId) {
-  if (ui.activePageId === id) return;
-  ui.activePageId = id;
-  select([]);
-  hooks.requestRedraw();
+function togglePage(id: NodeId) {
+  // 编辑模式：点左栏页面 = 切换活动页 + 适配该页（与画布活动页保持同步）
+  if (ui.mode === "edit") {
+    ui.activePageId = id;
+    ui.expandedPageId = id;
+    select([]);
+    hooks.focusPage(id);
+    return;
+  }
+  if (ui.expandedPageId === id) {
+    ui.expandedPageId = null;
+    return;
+  }
+  ui.expandedPageId = id;
+  hooks.focusPage(id);
 }
 
 const renamingId = ref<NodeId | null>(null);
 const draftName = ref("");
+
+/* 编辑模式下左栏始终展开活动页的图层 */
+watch(
+  () => ui.activePageId,
+  (id) => {
+    if (ui.mode === "edit" && id) ui.expandedPageId = id;
+  },
+);
 
 function startRename(page: DocNode) {
   renamingId.value = page.id;
@@ -78,24 +100,37 @@ function cancelRename() {
 }
 
 function addPage() {
-  const node = createNode("page", { name: nextPageName(docStore.doc) });
+  const pos = nextPagePosition(docStore.doc);
+  const node = createNode("page", {
+    name: nextPageName(docStore.doc),
+    x: pos.x,
+    y: pos.y,
+    width: DEFAULT_PAGE_WIDTH,
+    height: DEFAULT_PAGE_HEIGHT,
+  });
   dispatch({ type: "node.create", params: { nodes: [node], parentId: null } }, "create-page");
-  ui.activePageId = node.id;
+  if (ui.mode === "edit") ui.activePageId = node.id;
+  ui.expandedPageId = node.id;
   select([]);
-  hooks.requestRedraw();
+  hooks.focusPage(node.id);
 }
 
 function deletePage(page: DocNode) {
   if (pages.value.length <= 1) return;
   if (!window.confirm(`删除页面「${page.name}」及其全部图层？`)) return;
   dispatch({ type: "node.delete", params: { nodeId: page.id } }, "delete-page");
-  if (ui.activePageId === page.id) ui.activePageId = currentPageId();
+  if (ui.expandedPageId === page.id) ui.expandedPageId = docStore.doc.rootIds[0] ?? null;
   hooks.requestRedraw();
 }
 
 /* ---------- 图层操作 ---------- */
 
 function onLayerClick(row: Row, e: MouseEvent) {
+  // 编辑模式：点其它页的图层时先切换活动页，再选中（淡化只是提示，不是墙）
+  if (ui.mode === "edit" && row.node.parentId && row.node.parentId !== ui.activePageId) {
+    ui.activePageId = row.node.parentId;
+    ui.expandedPageId = row.node.parentId;
+  }
   if (e.shiftKey) {
     const set = new Set(ui.selection);
     set.has(row.node.id) ? set.delete(row.node.id) : set.add(row.node.id);
@@ -124,10 +159,10 @@ function onLayerDelete(id: NodeId) {
       <div v-for="page in pages" :key="page.id" class="page-block">
         <div
           class="page-row"
-          :class="{ active: activePage === page.id }"
-          @click="switchPage(page.id)"
+          :class="{ active: ui.expandedPageId === page.id, 'active-page': ui.mode === 'edit' && ui.activePageId === page.id }"
+          @click="togglePage(page.id)"
         >
-          <Icon name="chevron" :size="12" class="caret" :class="{ open: activePage === page.id }" />
+          <Icon name="chevron" :size="12" class="caret" :class="{ open: ui.expandedPageId === page.id }" />
           <input
             v-if="renamingId === page.id"
             v-model="draftName"
@@ -151,7 +186,7 @@ function onLayerDelete(id: NodeId) {
         </div>
 
         <!-- 手风琴：仅活动页面展开图层 -->
-        <div v-if="activePage === page.id" class="layers">
+        <div v-if="ui.expandedPageId === page.id" class="layers">
           <div v-if="rows.length === 0" class="empty-layer">暂无图层</div>
           <div
             v-for="row in rows"
@@ -231,7 +266,24 @@ header {
 
 .page-row.active {
   color: var(--text);
-  background: rgba(255, 255, 255, 0.045);
+  background: rgba(15, 23, 42, 0.045);
+}
+
+/* 编辑模式下的活动页：左侧一道靛蓝标记 */
+.page-row.active-page {
+  position: relative;
+  color: var(--text);
+}
+
+.page-row.active-page::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--accent);
 }
 
 .caret {
@@ -257,7 +309,7 @@ header {
 .rename {
   flex: 1;
   min-width: 0;
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(15, 23, 42, 0.05);
   border: 1px solid var(--accent-line);
   border-radius: 6px;
   color: var(--text);

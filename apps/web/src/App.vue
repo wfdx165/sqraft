@@ -1,10 +1,20 @@
 <script setup lang="ts">
+import { onBeforeUnmount, onMounted } from "vue";
 import Toolbar from "./components/Toolbar.vue";
 import PagesPanel from "./components/PagesPanel.vue";
 import InspectorPanel from "./components/InspectorPanel.vue";
 import CanvasView from "./components/CanvasView.vue";
 import ChatPanel from "./components/ChatPanel.vue";
+import DesignSystemPanel from "./components/DesignSystemPanel.vue";
+import ShortcutsPanel from "./components/ShortcutsPanel.vue";
 import { ui } from "./store";
+import { installShortcuts, keyOf, shortcutUi } from "./shortcuts";
+
+let uninstall = () => {};
+onMounted(() => {
+  uninstall = installShortcuts();
+});
+onBeforeUnmount(() => uninstall());
 </script>
 
 <template>
@@ -13,15 +23,22 @@ import { ui } from "./store";
     <Toolbar class="float toolbar rise-in" />
     <aside class="float left glass rise-in" style="animation-delay: 40ms">
       <div class="tabs">
+        <button :class="{ on: ui.tab === 'chat' }" @click="ui.tab = 'chat'">
+          对话 <kbd>{{ keyOf("chat.focus") }}</kbd>
+        </button>
         <button :class="{ on: ui.tab === 'pages' }" @click="ui.tab = 'pages'">页面</button>
-        <button :class="{ on: ui.tab === 'chat' }" @click="ui.tab = 'chat'">对话 <kbd>⌘K</kbd></button>
+        <button :class="{ on: ui.tab === 'tokens' }" @click="ui.tab = 'tokens'">设计系统</button>
       </div>
       <div class="tab-body">
-        <PagesPanel v-show="ui.tab === 'pages'" />
         <ChatPanel v-show="ui.tab === 'chat'" />
+        <PagesPanel v-show="ui.tab === 'pages'" />
+        <DesignSystemPanel v-show="ui.tab === 'tokens'" />
       </div>
     </aside>
     <aside class="float right glass rise-in" style="animation-delay: 80ms"><InspectorPanel /></aside>
+
+    <!-- 快捷键面板：居中对话框，放在根节点以避免被工具条的 translate 约束 -->
+    <ShortcutsPanel v-if="shortcutUi.open" />
   </div>
 </template>
 
@@ -62,7 +79,7 @@ import { ui } from "./store";
   gap: 2px;
   margin: 10px 10px 0;
   padding: 2px;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(15, 23, 42, 0.04);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-pill);
 }
@@ -72,14 +89,15 @@ import { ui } from "./store";
   display: flex;
   align-items: center;
   justify-content: center;
-  gap: 6px;
+  gap: 5px;
   border: none;
   background: transparent;
   color: var(--text-dim);
   border-radius: var(--radius-pill);
-  padding: 4px 10px;
+  padding: 4px 8px;
   font-size: 11.5px;
   font-family: inherit;
+  white-space: nowrap;
   cursor: pointer;
   transition:
     background var(--dur-fast) var(--ease),

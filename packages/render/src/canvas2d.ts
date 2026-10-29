@@ -1,6 +1,6 @@
 /** Canvas 2D 实现的 RenderBackend。 */
 
-import type { DocNode } from "@sqraft/core";
+import { TEXT_LINE_HEIGHT, type DocNode } from "@sqraft/core";
 import type { RenderBackend, Viewport } from "./backend";
 
 export class Canvas2DBackend implements RenderBackend {
@@ -22,11 +22,31 @@ export class Canvas2DBackend implements RenderBackend {
     }
     const ctx = this.ctx;
     ctx.setTransform(vp.dpr, 0, 0, vp.dpr, 0, 0);
+    ctx.globalAlpha = 1;
+    ctx.globalCompositeOperation = "source-over";
     ctx.clearRect(0, 0, vp.width, vp.height);
     // 应用视口变换（世界 → CSS 像素）
     ctx.scale(vp.zoom, vp.zoom);
     ctx.translate(-vp.x, -vp.y);
     ctx.lineJoin = "round";
+  }
+
+  pushTransform(x: number, y: number): void {
+    this.ctx.save();
+    this.ctx.translate(x, y);
+  }
+
+  popTransform(): void {
+    this.ctx.restore();
+  }
+
+  pushOpacity(alpha: number): void {
+    this.ctx.save();
+    this.ctx.globalAlpha *= Math.max(0, Math.min(1, alpha));
+  }
+
+  popOpacity(): void {
+    this.ctx.restore();
   }
 
   private applyRotation(node: DocNode): void {
@@ -49,9 +69,9 @@ export class Canvas2DBackend implements RenderBackend {
     }
     if (fill) {
       if (shadow) {
-        ctx.shadowColor = "rgba(0, 0, 0, 0.5)";
-        ctx.shadowBlur = 40;
-        ctx.shadowOffsetY = 14;
+        ctx.shadowColor = "rgba(15, 23, 42, 0.16)";
+        ctx.shadowBlur = 32;
+        ctx.shadowOffsetY = 10;
       }
       ctx.fillStyle = fill;
       ctx.fill();
@@ -118,7 +138,12 @@ export class Canvas2DBackend implements RenderBackend {
     const align = node.style.textAlign ?? "left";
     ctx.textAlign = align;
     const tx = align === "center" ? node.x + node.width / 2 : align === "right" ? node.x + node.width : node.x;
-    ctx.fillText(node.text ?? "", tx, node.y);
+    // 按 \n 分行绘制（行高固定倍数，UI 测量与这里保持一致）
+    const lineHeight = size * TEXT_LINE_HEIGHT;
+    const lines = (node.text ?? "").split("\n");
+    for (let i = 0; i < lines.length; i++) {
+      ctx.fillText(lines[i], tx, node.y + i * lineHeight);
+    }
     ctx.restore();
   }
 

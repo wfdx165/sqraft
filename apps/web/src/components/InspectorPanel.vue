@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed } from "vue";
+import { computed, ref, watch } from "vue";
 import type { DocNode } from "@sqraft/core";
+import { DEFAULT_TEXT_FONT_SIZE, measureTextSize } from "../text-metrics";
 import { dispatch, docStore, ui } from "../store";
 
 const node = computed<DocNode | null>(() => {
@@ -41,9 +42,78 @@ function setFillToken(e: Event) {
   );
 }
 
-function setText(e: Event) {
+function setName(e: Event) {
   if (!node.value) return;
-  dispatch({ type: "node.update", params: { nodeId: node.value.id, patch: { text: (e.target as HTMLInputElement).value } } }, "inspect");
+  const name = (e.target as HTMLInputElement).value.replace(/\s+/g, " ").trim();
+  if (!name || name === node.value.name) return;
+  dispatch({ type: "node.update", params: { nodeId: node.value.id, patch: { name } } }, "rename-node");
+}
+
+/* ---------- 文案：多行草稿，失焦 / ⌘Enter 提交，Esc 放弃 ---------- */
+
+const textDraft = ref("");
+const textAreaEl = ref<HTMLTextAreaElement | null>(null);
+
+watch(
+  node,
+  (n) => {
+    textDraft.value = n?.text ?? "";
+    requestAnimationFrame(() => autoGrowTextArea(textAreaEl.value));
+  },
+  { immediate: true },
+);
+
+function autoGrowTextArea(el: HTMLTextAreaElement | null) {
+  if (!el) return;
+  el.style.height = "auto";
+  el.style.height = `${Math.min(el.scrollHeight, 132)}px`;
+}
+
+function commitText() {
+  const n = node.value;
+  if (!n) return;
+  const text = textDraft.value;
+  if (text === (n.text ?? "")) return;
+  // 文本尺寸跟着内容走（与画布行内编辑同一套测量）
+  const size = measureTextSize(text, n.style.fontSize ?? DEFAULT_TEXT_FONT_SIZE, n.style.fontFamily);
+  dispatch(
+    { type: "node.update", params: { nodeId: n.id, patch: { text, width: size.width, height: size.height } } },
+    "inspect",
+  );
+}
+
+function onTextAreaInput(e: Event) {
+  const el = e.target as HTMLTextAreaElement;
+  textDraft.value = el.value;
+  autoGrowTextArea(el);
+}
+
+function onTextAreaKey(e: KeyboardEvent) {
+  if (e.isComposing) return;
+  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") {
+    e.preventDefault();
+    commitText();
+    (e.target as HTMLTextAreaElement).blur();
+  } else if (e.key === "Escape") {
+    e.preventDefault();
+    textDraft.value = node.value?.text ?? "";
+    (e.target as HTMLTextAreaElement).blur();
+  }
+}
+
+const copied = ref(false);
+let copyTimer = 0;
+
+async function copyId() {
+  if (!node.value) return;
+  try {
+    await navigator.clipboard.writeText(node.value.id);
+    copied.value = true;
+    window.clearTimeout(copyTimer);
+    copyTimer = window.setTimeout(() => (copied.value = false), 1200);
+  } catch {
+    /* 剪贴板不可用时静默失败 */
+  }
 }
 
 function setFontSize(e: Event) {
@@ -69,12 +139,34 @@ function fillTokenOf(n: DocNode): string {
 </script>
 
 <template>
-  <div class="panel">
+  <!-- data-version：命令在文档里原地改字段，computed 返回同一对象引用不会触发重渲染，
+       这里让根节点跟随版本号，保证检查器数值永远是当前文档的 -->
+  <div class="panel" :data-version="ui.version">
     <header><span class="micro-label">检查器</span></header>
 
-    <template v-if="node && node.type !== 'page'">
+    <div v-if="ui.mode === 'pan'" class="empty">
+      <p>拖动模式 · 浏览视图</p>
+      <span>拖动画布查看页面；点「编辑」或按 V 回到编辑模式</span>
+    </div>
+
+    <template v-else-if="node">
+      <section class="block meta">
+        <div class="meta-row">
+          <label>名称</label>
+          <input class="name-input" :value="node.name" spellcheck="false" @change="setName" />
+          <span class="type-tag">{{ node.type }}</span>
+        </div>
+        <div class="meta-row">
+          <label>ID</label>
+          <code class="node-id" :title="node.id">{{ node.id }}</code>
+          <button class="copy" :class="{ on: copied }" title="复制 ID" @click="copyId">
+            {{ copied ? "已复制" : "复制" }}
+          </button>
+        </div>
+      </section>
+
       <section class="block">
-        <div class="label-row"><span class="micro-label">位置与尺寸</span><span class="type-tag">{{ node.type }}</span></div>
+        <div class="label-row"><span class="micro-label">位置与尺寸</span></div>
         <div class="grid">
           <label>X</label><input class="mono" type="number" :value="node.x" @change="setNum('x', $event)" />
           <label>Y</label><input class="mono" type="number" :value="node.y" @change="setNum('y', $event)" />
@@ -83,7 +175,7 @@ function fillTokenOf(n: DocNode): string {
         </div>
       </section>
 
-      <section class="block">
+      <section class="block" v-if="node.type !== 'page'">
         <span class="micro-label">外观</span>
         <div class="row">
           <label>填充</label>
@@ -100,7 +192,19 @@ function fillTokenOf(n: DocNode): string {
 
       <section class="block" v-if="node.type === 'text'">
         <span class="micro-label">文本</span>
-        <div class="row"><label>文案</label><input :value="node.text" @change="setText($event)" /></div>
+        <div class="row text-row">
+          <label>文案</label>
+          <textarea
+            ref="textAreaEl"
+            class="text-area"
+            rows="1"
+            spellcheck="false"
+            :value="textDraft"
+            @input="onTextAreaInput"
+            @blur="commitText"
+            @keydown="onTextAreaKey"
+          />
+        </div>
         <div class="row"><label>字号</label><input class="mono" type="number" :value="node.style.fontSize ?? 14" @change="setFontSize($event)" /></div>
       </section>
 
@@ -156,6 +260,70 @@ header {
   justify-content: space-between;
 }
 
+/* 名称 / ID 元信息：所有选中对象（含页面）统一展示 */
+.meta {
+  gap: 6px;
+}
+
+.meta-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.meta-row label {
+  flex: none;
+  min-width: 30px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.name-input {
+  flex: 1;
+}
+
+.node-id {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--mono);
+  font-size: 10.5px;
+  color: var(--text-dim);
+  background: rgba(15, 23, 42, 0.04);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  padding: 5px 8px;
+}
+
+.copy {
+  flex: none;
+  border: 1px solid var(--hairline);
+  background: transparent;
+  color: var(--text-faint);
+  border-radius: var(--radius-sm);
+  padding: 4px 8px;
+  font-size: 10.5px;
+  font-family: inherit;
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease),
+    border-color var(--dur-fast) var(--ease);
+}
+
+.copy:hover {
+  background: rgba(15, 23, 42, 0.05);
+  color: var(--text);
+}
+
+.copy.on {
+  color: var(--accent);
+  border-color: var(--accent-line);
+  background: var(--accent-soft);
+}
+
 .type-tag {
   font-family: var(--mono);
   font-size: 9.5px;
@@ -199,7 +367,7 @@ select {
   width: 100%;
   min-width: 0;
   box-sizing: border-box;
-  background: rgba(255, 255, 255, 0.045);
+  background: rgba(15, 23, 42, 0.04);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
   color: var(--text);
@@ -221,7 +389,7 @@ select:hover {
 input:focus,
 select:focus {
   border-color: var(--accent-line);
-  background: rgba(255, 255, 255, 0.06);
+  background: rgba(15, 23, 42, 0.05);
   box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
@@ -230,10 +398,44 @@ select:focus {
   font-size: 11.5px;
 }
 
+/* 多行文案：与 input 同款外观，自动增高 */
+.text-row {
+  align-items: flex-start;
+}
+
+.text-area {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  min-height: 30px;
+  max-height: 132px;
+  resize: none;
+  background: rgba(15, 23, 42, 0.04);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  padding: 5px 8px;
+  font-size: 12px;
+  line-height: 1.5;
+  font-family: inherit;
+  outline: none;
+  overflow-y: auto;
+  transition:
+    border-color var(--dur-fast) var(--ease),
+    box-shadow var(--dur-fast) var(--ease),
+    background var(--dur-fast) var(--ease);
+}
+
+.text-area:focus {
+  border-color: var(--accent-line);
+  background: rgba(15, 23, 42, 0.05);
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
 .seg {
   display: flex;
   gap: 2px;
-  background: rgba(255, 255, 255, 0.04);
+  background: rgba(15, 23, 42, 0.035);
   border: 1px solid var(--hairline);
   border-radius: var(--radius-pill);
   padding: 2px;

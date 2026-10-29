@@ -23,6 +23,12 @@ export interface RenderContext {
 
 export interface RenderBackend {
   beginFrame(vp: Viewport): void;
+  /** 压入容器坐标（子节点相对父容器），popTransform 必须配对 */
+  pushTransform(x: number, y: number): void;
+  popTransform(): void;
+  /** 压入整体不透明度（用于非活动页淡化），popOpacity 必须配对 */
+  pushOpacity(alpha: number): void;
+  popOpacity(): void;
   drawRect(node: DocNode, fill?: string, stroke?: string, strokeWidth?: number, radius?: number, shadow?: boolean): void;
   drawEllipse(node: DocNode, fill?: string, stroke?: string, strokeWidth?: number): void;
   drawLine(node: DocNode, stroke?: string, strokeWidth?: number): void;

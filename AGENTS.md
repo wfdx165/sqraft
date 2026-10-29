@@ -2,6 +2,11 @@
 
 Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、Web 优先）。文档与注释用中文，代码标识符英文。
 
+## 工作流约束
+
+- **任务完成后不要执行任何 git 命令**（add / commit / push / tag / reset 等，含 `--no-verify`）。改动留在工作区即可，由用户自行提交。
+- **不要自行运行 `pnpm dev`**（开发服务器由用户自己启动）。需要界面验证时，用 Playwright 打开用户已启动的 `http://localhost:5173` 做可视化验证；若端口未启动，只做 `pnpm test && pnpm build` 并说明。
+
 ## 常用命令
 
 - 安装：`pnpm install`（pnpm 10；esbuild postinstall 被忽略的警告无害，构建正常）
@@ -40,4 +45,4 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、Web 优先）。文档
 ## 验证
 
 - 代码改动：`pnpm test && pnpm build`
-- 交互改动：`pnpm dev` → 矩形工具拖拽画框 → 图层面板出现节点、检查器显示属性、填充解析为 Token 色、撤销可用
+- 交互改动：用户启动 `pnpm dev` 后，用 Playwright 打开 `http://localhost:5173` 验证：矩形工具拖拽画框 → 图层面板出现节点、检查器显示属性、填充解析为 Token 色、撤销可用

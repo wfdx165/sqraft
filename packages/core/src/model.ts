@@ -95,8 +95,22 @@ export function createNode(type: NodeType, patch: Partial<DocNode> = {}): DocNod
   };
 }
 
+/** 文本行高倍数：渲染器与 UI 测量共用，保证行内编辑与画布一致。 */
+export const TEXT_LINE_HEIGHT = 1.4;
+
+export const DEFAULT_PAGE_WIDTH = 1440;
+export const DEFAULT_PAGE_HEIGHT = 1024;
+/** 页面自由摆放时的新建间距 */
+export const PAGE_GAP = 160;
+
 export function createEmptyDoc(): DocState {
-  const page = createNode("page", { name: "页面 1", width: 0, height: 0 });
+  const page = createNode("page", {
+    name: "页面 1",
+    x: 0,
+    y: 0,
+    width: DEFAULT_PAGE_WIDTH,
+    height: DEFAULT_PAGE_HEIGHT,
+  });
   return {
     version: 1,
     rootIds: [page.id],
@@ -144,4 +158,39 @@ export function nextPageName(state: DocState): string {
   let n = getPages(state).length + 1;
   while (used.has(`页面 ${n}`)) n += 1;
   return `页面 ${n}`;
+}
+
+export interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** 节点在画布世界坐标中的包围盒（累加祖先偏移，忽略旋转）。 */
+export function worldRect(state: DocState, id: NodeId): Rect | null {
+  const node = state.nodes[id];
+  if (!node) return null;
+  const chain: DocNode[] = [];
+  let cur: DocNode | undefined = node;
+  while (cur) {
+    chain.push(cur);
+    cur = cur.parentId ? state.nodes[cur.parentId] : undefined;
+  }
+  let x = 0;
+  let y = 0;
+  for (let i = chain.length - 1; i >= 0; i--) {
+    x += chain[i].x;
+    y += chain[i].y;
+  }
+  return { x, y, width: node.width, height: node.height };
+}
+
+/** 新建页面的摆放位置：最右侧页面之右，与首屏顶部对齐。 */
+export function nextPagePosition(state: DocState): { x: number; y: number } {
+  const pages = getPages(state);
+  if (pages.length === 0) return { x: 0, y: 0 };
+  const right = Math.max(...pages.map((p) => p.x + p.width));
+  const top = Math.min(...pages.map((p) => p.y));
+  return { x: right + PAGE_GAP, y: top };
 }

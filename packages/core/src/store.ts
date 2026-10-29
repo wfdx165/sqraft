@@ -10,7 +10,9 @@ export type Command =
   | { type: "node.create"; params: { nodes: DocNode[]; parentId: NodeId | null; index?: number } }
   | { type: "node.delete"; params: { nodeId: NodeId } }
   | { type: "node.update"; params: { nodeId: NodeId; patch: Partial<DocNode> } }
-  | { type: "token.define"; params: { path: string; tokenType: "color" | "number"; value: string | number } };
+  | { type: "token.define"; params: { path: string; tokenType: "color" | "number"; value: string | number } }
+  /** 改名是原子操作：token 条目与所有节点引用一起改，只占一步撤销 */
+  | { type: "token.rename"; params: { from: string; to: string } };
 
 interface Inverse {
   cmd: Command;
@@ -165,6 +167,31 @@ export class DocStore {
         }
         // 新建 token 的逆：无原生命令表达"删除"，用同名空实现占位（骨架级）
         return { cmd: { type: "token.define", params: { path, tokenType, value } } };
+      }
+      case "token.rename": {
+        const { from, to } = cmd.params;
+        // 非法改名直接抛错：静默 no-op 会留下一条"撤销了却什么也没变"的历史
+        if (from === to) throw new Error(`Token "${from}" 的目标路径与原名相同`);
+        const entry = this.state.tokens[from];
+        if (!entry) throw new Error(`Token "${from}" 不存在`);
+        if (this.state.tokens[to]) throw new Error(`Token "${to}" 已存在，不能重命名`);
+
+        delete this.state.tokens[from];
+        this.state.tokens[to] = entry;
+
+        // 引用随动：节点的填充/描边是仅有的两处 Paint 引用
+        for (const node of Object.values(this.state.nodes)) {
+          const style = node.style;
+          let next: typeof style | null = null;
+          if (style.fill?.token === from) next = { ...style, fill: { ...style.fill, token: to } };
+          if (style.stroke?.token === from) next = { ...(next ?? style), stroke: { ...style.stroke, token: to } };
+          if (next) {
+            node.style = next;
+            changed.add(node.id);
+          }
+        }
+        changed.add("__doc__" as NodeId);
+        return { cmd: { type: "token.rename", params: { from: to, to: from } } };
       }
     }
   }
