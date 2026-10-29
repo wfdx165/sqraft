@@ -4,9 +4,9 @@
  * 渲染层无文档缓存（architecture.md §5）。
  */
 
-import type { DocNode, DocState, NodeId, VectorPath } from "@sqraft/core";
-import { cornerRadiusOf, resolvePaint, polygonPoints } from "@sqraft/core";
-import type { RenderBackend, RenderContext, Viewport } from "./backend";
+import type { DocNode, DocState, Effect, NodeId, Rect, VectorPath } from "@sqraft/core";
+import { cornerRadiusOf, resolvePaint, polygonPoints, subtreeWorldBounds } from "@sqraft/core";
+import type { RenderBackend, RenderContext, RenderEffect, Viewport } from "./backend";
 
 const CONTAINER_TYPES = new Set(["page", "frame", "group"]);
 
@@ -67,6 +67,48 @@ function geometryOf(node: DocNode, options: DrawOptions): { x: number; y: number
   return { x: node.x, y: node.y, width: node.width, height: node.height };
 }
 
+/** 把可见效果解析成可绘制形式（颜色由渲染器解析，后端不认识 Token）。 */
+function resolveEffects(ctx: RenderContext, effects: readonly Effect[] | undefined): RenderEffect[] {
+  if (!effects || effects.length === 0) return [];
+  const out: RenderEffect[] = [];
+  for (const effect of effects) {
+    if (!effect.visible) continue;
+    if (effect.type === "drop-shadow" || effect.type === "inner-shadow") {
+      const color = resolvePaint(ctx.doc, effect.color);
+      if (!color) continue;
+      out.push({ ...effect, color });
+    } else if (effect.type === "layer-blur" || effect.type === "backdrop-blur") {
+      out.push(effect);
+    }
+  }
+  return out;
+}
+
+/**
+ * 组不透明度层的包围盒：子树包围盒 + 渲染期预览带来的位移/尺寸增量。
+ * 预览是渲染期几何覆盖，包围盒必须跟着走；宁可扩一圈也不要把内容裁掉。
+ */
+function opacityLayerBounds(
+  doc: DocState,
+  node: DocNode,
+  geo: { x: number; y: number; width: number; height: number },
+  options: DrawOptions,
+): Rect | undefined {
+  const base = subtreeWorldBounds(doc, node.id);
+  if (!base) return undefined;
+  const moveX = options.movePreview ? Math.abs(options.movePreview.dx) : 0;
+  const moveY = options.movePreview ? Math.abs(options.movePreview.dy) : 0;
+  const spreadX = Math.abs(geo.x - node.x) + Math.abs(geo.width - node.width) + moveX;
+  const spreadY = Math.abs(geo.y - node.y) + Math.abs(geo.height - node.height) + moveY;
+  if (!spreadX && !spreadY) return base;
+  return {
+    x: base.x - spreadX,
+    y: base.y - spreadY,
+    width: base.width + spreadX * 2,
+    height: base.height + spreadY * 2,
+  };
+}
+
 function drawNode(
   backend: RenderBackend,
   ctx: RenderContext,
@@ -75,14 +117,19 @@ function drawNode(
 ): void {
   if (!node.visible) return;
   const opacity = node.opacity ?? 1;
-  if (opacity < 1) backend.pushOpacity(opacity);
   const geo = geometryOf(node, options);
   const changed = geo.x !== node.x || geo.y !== node.y || geo.width !== node.width || geo.height !== node.height;
+  const target = changed ? { ...node, ...geo } : node;
+  // 不透明度在外、效果在内：先按组合成，再施加效果，最后整体乘 alpha
+  if (opacity < 1) backend.pushOpacity(opacity, opacityLayerBounds(ctx.doc, node, geo, options));
+  // 效果层包住自绘与整棵子树：先合成，再施加效果（ADR-0018）
+  const effects = resolveEffects(ctx, node.style.effects);
+  if (effects.length > 0) backend.pushEffects(target, effects);
   // 行内编辑中的文本由 DOM 输入框承载，画布上跳过以免重影
   if (node.id !== options.hideTextId && node.id !== options.hidePathId) {
     const vectorOverride =
       options.vectorPreview && options.vectorPreview.id === node.id ? options.vectorPreview.vector : undefined;
-    drawSelf(backend, ctx, changed ? { ...node, ...geo } : node, vectorOverride);
+    drawSelf(backend, ctx, target, vectorOverride);
   }
   if (node.children.length > 0) {
     backend.pushTransform(geo.x, geo.y, node.rotation, geo.width, geo.height);
@@ -95,6 +142,7 @@ function drawNode(
     if (clipped) backend.popClip();
     backend.popTransform();
   }
+  if (effects.length > 0) backend.popEffects();
   if (opacity < 1) backend.popOpacity();
 }
 
@@ -125,6 +173,7 @@ export function drawDocument(backend: RenderBackend, doc: DocState, options: Dra
     const page = doc.nodes[pageId];
     if (!page) continue;
     const dimmed = Boolean(options.dimPageIds?.includes(pageId));
+    // 页面淡化的包围盒交给后端退化为视口：整页子树遍历太贵，而层本身会被视口裁住
     if (dimmed) backend.pushOpacity(0.35);
     const geo = geometryOf(page, options);
     // 页面 = 画布上的白色画板（带柔和投影）

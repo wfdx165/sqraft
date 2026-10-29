@@ -2,35 +2,108 @@
 
 import {
   ZERO_CORNER_RADIUS,
+  cornerRadiusOf,
+  effectLayerScale,
+  effectPadding,
   fontString,
   fontSizeOf,
   layoutText,
   letterSpacingPx,
+  polygonPoints,
   type CornerRadius,
   type DocNode,
+  type Rect,
   type VectorPath,
 } from "@sqraft/core";
-import type { RenderBackend, Viewport } from "./backend";
+import type { RenderBackend, RenderEffect, RenderShadowEffect, Viewport } from "./backend";
+
+/** 两个矩形求交；无交集时退化为 1×1 的空层。 */
+function intersectRect(a: Rect, b: Rect): Rect {
+  const x = Math.max(a.x, b.x);
+  const y = Math.max(a.y, b.y);
+  const right = Math.min(a.x + a.width, b.x + b.width);
+  const bottom = Math.min(a.y + a.height, b.y + b.height);
+  return { x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y) };
+}
+
+/** 节点包围盒在父坐标系里的轴对齐外接矩形，并按效果外扩量放大。 */
+function rotatedBounds(node: DocNode, pad: number): { x: number; y: number; width: number; height: number } {
+  const { x, y, width, height, rotation } = node;
+  if (!rotation) return { x: x - pad, y: y - pad, width: width + pad * 2, height: height + pad * 2 };
+  const rad = (rotation * Math.PI) / 180;
+  const cos = Math.abs(Math.cos(rad));
+  const sin = Math.abs(Math.sin(rad));
+  const w = width * cos + height * sin;
+  const h = width * sin + height * cos;
+  const cx = x + width / 2;
+  const cy = y + height / 2;
+  return { x: cx - w / 2 - pad, y: cy - h / 2 - pad, width: w + pad * 2, height: h + pad * 2 };
+}
+
+/** 效果层：子树先画进离屏，pop 时施加效果/不透明度并合成回来。 */
+interface EffectFrame {
+  canvas: HTMLCanvasElement;
+  ctx: CanvasRenderingContext2D;
+  /** 离屏像素 / 文档单位 */
+  scale: number;
+  /** 层在父级坐标系中的矩形（已含效果外扩） */
+  box: { x: number; y: number; width: number; height: number };
+  /** 该层的父级坐标 → 层像素矩阵（合成与形状遮罩共用） */
+  matrix: { a: number; b: number; c: number; d: number; e: number; f: number };
+  /** 层在父级画布像素坐标里的矩形（背景模糊取样用） */
+  device: { x: number; y: number; width: number; height: number };
+  effects: readonly RenderEffect[];
+  /** 组不透明度（合成时整体乘一次） */
+  alpha: number;
+  node: DocNode | null;
+  /** 拿不到离屏上下文时退化为直通，保证 push/pop 仍然配对 */
+  passthrough: boolean;
+}
+
+export interface FrameStats {
+  /** 本帧开启的离屏层数（效果层 + 不透明度层） */
+  layers: number;
+  /** 本帧离屏合成累计耗时（ms） */
+  layerMs: number;
+}
 
 export class Canvas2DBackend implements RenderBackend {
-  private ctx: CanvasRenderingContext2D;
+  private main: CanvasRenderingContext2D;
+  private frames: EffectFrame[] = [];
+  /** 上一帧的离屏统计（开发态帧耗时 HUD 用；不影响绘制） */
+  readonly stats: FrameStats = { layers: 0, layerMs: 0 };
+  private viewport: Viewport | null = null;
+  /** 页面坐标 → 设备像素（由 beginFrame 的视口推导） */
+  private worldToDevice: DOMMatrix | null = null;
 
   constructor(ctx: CanvasRenderingContext2D) {
-    this.ctx = ctx;
+    this.main = ctx;
+  }
+
+  /** 当前绘制目标：效果层内为离屏上下文，否则为主画布。 */
+  private get ctx(): CanvasRenderingContext2D {
+    return this.frames.length > 0 ? this.frames[this.frames.length - 1].ctx : this.main;
   }
 
   beginFrame(vp: Viewport): void {
-    const canvas = this.ctx.canvas;
+    this.frames = [];
+    this.stats.layers = 0;
+    this.stats.layerMs = 0;
+    this.viewport = vp;
+    const k = vp.dpr * vp.zoom;
+    this.worldToDevice = new DOMMatrix([k, 0, 0, k, -vp.x * k, -vp.y * k]);
+    const canvas = this.main.canvas;
     const pw = Math.round(vp.width * vp.dpr);
     const ph = Math.round(vp.height * vp.dpr);
     if (canvas.width !== pw || canvas.height !== ph) {
       canvas.width = pw;
       canvas.height = ph;
     }
-    const ctx = this.ctx;
+    const ctx = this.main;
     ctx.setTransform(vp.dpr, 0, 0, vp.dpr, 0, 0);
     ctx.globalAlpha = 1;
     ctx.globalCompositeOperation = "source-over";
+    ctx.filter = "none";
     ctx.clearRect(0, 0, vp.width, vp.height);
     // 应用视口变换（世界 → CSS 像素）
     ctx.scale(vp.zoom, vp.zoom);
@@ -57,7 +130,7 @@ export class Canvas2DBackend implements RenderBackend {
     const ctx = this.ctx;
     ctx.save();
     ctx.beginPath();
-    this.roundedPath(x, y, width, height, radius);
+    this.roundedPath(ctx, x, y, width, height, radius);
     ctx.clip();
   }
 
@@ -65,13 +138,395 @@ export class Canvas2DBackend implements RenderBackend {
     this.ctx.restore();
   }
 
-  pushOpacity(alpha: number): void {
-    this.ctx.save();
-    this.ctx.globalAlpha *= Math.max(0, Math.min(1, alpha));
+  /**
+   * 开启组不透明度层。`bounds` 是子树在**页面坐标系**里的包围盒；缺省退化为当前视口。
+   * 层尺寸取「包围盒 ∩ 视口」，因此再大的画板在屏幕上也只有一层屏幕大小的离屏。
+   * 不透明度层不做降采样 —— 那会把文字糊掉。
+   */
+  pushOpacity(alpha: number, bounds?: Rect): void {
+    const clamped = Math.max(0, Math.min(1, alpha));
+    const world = intersectRect(bounds ?? this.visibleWorldRect(), this.visibleWorldRect());
+    this.openLayer(this.worldRectToLocal(world), {
+      downsample: false,
+      effects: [],
+      alpha: clamped,
+      node: null,
+    });
   }
 
   popOpacity(): void {
-    this.ctx.restore();
+    this.finishFrame();
+  }
+
+  pushEffects(node: DocNode, effects: readonly RenderEffect[]): void {
+    const pad = effectPadding(effects);
+    const box = intersectRect(rotatedBounds(node, pad), this.worldRectToLocal(this.visibleWorldRect()));
+    this.openLayer(box, { downsample: true, effects, alpha: 1, node });
+  }
+
+  popEffects(): void {
+    this.finishFrame();
+  }
+
+  /**
+   * 开一层离屏：层的世界→像素映射与父级完全一致，只是按采样倍率整体缩放。
+   * 效果层按 2048 封顶降采样；不透明度层保持设备分辨率。
+   */
+  private openLayer(
+    box: { x: number; y: number; width: number; height: number },
+    options: { downsample: boolean; effects: readonly RenderEffect[]; alpha: number; node: DocNode | null },
+  ): void {
+    const parent = this.ctx;
+    const t = parent.getTransform();
+    const deviceScale = Math.hypot(t.a, t.b) || 1;
+
+    // 内容在设备像素里的外接框：父级可能带旋转，不能直接用 box 的宽高
+    const project = (x: number, y: number) => ({ x: t.a * x + t.c * y + t.e, y: t.b * x + t.d * y + t.f });
+    const corners = [
+      project(box.x, box.y),
+      project(box.x + box.width, box.y),
+      project(box.x + box.width, box.y + box.height),
+      project(box.x, box.y + box.height),
+    ];
+    const device = {
+      x: Math.min(...corners.map((p) => p.x)),
+      y: Math.min(...corners.map((p) => p.y)),
+      width: Math.max(...corners.map((p) => p.x)) - Math.min(...corners.map((p) => p.x)),
+      height: Math.max(...corners.map((p) => p.y)) - Math.min(...corners.map((p) => p.y)),
+    };
+    // 样点倍率：效果层按 2048 封顶降采样；不透明度层保持设备分辨率（降采样会糊文字）
+    const scale = options.downsample
+      ? effectLayerScale(device.width / deviceScale, device.height / deviceScale, deviceScale)
+      : deviceScale;
+    const s = scale / deviceScale;
+    const width = Math.max(1, Math.round(device.width * s));
+    const height = Math.max(1, Math.round(device.height * s));
+
+    // 层内容用「父级变换减去外接框原点」绘制，因此位图里已经带着旋转
+    const matrix = {
+      a: t.a * s,
+      b: t.b * s,
+      c: t.c * s,
+      d: t.d * s,
+      e: (t.e - device.x) * s,
+      f: (t.f - device.y) * s,
+    };
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    const frame: EffectFrame = {
+      canvas,
+      ctx: ctx ?? parent,
+      scale,
+      matrix,
+      box,
+      device,
+      effects: options.effects,
+      alpha: options.alpha,
+      node: options.node,
+      passthrough: !ctx,
+    };
+    if (ctx) {
+      ctx.setTransform(matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f);
+      ctx.lineJoin = "round";
+    }
+    this.frames.push(frame);
+  }
+
+  /** 当前帧的可见世界矩形（视口换算回世界坐标）。 */
+  private visibleWorldRect(): Rect {
+    const vp = this.viewport;
+    if (!vp) return { x: 0, y: 0, width: 1, height: 1 };
+    return { x: vp.x, y: vp.y, width: vp.width / vp.zoom, height: vp.height / vp.zoom };
+  }
+
+  /** 页面坐标 → 当前绘图层坐标（取四角反变换的外接框；旋转时略大）。 */
+  private worldRectToLocal(box: Rect): Rect {
+    const localToDevice = this.ctx.getTransform();
+    const worldToDevice = this.worldToDevice;
+    if (!worldToDevice) return box;
+    const m = localToDevice.inverse().multiply(worldToDevice);
+    let minX = Number.POSITIVE_INFINITY;
+    let minY = Number.POSITIVE_INFINITY;
+    let maxX = Number.NEGATIVE_INFINITY;
+    let maxY = Number.NEGATIVE_INFINITY;
+    for (const [px, py] of [
+      [box.x, box.y],
+      [box.x + box.width, box.y],
+      [box.x + box.width, box.y + box.height],
+      [box.x, box.y + box.height],
+    ] as const) {
+      const x = m.a * px + m.c * py + m.e;
+      const y = m.b * px + m.d * py + m.f;
+      if (x < minX) minX = x;
+      if (y < minY) minY = y;
+      if (x > maxX) maxX = x;
+      if (y > maxY) maxY = y;
+    }
+    return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
+  }
+
+  /** 结束当前层：施加效果、按组不透明度合成回父级。 */
+  private finishFrame(): void {
+    const frame = this.frames.pop();
+    if (!frame || frame.passthrough) return;
+    this.stats.layers += 1;
+    const started = performance.now();
+    const result = frame.effects.length > 0 ? this.composeEffects(frame) : frame.canvas;
+    const parent = this.ctx;
+    parent.save();
+    parent.globalAlpha *= frame.alpha;
+    // 层位图已经带着父级变换（含旋转）画好了，回贴必须按设备像素 1:1 摆放，
+    // 不能再套一次父级变换 —— 那会把内容旋转/缩放两遍。
+    parent.setTransform(1, 0, 0, 1, 0, 0);
+    parent.drawImage(result, 0, 0, result.width, result.height, frame.device.x, frame.device.y, frame.device.width, frame.device.height);
+    parent.restore();
+    this.release(frame.canvas);
+    if (result !== frame.canvas) this.release(result);
+    this.stats.layerMs += performance.now() - started;
+  }
+
+  /** 依次施加效果层上记录的每一条效果（后一条基于前一条的输出）。 */
+  private composeEffects(frame: EffectFrame): HTMLCanvasElement {
+    let current = frame.canvas;
+    for (const effect of frame.effects) {
+      if (!effect.visible) continue;
+      let next: HTMLCanvasElement | null = null;
+      if (effect.type === "drop-shadow") next = this.composeDropShadow(current, effect, frame);
+      else if (effect.type === "inner-shadow") next = this.composeInnerShadow(current, effect, frame);
+      else if (effect.type === "layer-blur") next = this.composeLayerBlur(current, effect.radius, frame);
+      else if (effect.type === "backdrop-blur") next = this.composeBackdropBlur(current, effect.radius, frame);
+      if (next) {
+        if (current !== frame.canvas) this.release(current);
+        current = next;
+      }
+    }
+    return current;
+  }
+
+  private composeDropShadow(
+    src: HTMLCanvasElement,
+    effect: RenderShadowEffect,
+    frame: EffectFrame,
+  ): HTMLCanvasElement | null {
+    const w = src.width;
+    const h = src.height;
+    const silhouette = this.newLayer(w, h);
+    const s = silhouette.getContext("2d");
+    const out = this.newLayer(w, h);
+    const o = out.getContext("2d");
+    if (!s || !o) return null;
+
+    // 轮廓：取合成结果的 alpha，染成阴影色
+    s.drawImage(src, 0, 0);
+    s.globalCompositeOperation = "source-in";
+    s.fillStyle = effect.color;
+    s.fillRect(0, 0, w, h);
+    s.globalCompositeOperation = "source-over";
+
+    const blurPx = Math.max(0, effect.blur) * frame.scale;
+    const spread = effect.spread * frame.scale;
+    const dx = effect.x * frame.scale;
+    const dy = effect.y * frame.scale;
+    o.filter = blurPx > 0 ? `blur(${blurPx}px)` : "none";
+    o.drawImage(silhouette, dx - spread, dy - spread, w + spread * 2, h + spread * 2);
+    o.filter = "none";
+    o.drawImage(src, 0, 0);
+    this.release(silhouette);
+    return out;
+  }
+
+  private composeInnerShadow(
+    src: HTMLCanvasElement,
+    effect: RenderShadowEffect,
+    frame: EffectFrame,
+  ): HTMLCanvasElement | null {
+    const w = src.width;
+    const h = src.height;
+    const mask = this.newLayer(w, h);
+    const m = mask.getContext("2d");
+    const out = this.newLayer(w, h);
+    const o = out.getContext("2d");
+    if (!m || !o) return null;
+
+    const blurPx = Math.max(0, effect.blur) * frame.scale;
+    const spread = effect.spread * frame.scale;
+    const dx = effect.x * frame.scale;
+    const dy = effect.y * frame.scale;
+
+    // 整层铺阴影色，再用偏移轮廓挖掉内部，只在内缘留一圈
+    m.fillStyle = effect.color;
+    m.fillRect(0, 0, w, h);
+    m.globalCompositeOperation = "destination-out";
+    m.filter = blurPx > 0 ? `blur(${blurPx}px)` : "none";
+    m.drawImage(src, dx - spread, dy - spread, w + spread * 2, h + spread * 2);
+    m.filter = "none";
+    m.globalCompositeOperation = "destination-in";
+    const shape = this.shapeMask(frame, w, h);
+    if (shape) m.drawImage(shape, 0, 0);
+    m.globalCompositeOperation = "source-over";
+    if (shape) this.release(shape);
+
+    o.drawImage(src, 0, 0);
+    o.drawImage(mask, 0, 0);
+    this.release(mask);
+    return out;
+  }
+
+  private composeLayerBlur(src: HTMLCanvasElement, radius: number, frame: EffectFrame): HTMLCanvasElement | null {
+    const w = src.width;
+    const h = src.height;
+    const out = this.newLayer(w, h);
+    const o = out.getContext("2d");
+    if (!o) return null;
+    const blurPx = Math.max(0, radius) * frame.scale;
+    o.filter = blurPx > 0 ? `blur(${blurPx}px)` : "none";
+    o.drawImage(src, 0, 0);
+    o.filter = "none";
+    // 模糊被节点自身圆角裁住（投影在形状外部，不走这里）
+    const shape = this.shapeMask(frame, w, h);
+    if (shape) {
+      o.globalCompositeOperation = "destination-in";
+      o.drawImage(shape, 0, 0);
+      o.globalCompositeOperation = "source-over";
+      this.release(shape);
+    }
+    return out;
+  }
+
+  /**
+   * 背景模糊：模糊“该节点之下、父级已经画好的内容”，再裁到节点形状，垫在内容之下。
+   * 取样的父级可能是主画布，也可能是外层的效果/不透明度层，因此网格与 UI 叠加层天然不参与。
+   */
+  private composeBackdropBlur(
+    src: HTMLCanvasElement,
+    radius: number,
+    frame: EffectFrame,
+  ): HTMLCanvasElement | null {
+    const w = src.width;
+    const h = src.height;
+    const backdrop = this.newLayer(w, h);
+    const b = backdrop.getContext("2d");
+    const blurred = this.newLayer(w, h);
+    const bl = blurred.getContext("2d");
+    const out = this.newLayer(w, h);
+    const o = out.getContext("2d");
+    if (!b || !bl || !o) return null;
+
+    // 抓取父级画布上对应的设备矩形（旋转祖先是近似）
+    const source = this.ctx.canvas;
+    b.drawImage(source, frame.device.x, frame.device.y, frame.device.width, frame.device.height, 0, 0, w, h);
+
+    const blurPx = Math.max(0, radius) * frame.scale;
+    bl.filter = blurPx > 0 ? `blur(${blurPx}px)` : "none";
+    bl.drawImage(backdrop, 0, 0);
+    bl.filter = "none";
+    this.release(backdrop);
+
+    const shape = this.shapeMask(frame, w, h);
+    if (shape) {
+      bl.globalCompositeOperation = "destination-in";
+      bl.drawImage(shape, 0, 0);
+      bl.globalCompositeOperation = "source-over";
+      this.release(shape);
+    }
+
+    o.drawImage(blurred, 0, 0);
+    o.drawImage(src, 0, 0);
+    this.release(blurred);
+    return out;
+  }
+
+  /** 节点自身轮廓（含圆角与旋转）铺满的遮罩，尺寸与效果层一致。 */
+  private shapeMask(frame: EffectFrame, w: number, h: number): HTMLCanvasElement | null {
+    const node = frame.node;
+    if (!node) return null;
+    const layer = this.newLayer(w, h);
+    const g = layer.getContext("2d");
+    if (!g) return null;
+    const m = frame.matrix;
+    g.setTransform(m.a, m.b, m.c, m.d, m.e, m.f);
+    if (node.rotation) {
+      g.translate(node.x + node.width / 2, node.y + node.height / 2);
+      g.rotate((node.rotation * Math.PI) / 180);
+      g.translate(-(node.x + node.width / 2), -(node.y + node.height / 2));
+    }
+    this.traceShape(g, node);
+    g.fillStyle = "#000";
+    g.fill();
+    return layer;
+  }
+
+  private newLayer(w: number, h: number): HTMLCanvasElement {
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, w);
+    canvas.height = Math.max(1, h);
+    return canvas;
+  }
+
+  private release(canvas: HTMLCanvasElement): void {
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+
+  /** 节点自身轮廓（用于把效果裁剪到形状内部）。 */
+  private traceShape(g: CanvasRenderingContext2D, node: DocNode): void {
+    const style = node.style;
+    switch (node.type) {
+      case "ellipse":
+        g.beginPath();
+        g.ellipse(
+          node.x + node.width / 2,
+          node.y + node.height / 2,
+          Math.abs(node.width / 2),
+          Math.abs(node.height / 2),
+          0,
+          0,
+          Math.PI * 2,
+        );
+        return;
+      case "polygon": {
+        const points = polygonPoints(node.sides, node.width, node.height);
+        g.beginPath();
+        if (points.length < 3) return;
+        g.moveTo(node.x + points[0].x, node.y + points[0].y);
+        for (let i = 1; i < points.length; i++) g.lineTo(node.x + points[i].x, node.y + points[i].y);
+        g.closePath();
+        return;
+      }
+      case "path": {
+        const vector = node.vector;
+        g.beginPath();
+        if (!vector || vector.anchors.length < 2) return;
+        const a0 = vector.anchors[0];
+        g.moveTo(node.x + a0.x, node.y + a0.y);
+        const segments = vector.closed ? vector.anchors.length : vector.anchors.length - 1;
+        for (let i = 0; i < segments; i++) {
+          const a = vector.anchors[i];
+          const b = vector.anchors[(i + 1) % vector.anchors.length];
+          const curved = a.outX !== 0 || a.outY !== 0 || b.inX !== 0 || b.inY !== 0;
+          if (curved) {
+            g.bezierCurveTo(
+              node.x + a.x + a.outX,
+              node.y + a.y + a.outY,
+              node.x + b.x + b.inX,
+              node.y + b.y + b.inY,
+              node.x + b.x,
+              node.y + b.y,
+            );
+          } else {
+            g.lineTo(node.x + b.x, node.y + b.y);
+          }
+        }
+        if (vector.closed) g.closePath();
+        return;
+      }
+      default:
+        g.beginPath();
+        this.roundedPath(g, node.x, node.y, node.width, node.height, cornerRadiusOf(style));
+    }
   }
 
   private applyRotation(node: DocNode): void {
@@ -83,23 +538,22 @@ export class Canvas2DBackend implements RenderBackend {
   }
 
   /** 四角独立的圆角矩形路径。 */
-  private roundedPath(x: number, y: number, w: number, h: number, radius: CornerRadius): void {
-    const ctx = this.ctx;
+  private roundedPath(g: CanvasRenderingContext2D, x: number, y: number, w: number, h: number, radius: CornerRadius): void {
     const max = Math.max(0, Math.min(w, h) / 2);
     const tl = Math.min(radius.topLeft ?? 0, max);
     const tr = Math.min(radius.topRight ?? 0, max);
     const br = Math.min(radius.bottomRight ?? 0, max);
     const bl = Math.min(radius.bottomLeft ?? 0, max);
-    ctx.moveTo(x + tl, y);
-    ctx.lineTo(x + w - tr, y);
-    if (tr) ctx.arcTo(x + w, y, x + w, y + tr, tr);
-    ctx.lineTo(x + w, y + h - br);
-    if (br) ctx.arcTo(x + w, y + h, x + w - br, y + h, br);
-    ctx.lineTo(x + bl, y + h);
-    if (bl) ctx.arcTo(x, y + h, x, y + h - bl, bl);
-    ctx.lineTo(x, y + tl);
-    if (tl) ctx.arcTo(x, y, x + tl, y, tl);
-    ctx.closePath();
+    g.moveTo(x + tl, y);
+    g.lineTo(x + w - tr, y);
+    if (tr) g.arcTo(x + w, y, x + w, y + tr, tr);
+    g.lineTo(x + w, y + h - br);
+    if (br) g.arcTo(x + w, y + h, x + w - br, y + h, br);
+    g.lineTo(x + bl, y + h);
+    if (bl) g.arcTo(x, y + h, x, y + h - bl, bl);
+    g.lineTo(x, y + tl);
+    if (tl) g.arcTo(x, y, x + tl, y, tl);
+    g.closePath();
   }
 
   drawRect(
@@ -114,7 +568,7 @@ export class Canvas2DBackend implements RenderBackend {
     ctx.save();
     this.applyRotation(node);
     ctx.beginPath();
-    this.roundedPath(node.x, node.y, node.width, node.height, radius);
+    this.roundedPath(ctx, node.x, node.y, node.width, node.height, radius);
     if (fill) {
       if (shadow) {
         ctx.shadowColor = "rgba(15, 23, 42, 0.16)";

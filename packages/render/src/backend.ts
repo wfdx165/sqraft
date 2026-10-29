@@ -3,7 +3,12 @@
  * 未来 WebGL2 后端实现同一接口即可替换，文档模型零改动。
  */
 
-import type { CornerRadius, DocNode, DocState, VectorPath } from "@sqraft/core";
+import type { BlurEffect, CornerRadius, DocNode, DocState, Rect, ShadowEffect, VectorPath } from "@sqraft/core";
+
+/** 已经解析成 CSS 颜色的阴影效果：后端不解析 Token。 */
+export type RenderShadowEffect = Omit<ShadowEffect, "color"> & { color: string };
+/** 交给后端的可绘制效果（颜色已解析、visible 已过滤）。 */
+export type RenderEffect = RenderShadowEffect | BlurEffect;
 
 export interface Viewport {
   /** 视口左上角在世界坐标中的位置 */
@@ -29,9 +34,19 @@ export interface RenderBackend {
   /** 压入裁剪区域（当前坐标系），popClip 必须配对 */
   pushClip(x: number, y: number, width: number, height: number, radius: CornerRadius): void;
   popClip(): void;
-  /** 压入整体不透明度，popOpacity 必须配对 */
-  pushOpacity(alpha: number): void;
+  /**
+   * 压入组不透明度层：其后绘制的子树先进入离屏，popOpacity 时整体乘一次 alpha 再合回。
+   * `bounds` 是子树在页面坐标系里的包围盒（缺省退化为当前视口），后端会与视口求交，
+   * 因此层尺寸恒不超过一屏。pushOpacity / popOpacity 必须配对。
+   */
+  pushOpacity(alpha: number, bounds?: Rect): void;
   popOpacity(): void;
+  /**
+   * 开启效果层：其后绘制的整棵子树先进入离屏缓冲，popEffects 时按顺序施加效果
+   * 再合成回当前上下文。pushEffects / popEffects 必须配对，可嵌套。
+   */
+  pushEffects(node: DocNode, effects: readonly RenderEffect[]): void;
+  popEffects(): void;
   drawRect(node: DocNode, fill?: string, stroke?: string, strokeWidth?: number, radius?: CornerRadius, shadow?: boolean): void;
   drawEllipse(node: DocNode, fill?: string, stroke?: string, strokeWidth?: number): void;
   drawLine(node: DocNode, stroke?: string, strokeWidth?: number): void;

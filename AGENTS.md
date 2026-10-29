@@ -12,7 +12,7 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、Web 优先）。文档
 - 安装：`pnpm install`（pnpm 10；esbuild postinstall 被忽略的警告无害，构建正常）
 - 开发：`pnpm dev` —— 只启动 `apps/web`（Vite，:5173）。各包经 `apps/web/vite.config.ts` 的别名直接引用源码，改包代码无需单独构建
 - 类型检查 + 构建：`pnpm build`（packages 内 `tsc` 仅类型检查，`noEmit`；web 走 `vite build`）
-- 测试：`pnpm test` —— 只跑 `@sqraft/core` 的 vitest；render/ai-tools 无测试运行器
+- 测试：`pnpm test` —— 递归跑有 `test` 脚本的包（`@sqraft/core`、`@sqraft/ai-tools` 的 vitest）；`@sqraft/render` 无测试运行器
 - 单个测试：`pnpm --filter @sqraft/core exec vitest run -t "关键词"`
 - 没有 lint/format 配置（未装 ESLint/Prettier）。类型检查就是质量门槛，不要擅自引入
 

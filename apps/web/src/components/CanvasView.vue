@@ -71,6 +71,12 @@ import { keyOf, registerShortcuts } from "../shortcuts";
 import { vTip } from "../tooltip";
 import Icon from "./Icon.vue";
 
+/**
+ * 三层画布（自下而上）：网格 → 文档 → UI 叠加层。
+ * 文档层归渲染后端独占；指针事件与坐标换算都落在最上层的 UI 画布上。
+ */
+const gridCanvasRef = ref<HTMLCanvasElement | null>(null);
+const docCanvasRef = ref<HTMLCanvasElement | null>(null);
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 const zoomPct = ref(100);
 const zoomMenuOpen = ref(false);
@@ -86,10 +92,17 @@ const hoverTextId = ref<NodeId | null>(null);
 /** 悬停的容器（画出其一级子元素边界，纯 UI 状态） */
 const hoverContainerId = ref<NodeId | null>(null);
 
+/** UI 叠加层上下文（唯一承接指针事件的画布） */
 let ctx: CanvasRenderingContext2D | null = null;
+/** 网格层上下文（视口辅助物，永远画在文档之下） */
+let gridCtx: CanvasRenderingContext2D | null = null;
+/** 文档层后端（独占中间那块画布） */
 let backend: Canvas2DBackend | null = null;
 let raf = 0;
 let dirty = true;
+/** 开发态帧耗时读数（生产构建不显示） */
+const devHud = ref<string>("");
+const DEV_HUD = import.meta.env.DEV;
 
 let drag: {
   pointerId: number;
@@ -186,11 +199,30 @@ function markDirty() {
   dirty = true;
 }
 
+/** 叠加层画布尺寸跟随视口与 DPR（文档层由后端在 beginFrame 里自行处理）。 */
+function syncLayerSize(canvas: HTMLCanvasElement): void {
+  const w = Math.round(vp.width * vp.dpr);
+  const h = Math.round(vp.height * vp.dpr);
+  if (canvas.width !== w || canvas.height !== h) {
+    canvas.width = w;
+    canvas.height = h;
+  }
+}
+
+/** 按设备像素清空整层（与当前变换无关）。 */
+function clearLayer(g: CanvasRenderingContext2D): void {
+  g.save();
+  g.setTransform(1, 0, 0, 1, 0, 0);
+  g.clearRect(0, 0, g.canvas.width, g.canvas.height);
+  g.restore();
+}
+
 /** 钢笔逻辑的依赖：文档、UI 状态与命令入口（显式注入，模块内不 import 单例）。 */
 const penDeps = { docStore, ui, dispatch, select, markDirty };
 
 function draw() {
   if (!ctx || !backend) return;
+  const frameStarted = DEV_HUD ? performance.now() : 0;
 
   zoomPct.value = Math.round(vp.zoom * 100);
   const editing = ui.mode === "edit";
@@ -211,8 +243,14 @@ function draw() {
   // 非活动页淡化（编辑模式）
   const dimPageIds = editing ? docStore.doc.rootIds.filter((id) => id !== ui.activePageId) : undefined;
 
+  // 网格层：视口辅助物，独立画布，永远在文档之下
+  if (gridCtx) {
+    syncLayerSize(gridCtx.canvas);
+    clearLayer(gridCtx);
+    drawGrid(gridCtx, vp);
+  }
+
   backend.beginFrame(vp);
-  drawGrid(ctx, vp);
   drawDocument(backend, docStore.doc, {
     hideTextId: textEdit.value?.id,
     hidePathId: pen.vectorDrag?.preview && pen.pathEdit ? pen.pathEdit.id : undefined,
@@ -224,9 +262,11 @@ function draw() {
   });
   backend.endFrame();
 
-  // 覆盖层：选中框 / 手柄 / 尺寸徽标 / 拖拽预览 / 脉冲
+  // 覆盖层（UI 层）：独立画布，永远在文档之上；每帧自行清屏
+  syncLayerSize(ctx.canvas);
   ctx.save();
   ctx.setTransform(vp.dpr, 0, 0, vp.dpr, 0, 0);
+  ctx.clearRect(0, 0, vp.width, vp.height);
 
   // 悬停容器的子元素边界：信息层，压在选中框下面；任何手势 / 编辑态都不画
   if (editing && ui.tool === "select" && !drag && !pen.pathEdit && !textEdit.value) {
@@ -269,6 +309,11 @@ function draw() {
     activePageId: ui.activePageId,
     mode: ui.mode,
   });
+
+  if (DEV_HUD) {
+    const total = performance.now() - frameStarted;
+    devHud.value = `${total.toFixed(1)}ms · 离屏 ${backend.stats.layers} (${backend.stats.layerMs.toFixed(1)}ms)`;
+  }
 }
 
 let lastTick = performance.now();
@@ -1501,7 +1546,9 @@ let stopShortcuts = () => {};
 
 onMounted(() => {
   ctx = canvasRef.value!.getContext("2d");
-  backend = new Canvas2DBackend(ctx!);
+  gridCtx = gridCanvasRef.value!.getContext("2d");
+  const docCtx = docCanvasRef.value!.getContext("2d");
+  if (docCtx) backend = new Canvas2DBackend(docCtx);
   hooks.getScreenshot = async () => {
     // 离屏重绘文档，不包含选中框、参考线、插槽占位等 UI 叠加层
     const off = document.createElement("canvas");
@@ -1604,9 +1651,11 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="viewport">
+    <canvas ref="gridCanvasRef" class="canvas canvas-grid" aria-hidden="true" />
+    <canvas ref="docCanvasRef" class="canvas canvas-doc" aria-hidden="true" />
     <canvas
       ref="canvasRef"
-      class="canvas"
+      class="canvas canvas-ui"
       :style="{ cursor }"
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"
@@ -1649,6 +1698,8 @@ onBeforeUnmount(() => {
       @blur="commitTextEdit"
     />
 
+    <div v-if="DEV_HUD" class="dev-hud">{{ devHud }}</div>
+
     <div class="zoom-bar glass">
       <button v-tip="{ label: '缩小', shortcut: keyOf('view.zoomOut') }" @click="zoomStep(1 / 1.2)">−</button>
       <button class="zoom-pct" v-tip="{ label: '选择缩放比例' }" @click="zoomMenuOpen = !zoomMenuOpen">{{ zoomPct }}%</button>
@@ -1689,6 +1740,33 @@ onBeforeUnmount(() => {
   width: 100%;
   height: 100%;
   touch-action: none;
+  /* 只有最上层 UI 画布接收指针事件；网格与文档层纯视觉 */
+  pointer-events: none;
+}
+.dev-hud {
+  position: absolute;
+  left: 50%;
+  bottom: 44px;
+  transform: translateX(-50%);
+  padding: 3px 7px;
+  border-radius: 6px;
+  background: rgba(15, 23, 42, 0.72);
+  color: #fff;
+  font-family: var(--mono);
+  font-size: 10px;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.canvas-grid {
+  z-index: 0;
+}
+.canvas-doc {
+  z-index: 1;
+}
+.canvas-ui {
+  z-index: 2;
+  pointer-events: auto;
 }
 
 /* 页面名称行内改名（与画布标签同位置、同字号） */

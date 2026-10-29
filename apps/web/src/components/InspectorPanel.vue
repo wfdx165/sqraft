@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useInspector } from "../inspector/useInspector";
+import { EFFECT_TYPES } from "@sqraft/core";
 import { docStore, ui } from "../store";
 
 const {
@@ -29,6 +30,17 @@ const {
   resolvedCustom,
   setCustomPaint,
   setStrokeWidth,
+  supportsEffects,
+  effectsOf,
+  effectLabel,
+  isShadowEffectOf,
+  shadowColorOf,
+  addEffect,
+  removeEffect,
+  toggleEffect,
+  setEffectNumber,
+  setEffectColorToken,
+  setEffectColorValue,
   radiusOf,
   uniform,
   radiusUnified,
@@ -502,6 +514,61 @@ const {
             :disabled="readonly"
             @change="setSides"
           />
+        </div>
+      </section>
+
+      <!-- 效果：投影 / 内阴影 / 图层模糊 / 背景模糊（有序，整体替换） -->
+      <section v-if="supportsEffects" class="block">
+        <span class="micro-label">效果</span>
+        <div v-for="(effect, index) in effectsOf(node)" :key="index" class="effect-item">
+          <div class="row">
+            <label>{{ effectLabel(effect.type) }}</label>
+            <div class="effect-actions">
+              <button class="mini" :disabled="readonly" @click="toggleEffect(index)">
+                {{ effect.visible ? "隐藏" : "显示" }}
+              </button>
+              <button class="mini" :disabled="readonly" @click="removeEffect(index)">删除</button>
+            </div>
+          </div>
+          <template v-if="isShadowEffectOf(effect)">
+            <div class="grid two">
+              <label>X</label>
+              <input class="mono" type="number" step="1" :value="fmt(effect.x)" :disabled="readonly" @change="setEffectNumber(index, 'x', $event)" />
+              <label>Y</label>
+              <input class="mono" type="number" step="1" :value="fmt(effect.y)" :disabled="readonly" @change="setEffectNumber(index, 'y', $event)" />
+              <label>模糊</label>
+              <input class="mono" type="number" min="0" step="1" :value="fmt(effect.blur)" :disabled="readonly" @change="setEffectNumber(index, 'blur', $event)" />
+              <label>扩散</label>
+              <input class="mono" type="number" step="1" :value="fmt(effect.spread)" :disabled="readonly" @change="setEffectNumber(index, 'spread', $event)" />
+            </div>
+            <div class="row sub-row">
+              <label>颜色</label>
+              <div class="color-control">
+                <span class="swatch" :style="{ background: shadowColorOf(effect) }" />
+                <select :value="effect.color.token ?? (effect.color.value ? '__custom' : '')" :disabled="readonly" @change="setEffectColorToken(index, $event)">
+                  <option value="">（默认）</option>
+                  <option value="__custom">自定义…</option>
+                  <option v-for="t in tokenNames" :key="t" :value="t">{{ t }}</option>
+                </select>
+              </div>
+            </div>
+            <div v-if="!effect.color.token" class="row sub-row">
+              <label />
+              <input type="color" class="color-input" :value="shadowColorOf(effect)" :disabled="readonly" @input="setEffectColorValue(index, $event)" />
+              <input class="mono hex" :value="effect.color.value ?? ''" :disabled="readonly" @change="setEffectColorValue(index, $event)" />
+            </div>
+          </template>
+          <div v-else class="row">
+            <label>半径</label>
+            <input class="mono" type="number" min="0" step="1" :value="fmt(effect.radius)" :disabled="readonly" @change="setEffectNumber(index, 'radius', $event)" />
+          </div>
+        </div>
+        <div class="row">
+          <label />
+          <select class="effect-add" :value="''" :disabled="readonly" @change="addEffect(($event.target as HTMLSelectElement).value)">
+            <option value="">+ 添加效果…</option>
+            <option v-for="t in EFFECT_TYPES" :key="t" :value="t">{{ effectLabel(t) }}</option>
+          </select>
         </div>
       </section>
 

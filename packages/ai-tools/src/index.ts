@@ -3,7 +3,7 @@
  * 纪律：样式只接受 Token 引用，字面量色值在工具层直接拒绝。
  */
 
-import type { Command, DocNode, DocStore, NodeId, NodeStyle, VectorAnchor } from "@sqraft/core";
+import type { Command, DocNode, DocStore, Effect, NodeId, NodeStyle, VectorAnchor } from "@sqraft/core";
 import {
   clampSides,
   createLayoutSpec,
@@ -58,6 +58,39 @@ const STYLE_SCHEMA: Record<string, unknown> = {
   textAutoResize: { type: "string", enum: ["auto-width", "auto-height", "fixed"] },
   listType: { type: "string", enum: ["none", "bulleted", "numbered"] },
   truncate: { type: "boolean" },
+  effects: {
+    description:
+      "节点效果列表，从下到上依次施加：投影 drop-shadow、内阴影 inner-shadow、图层模糊 layer-blur、背景模糊 backdrop-blur。传 [] 清空。阴影颜色只能用 fillToken 引用 Token（禁止字面量）。",
+    type: "array",
+    items: {
+      oneOf: [
+        {
+          type: "object",
+          properties: {
+            type: { type: "string", enum: ["drop-shadow", "inner-shadow"] },
+            visible: { type: "boolean" },
+            x: { type: "number", description: "偏移 X（文档单位）" },
+            y: { type: "number", description: "偏移 Y（文档单位）" },
+            blur: { type: "number", description: "模糊半径（文档单位，≥0）" },
+            spread: { type: "number", description: "扩散（文档单位，可为负）" },
+            fillToken: { type: "string", description: "阴影颜色的 Token 名，如 color/shadow" },
+          },
+          required: ["type", "fillToken"],
+          additionalProperties: false,
+        },
+        {
+          type: "object",
+          properties: {
+            type: { type: "string", enum: ["layer-blur", "backdrop-blur"] },
+            visible: { type: "boolean" },
+            radius: { type: "number", description: "模糊半径（文档单位，≥0）" },
+          },
+          required: ["type"],
+          additionalProperties: false,
+        },
+      ],
+    },
+  },
 };
 
 /** 节点几何/布局字段。 */
@@ -432,7 +465,48 @@ function applyStyleArgs(style: NodeStyle, args: Record<string, unknown>): NodeSt
   const corner = cornerFrom(args.cornerRadius);
   if (corner) next.cornerRadius = corner;
   applyStyleTokens(next, args);
+  if (args.effects !== undefined) next.effects = effectsFrom(args.effects);
   return next;
+}
+
+/** 效果入参 → 模型效果：颜色只接受 Token 引用（与填充同一纪律）。 */
+function effectsFrom(value: unknown): Effect[] {
+  if (!Array.isArray(value)) throw new Error("effects 必须是数组");
+  return value.map((raw) => {
+    if (!raw || typeof raw !== "object") throw new Error("effects 的每一项必须是对象");
+    const item = raw as Record<string, unknown>;
+    const type = String(item.type);
+    if (type === "drop-shadow" || type === "inner-shadow") {
+      const token = typeof item.fillToken === "string" ? item.fillToken : "";
+      if (!token) throw new Error("阴影类效果的 fillToken 必填；禁止使用字面量色值，调用 get_tokens 查看可用 Token。");
+      return {
+        type,
+        visible: item.visible === undefined ? true : Boolean(item.visible),
+        x: Number(item.x ?? 0),
+        y: Number(item.y ?? 0),
+        blur: Math.max(0, Number(item.blur ?? 0)),
+        spread: Number(item.spread ?? 0),
+        color: { token },
+      } as Effect;
+    }
+    if (type === "layer-blur" || type === "backdrop-blur") {
+      return {
+        type,
+        visible: item.visible === undefined ? true : Boolean(item.visible),
+        radius: Math.max(0, Number(item.radius ?? 0)),
+      } as Effect;
+    }
+    throw new Error(`未知的效果类型 "${type}"；只支持 drop-shadow / inner-shadow / layer-blur / backdrop-blur。`);
+  });
+}
+
+/** 效果里的阴影颜色同样必须是已存在的 Token。 */
+export function assertEffectTokens(store: DocStore, effects: Effect[] | undefined): void {
+  for (const effect of effects ?? []) {
+    if (effect.type === "drop-shadow" || effect.type === "inner-shadow") {
+      assertToken(store, effect.color.token, "effects.fillToken");
+    }
+  }
 }
 
 /** 节点几何/布局字段（只在显式传入时覆盖）。 */
@@ -475,6 +549,7 @@ export function makeExecutor(
         const isSlot = kind === "slot";
         assertToken(store, args.fillToken as string | undefined, "fillToken");
         assertToken(store, args.strokeToken as string | undefined, "strokeToken");
+        if (Array.isArray(args.effects)) assertEffectTokens(store, effectsFrom(args.effects));
         const parentId = (args.parentId as NodeId | undefined) ?? getActivePageId?.() ?? firstPageId(store.doc);
         if (!parentId || !store.doc.nodes[parentId]) throw new Error("parentId 不存在");
 
@@ -640,6 +715,7 @@ export function makeExecutor(
         if (!node) throw new Error(`节点 ${nodeId} 不存在`);
         assertToken(store, args.fillToken as string | undefined, "fillToken");
         assertToken(store, args.strokeToken as string | undefined, "strokeToken");
+        if (Array.isArray(args.effects)) assertEffectTokens(store, effectsFrom(args.effects));
 
         if (args.layout !== undefined && node.type !== "frame" && node.type !== "component" && node.type !== "instance") {
           throw new Error("layout 仅适用于 frame / component / instance");

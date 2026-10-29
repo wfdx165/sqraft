@@ -47,10 +47,9 @@ packages/core/src/
 └── component/    组件/实例、属性模型、覆盖
 
 packages/render/src/
-├── backend.ts    RenderBackend 接口
-├── canvas2d.ts   Canvas 2D 实现
-├── viewport.ts   平移缩放、DPR、世界↔屏幕坐标
-└── hit.ts        命中检测
+├── backend.ts    RenderBackend 接口 + 世界↔屏幕坐标
+├── canvas2d.ts   Canvas 2D 实现（含效果离屏合成）
+└── renderer.ts   文档树遍历与绘制序（命中检测在 apps/web/src/canvas/hit.ts）
 
 packages/ai-tools/src/
 └── tools.ts      工具定义（JSON Schema + 执行器类型）
@@ -122,9 +121,12 @@ interface RenderBackend {
 - 参数化多边形由 `drawPolygon` 绘制：顶点由 `polygonPoints(sides, width, height)` 在每帧推导（顶点朝上、撑满包围盒），同样支持旋转与填充/描边；
 - 画板与矩形/组件共用同一套样式规则：有填充才画底色，无填充就是透明容器；画板不再强制白底、默认边框或投影。画板工具新建画板时默认填 `color/surface`，保持既有视觉；
 - 插槽与画板/矩形共用样式绘制；空插槽占位与拖入高亮是 UI 叠加层，不进入文档渲染、导出或 AI 截图；
+- **节点效果**（见 ADR-0018）：`style.effects` 是有序列表，投影 / 内阴影 / 图层模糊 / 背景模糊共用一条管道 —— 带可见效果的节点先把自绘与整棵子树画进离屏，按 pad（`blur + |offset| + |spread|`）外扩，再逐条施加效果，裁剪回节点形状，最后合成回当前层。半径是文档单位（随缩放），离屏长边封顶 2048 设备像素、超出按比例降采样；效果不改变包围盒，不影响命中与布局。父容器 `clip` 会裁掉子节点的效果；内阴影与两种模糊受节点自身圆角裁剪，投影不受；
+- **背景模糊**取样“该节点之下、文档层已经画好的内容”，因此画布拆成**三块**：网格层（下）→ 文档层（中，渲染后端独占）→ UI 叠加层（上，指针事件与坐标换算也在这里）。网格因此不会被糊进毛玻璃，UI 叠加层也始终清晰；
+- **不透明度是组隔离**：`opacity < 1` 的节点先合成子树再整体乘一次 alpha（逐绘制操作乘 alpha 的做法已废弃，它会让半透明容器内重叠处偏深）；离屏尺寸取「子树包围盒 ∩ 视口」，因此再大的画板在屏幕上也只有一屏大小的离屏，且不透明度层不降采样（降采样会糊文字）；
 - 所有页面同屏渲染（无限画布）：页面是白底画板（带柔和投影与悬浮名称标签），子节点经 `pushTransform/popTransform` 应用容器偏移；
 - **DPR 感知**：画布物理像素 = CSS 像素 × devicePixelRatio，视口变换矩阵统一处理平移缩放；
-- v1 策略：**视口剔除 + 全视口重绘**（5k 节点预算内足够）；脏矩形与分层缓存列为撞墙后的升级项，不提前实现；
+- v1 策略：**全视口重绘**（画布只在脏标记置位时重绘），**目前没有视口剔除**；剔除、脏矩形与分层缓存列为撞墙后的升级项，不提前实现；
 - 渲染器**无状态于文档**：每帧从 DocumentStore 拉取当前状态，杜绝渲染层缓存陈旧数据。
 
 ### 5.1 画布交互约定（UI 层，非文档状态）
@@ -218,7 +220,7 @@ interface RenderBackend {
 ## 8. Token 系统
 
 - Token：`{ path: "color/primary", type: "color", value: "#3366ff" }` —— 单一取值，不引入模式/主题维度（见 ADR-0006）；
-- 节点样式存**Token 引用** `{ token: "color/primary" }`，渲染前解析为具体值（解析结果按 token 键控缓存）；
+- 节点样式存**Token 引用** `{ token: "color/primary" }`，渲染前解析为具体值（每次解析，暂无缓存）；
 - **改名是原子命令**（`token.rename from → to`）：一次 apply 内搬条目并重写所有节点的 `style.fill.token` / `style.stroke.token`，只占一步撤销；源不存在或目标重名直接抛错，不做静默 no-op。**删除**暂无命令（v1 范围外），删除会留下悬空引用，需连带迁移策略再做；
 - 导出：W3C DTCG 格式 JSON + 一键生成 CSS 变量；
 - **Agent 纪律**：工具 schema 中样式参数只接受 Token 引用，字面量色值在工具层直接拒绝——这是让 AI 产出可控、可维护的核心手段。

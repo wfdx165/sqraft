@@ -479,3 +479,65 @@ describe("AI 工具：自动布局与排版", () => {
     expect(store.doc.nodes[text.nodeId as string]).toMatchObject({ width: 123, height: 45 });
   });
 });
+
+describe("AI 工具：节点效果", () => {
+  it("create_node 写入投影与模糊，读文档能看到", async () => {
+    const { store, run } = setup();
+    const res = await call(run, "create_node", {
+      kind: "rect",
+      width: 200,
+      height: 120,
+      fillToken: "color/primary",
+      effects: [
+        { type: "drop-shadow", x: 0, y: 6, blur: 18, spread: 2, fillToken: "color/text" },
+        { type: "backdrop-blur", radius: 12 },
+      ],
+    });
+    const node = store.doc.nodes[res.nodeId as string];
+    expect(node.style.effects).toHaveLength(2);
+    expect(node.style.effects?.[0]).toMatchObject({ type: "drop-shadow", blur: 18, color: { token: "color/text" } });
+    expect(node.style.effects?.[1]).toMatchObject({ type: "backdrop-blur", radius: 12 });
+
+    const doc = await call(run, "read_document");
+    expect(JSON.stringify(doc)).toContain("backdrop-blur");
+  });
+
+  it("update_node 整体替换效果列表，传空数组即清空", async () => {
+    const { store, run } = setup();
+    const created = await call(run, "create_node", {
+      kind: "rect",
+      effects: [{ type: "drop-shadow", fillToken: "color/text" }],
+    });
+    const nodeId = created.nodeId as string;
+    expect(store.doc.nodes[nodeId].style.effects).toHaveLength(1);
+
+    await call(run, "update_node", {
+      nodeId,
+      effects: [
+        { type: "inner-shadow", fillToken: "color/text", blur: 4 },
+        { type: "layer-blur", radius: 6 },
+      ],
+    });
+    expect(store.doc.nodes[nodeId].style.effects?.map((e) => e.type)).toEqual(["inner-shadow", "layer-blur"]);
+
+    await call(run, "update_node", { nodeId, effects: [] });
+    expect(store.doc.nodes[nodeId].style.effects).toEqual([]);
+  });
+
+  it("阴影颜色必须引用存在的 Token，禁止字面量", async () => {
+    const { run } = setup();
+    await expect(
+      run("create_node", { kind: "rect", effects: [{ type: "drop-shadow" }] }),
+    ).rejects.toThrow(/fillToken/);
+    await expect(
+      run("create_node", { kind: "rect", effects: [{ type: "drop-shadow", fillToken: "color/nope" }] }),
+    ).rejects.toThrow(/Token/);
+  });
+
+  it("未知效果类型被拒绝", async () => {
+    const { run } = setup();
+    await expect(
+      run("create_node", { kind: "rect", effects: [{ type: "glow" }] }),
+    ).rejects.toThrow(/未知的效果类型/);
+  });
+});

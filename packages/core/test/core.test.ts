@@ -10,7 +10,16 @@ import {
   DEFAULT_PAGE_WIDTH,
   PAGE_GAP,
   createLayoutSpec,
+  firstPageId,
 } from "../src/model";
+import { subtreeWorldBounds } from "../src/model";
+import {
+  EFFECT_TYPES,
+  createEffect,
+  effectLayerScale,
+  effectPadding,
+  sanitizeEffect,
+} from "../src/effects";
 import { migrateDoc } from "../src/migrate";
 import { layoutText, lineHeightPx, letterSpacingPx } from "../src/text";
 import { DocStore } from "../src/store";
@@ -2174,5 +2183,170 @@ describe("applyDerived：派生几何白名单", () => {
     expect(() =>
       store.applyDerived({ type: "node.update", params: { nodeId: rect.id, patch: { text: "x" } } }),
     ).toThrow(/只允许/);
+  });
+});
+
+describe("节点效果", () => {
+  const shadow = {
+    type: "drop-shadow" as const,
+    visible: true,
+    x: 0,
+    y: 4,
+    blur: 12,
+    spread: 0,
+    color: { value: "#0f172a29" },
+  };
+
+  it("效果随样式整体替换，一次编辑一步撤销", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = firstPageId(store.doc)!;
+    const rect = createNode("rect", { parentId: pageId, style: { fill: { token: "color/primary" } } });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+
+    store.apply({
+      type: "node.update",
+      params: { nodeId: rect.id, patch: { style: { ...rect.style, effects: [shadow] } } },
+    });
+    expect(store.doc.nodes[rect.id].style.effects).toEqual([shadow]);
+
+    // 第二层效果：整组替换，而不是合并
+    store.apply({
+      type: "node.update",
+      params: {
+        nodeId: rect.id,
+        patch: { style: { ...store.doc.nodes[rect.id].style, effects: [shadow, { ...shadow, y: 20 }] } },
+      },
+    });
+    expect(store.doc.nodes[rect.id].style.effects).toHaveLength(2);
+
+    store.undo();
+    expect(store.doc.nodes[rect.id].style.effects).toEqual([shadow]);
+    store.undo();
+    expect(store.doc.nodes[rect.id].style.effects).toBeUndefined();
+    store.redo();
+    expect(store.doc.nodes[rect.id].style.effects).toEqual([shadow]);
+  });
+
+  it("效果不改包围盒，也不出现在命中几何里", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = firstPageId(store.doc)!;
+    const rect = createNode("rect", { parentId: pageId, x: 40, y: 50, width: 120, height: 80 });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+    const before = worldRect(store.doc, rect.id);
+    store.apply({
+      type: "node.update",
+      params: { nodeId: rect.id, patch: { style: { ...rect.style, effects: [shadow] } } },
+    });
+    expect(worldRect(store.doc, rect.id)).toEqual(before);
+  });
+
+  it("序列化往返保留效果，旧文档缺字段读入为无效果", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = firstPageId(store.doc)!;
+    const rect = createNode("rect", { parentId: pageId, style: { effects: [shadow] } });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+    const round = migrateDoc(JSON.parse(JSON.stringify(store.doc)));
+    expect(round.nodes[rect.id].style.effects).toEqual([shadow]);
+
+    const legacy = JSON.parse(JSON.stringify(store.doc));
+    delete legacy.nodes[rect.id].style.effects;
+    expect(migrateDoc(legacy).nodes[rect.id].style.effects).toBeUndefined();
+  });
+
+  it("外扩距离随投影/模糊累加，内阴影与背景模糊不外扩", () => {
+    expect(effectPadding(undefined)).toBe(0);
+    expect(effectPadding([])).toBe(0);
+    expect(effectPadding([{ ...shadow, visible: false }])).toBe(0);
+    // 12 * BLUR_EXTENT(3) + |(0,4)| = 40
+    expect(effectPadding([shadow])).toBe(40);
+    // 可见扩散实测 ≈ 2.2×blur，外扩必须盖住它，否则投影软边会被硬切
+    for (const blur of [1, 10, 40, 100]) {
+      expect(effectPadding([{ ...shadow, blur, y: 0, x: 0 }])).toBeGreaterThanOrEqual(blur * 2.2);
+    }
+    expect(effectPadding([{ type: "inner-shadow", visible: true, x: 0, y: 4, blur: 12, spread: 0, color: { value: "#000" } }])).toBe(0);
+    expect(effectPadding([{ type: "backdrop-blur", visible: true, radius: 20 }])).toBe(0);
+    expect(effectPadding([{ type: "layer-blur", visible: true, radius: 10 }])).toBe(30);
+    // 多条累加
+    expect(effectPadding([shadow, { type: "layer-blur", visible: true, radius: 10 }])).toBe(70);
+  });
+
+  it("离屏倍率在长边超上限时降采样", () => {
+    expect(effectLayerScale(100, 100, 2, 2048)).toBe(2);
+    // 2000 * 2 = 4000 > 2048 → 2048 / 2000
+    expect(effectLayerScale(2000, 100, 2, 2048)).toBeCloseTo(1.024, 5);
+  });
+
+  it("效果数值被夹取：负模糊归零、非法值回退默认", () => {
+    expect(sanitizeEffect({ type: "layer-blur", visible: true, radius: -5 } as never)).toEqual({
+      type: "layer-blur",
+      visible: true,
+      radius: 0,
+    });
+    expect(sanitizeEffect({ ...shadow, blur: Number.NaN } as never)).toMatchObject({ blur: 0 });
+  });
+
+  it("新加效果带默认参数且默认可见", () => {
+    expect(createEffect("drop-shadow")).toMatchObject({ type: "drop-shadow", visible: true, y: 4 });
+    expect(createEffect("layer-blur")).toMatchObject({ type: "layer-blur", radius: 8 });
+    expect(EFFECT_TYPES).toHaveLength(4);
+  });
+});
+
+describe("子树绘制包围盒", () => {
+  it("并入溢出子节点与旋转外接框", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = firstPageId(store.doc)!;
+    const frame = createNode("frame", { parentId: pageId, x: 100, y: 100, width: 200, height: 100, clip: false });
+    const overflow = createNode("rect", {
+      parentId: frame.id,
+      x: 180,
+      y: 80,
+      width: 100,
+      height: 60,
+      rotation: 45,
+    });
+    store.apply({ type: "node.create", params: { nodes: [frame], parentId: pageId } });
+    store.apply({ type: "node.create", params: { nodes: [overflow], parentId: frame.id } });
+
+    const box = subtreeWorldBounds(store.doc, frame.id)!;
+    // 容器本身
+    expect(box.x).toBe(100);
+    expect(box.y).toBe(100);
+    // 子节点溢出：世界坐标 (280,180) + 100×60，旋转 45° 后外接框右/下边界 ≈ 386.5 / 266.5
+    expect(box.x + box.width).toBeGreaterThan(386);
+    expect(box.y + box.height).toBeGreaterThan(266);
+  });
+
+  it("把效果外扩算进去", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = firstPageId(store.doc)!;
+    const withShadow = createNode("rect", {
+      parentId: pageId,
+      x: 100,
+      y: 100,
+      width: 100,
+      height: 100,
+      style: { effects: [{ type: "drop-shadow", visible: true, x: 0, y: 0, blur: 20, spread: 0, color: { value: "#000" } }] },
+    });
+    store.apply({ type: "node.create", params: { nodes: [withShadow], parentId: pageId } });
+    const box = subtreeWorldBounds(store.doc, withShadow.id)!;
+    // pad = 20 * 3 = 60
+    expect(box).toEqual({ x: 40, y: 40, width: 220, height: 220 });
+  });
+
+  it("无子节点的节点退化为自身矩形（含效果外扩）", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = firstPageId(store.doc)!;
+    const rect = createNode("rect", {
+      parentId: pageId,
+      x: 10,
+      y: 20,
+      width: 50,
+      height: 40,
+      style: { effects: [{ type: "layer-blur", visible: true, radius: 8 }] },
+    });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+    const box = subtreeWorldBounds(store.doc, rect.id)!;
+    expect(box).toEqual({ x: -14, y: -4, width: 98, height: 88 });
   });
 });

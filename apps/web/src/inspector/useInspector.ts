@@ -2,7 +2,10 @@ import { computed, ref, watch } from "vue";
 import {
   ZERO_CORNER_RADIUS,
   ZERO_PADDING,
+  createEffect,
   createLayoutSpec,
+  EFFECT_LABELS,
+  sanitizeEffect,
   findOuterOverrideOwner,
   findOverrideOwner,
   newId,
@@ -11,10 +14,13 @@ import {
   type ComponentPropertyDef,
   type CornerRadius,
   type DocNode,
+  type Effect,
+  type EffectType,
   type LayoutSpec,
   type ListType,
   type NodeStyle,
   type Padding,
+  type ShadowEffect,
   type TextAutoResize,
 } from "@sqraft/core";
 import { textSizeOf } from "../text-metrics";
@@ -228,6 +234,80 @@ function setCustomPaint(kind: "fill" | "stroke", e: Event): void {
 
 function setStrokeWidth(e: Event): void {
   applyStyle((style) => ({ ...style, strokeWidth: Math.max(0, num(e)) }));
+}
+
+/* ---------- 效果 ---------- */
+
+const supportsEffects = computed(() => nodes.value.length === 1 && node.value?.type !== "page");
+
+function effectsOf(n: DocNode | null): Effect[] {
+  return n?.style.effects ?? [];
+}
+
+function effectLabel(type: EffectType): string {
+  return EFFECT_LABELS[type];
+}
+
+function isShadowEffectOf(effect: Effect): effect is ShadowEffect {
+  return effect.type === "drop-shadow" || effect.type === "inner-shadow";
+}
+
+function shadowColorOf(effect: ShadowEffect): string {
+  return colorOf(effect.color);
+}
+
+function addEffect(type: string): void {
+  if (!type) return;
+  applyStyle((style) => ({ ...style, effects: [...(style.effects ?? []), createEffect(type as EffectType)] }), "effect-add");
+}
+
+/** 效果列表整体替换：一次改动 = 一步撤销。 */
+function patchEffect(index: number, patch: Record<string, unknown>, label = "effect"): void {
+  applyStyle((style) => {
+    const list = [...(style.effects ?? [])];
+    const current = list[index];
+    if (!current) return style;
+    list[index] = sanitizeEffect({ ...current, ...patch } as Effect);
+    return { ...style, effects: list };
+  }, label);
+}
+
+function removeEffect(index: number): void {
+  applyStyle((style) => {
+    const list = [...(style.effects ?? [])];
+    list.splice(index, 1);
+    return { ...style, effects: list.length > 0 ? list : undefined };
+  }, "effect-remove");
+}
+
+function toggleEffect(index: number): void {
+  const current = effectsOf(node.value)[index];
+  if (!current) return;
+  patchEffect(index, { visible: !current.visible }, "effect-toggle");
+}
+
+function setEffectNumber(index: number, field: string, e: Event): void {
+  const raw = (e.target as HTMLInputElement).value;
+  const value = Number(raw);
+  if (!Number.isFinite(value)) return;
+  patchEffect(index, { [field]: value });
+}
+
+function setEffectColorToken(index: number, e: Event): void {
+  const token = (e.target as HTMLSelectElement).value;
+  if (token === "__custom") {
+    const current = effectsOf(node.value)[index];
+    const value = current && isShadowEffectOf(current) ? resolvedCustom(current.color) : "#0f172a";
+    patchEffect(index, { color: { value } }, "effect-color");
+    return;
+  }
+  patchEffect(index, { color: token ? { token } : { value: "#0f172a" } }, "effect-color");
+}
+
+function setEffectColorValue(index: number, e: Event): void {
+  const value = (e.target as HTMLInputElement).value.trim();
+  if (!/^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$/.test(value)) return;
+  patchEffect(index, { color: { value } }, "effect-color");
 }
 
 /* ---------- 圆角 ---------- */
@@ -870,6 +950,17 @@ function resetOuterField(field: string): void {
     resolvedCustom,
     setCustomPaint,
     setStrokeWidth,
+    supportsEffects,
+    effectsOf,
+    effectLabel,
+    isShadowEffectOf,
+    shadowColorOf,
+    addEffect,
+    removeEffect,
+    toggleEffect,
+    setEffectNumber,
+    setEffectColorToken,
+    setEffectColorValue,
     radiusOf,
     uniform,
     radiusUnified,

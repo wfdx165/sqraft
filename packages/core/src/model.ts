@@ -4,6 +4,8 @@
  */
 
 import type { VectorPath } from "./vector";
+import type { Effect } from "./effects";
+import { effectPadding } from "./effects";
 
 export type NodeId = string;
 
@@ -71,6 +73,8 @@ export interface NodeStyle {
   textVerticalAlign?: TextVerticalAlign;
   textCase?: TextCase;
   textDecoration?: TextDecoration;
+  /** 节点效果（有序，整体替换）：投影 / 内阴影 / 图层模糊 / 背景模糊 */
+  effects?: Effect[];
 }
 
 /** 四边内边距：模型只存四边；统一值是 UI 快捷。 */
@@ -370,6 +374,30 @@ export function worldQuad(state: DocState, id: NodeId, geometry?: QuadGeometry):
     });
   }
   return points;
+}
+
+/**
+ * 节点整棵子树在页面坐标系里的绘制包围盒，并入每个节点自身的效果外扩。
+ * 供「组隔离」的离屏层定尺寸：旋转按外接框算，略大于实际，宁大勿裁。
+ */
+export function subtreeWorldBounds(state: DocState, id: NodeId): Rect | null {
+  let minX = Number.POSITIVE_INFINITY;
+  let minY = Number.POSITIVE_INFINITY;
+  let maxX = Number.NEGATIVE_INFINITY;
+  let maxY = Number.NEGATIVE_INFINITY;
+  walkSubtree(state, id, (n) => {
+    const quad = worldQuad(state, n.id);
+    if (!quad) return;
+    const pad = effectPadding(n.style.effects);
+    for (const p of quad) {
+      if (p.x - pad < minX) minX = p.x - pad;
+      if (p.y - pad < minY) minY = p.y - pad;
+      if (p.x + pad > maxX) maxX = p.x + pad;
+      if (p.y + pad > maxY) maxY = p.y + pad;
+    }
+  });
+  if (!Number.isFinite(minX)) return null;
+  return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
 }
 
 /** 四角圆角归一化：缺省视为 0。 */
