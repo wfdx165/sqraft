@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handleRpc, type McpToolHost } from "./session";
+import { setMcpLogSink } from "./log";
+
+beforeEach(() => setMcpLogSink(() => {}));
+afterEach(() => setMcpLogSink(null));
 
 const host: McpToolHost = {
   list: () => [

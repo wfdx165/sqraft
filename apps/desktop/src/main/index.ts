@@ -4,6 +4,7 @@ import { attachCloseGuard, registerCloseChannels } from "./close-guard";
 import { registerFileChannels, requestNewDocumentOnReady } from "./ipc";
 import { mcpEndpoint } from "./mcp/endpoint";
 import { registerMcpChannels, shutdownMcp, startMcp } from "./mcp";
+import { logError } from "./mcp/log";
 import { rebuildMenu, registerMenuChannels } from "./menu";
 import { currentPreferences, initRecentFiles, requestOpen, saveWindowBounds } from "./recent-state";
 import { restoreBounds } from "./window-state";
@@ -167,8 +168,12 @@ app.whenReady().then(async () => {
   rebuildMenu();
   registerMcpChannels();
   await initRecentFiles();
-  void startMcp(mcpEndpoint(app.getPath("userData")), app.getVersion()).catch((error: unknown) => {
-    console.error("[mcp] 启动失败", error);
+  const endpoint = mcpEndpoint(app.getPath("userData"));
+  void startMcp(endpoint, app.getVersion()).catch((error: unknown) => {
+    logError(null, "server start failed", {
+      endpoint,
+      error: error instanceof Error ? error.message : String(error),
+    });
   });
   // 摄像头、麦克风、通知、定位等一律拒绝：本期没有任何一项需要
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));

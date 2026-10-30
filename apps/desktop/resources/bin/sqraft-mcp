@@ -12,7 +12,7 @@
 const net = require("node:net");
 const os = require("node:os");
 const path = require("node:path");
-const { spawn } = require("node:child_process");
+const { execFileSync, spawn } = require("node:child_process");
 
 const PROTOCOL = 1;
 const CONNECT_TIMEOUT_MS = 20000;
@@ -42,6 +42,33 @@ function appExecutable() {
 function log(message) {
   process.stderr.write(`[sqraft-mcp] ${message}\n`);
 }
+
+/**
+ * 身份只用于应用侧日志（`c1 claude(8123)`）。app 拿不到对端信息，
+ * 只有 CLI 知道自己是哪个 agent 拉起来的：pid 必有，父进程名尽力而为。
+ */
+function parentName(ppid) {
+  if (process.platform === "win32") return "";
+  try {
+    const comm = execFileSync("ps", ["-p", String(ppid), "-o", "comm="], {
+      encoding: "utf8",
+      timeout: 500,
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim();
+    return comm ? path.basename(comm) : "";
+  } catch {
+    return "";
+  }
+}
+
+function clientIdentity() {
+  const identity = { pid: process.pid, ppid: process.ppid };
+  const name = parentName(process.ppid);
+  if (name) identity.name = name;
+  return identity;
+}
+
+const IDENTITY = clientIdentity();
 
 function tryConnect() {
   return new Promise((resolve) => {
@@ -129,7 +156,7 @@ function handshake(socket) {
 
     socket.on("data", onData);
     socket.on("close", onClose);
-    socket.write(`${JSON.stringify({ type: "hello", protocol: PROTOCOL })}\n`);
+    socket.write(`${JSON.stringify({ type: "hello", protocol: PROTOCOL, ...IDENTITY })}\n`);
   });
 }
 

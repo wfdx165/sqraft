@@ -2,13 +2,20 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
 import { startMcpServer, type McpRuntime } from "./server";
 import type { McpToolHost } from "./session";
+import { setMcpLogSink } from "./log";
 
 const dirs: string[] = [];
 let runtime: McpRuntime | null = null;
 const clients: Socket[] = [];
+const logLines: string[] = [];
+
+beforeEach(() => {
+  logLines.length = 0;
+  setMcpLogSink((_level, line) => logLines.push(line));
+});
 
 const host: McpToolHost = {
   list: () => [{ name: "read_document", description: "读文档", inputSchema: { type: "object" } }],
@@ -61,6 +68,9 @@ afterEach(async () => {
   await Promise.all(dirs.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
 });
 
+// 断开事件在 socket 关闭后异步到达：整组测试结束再还原 sink，避免漏到终端
+afterAll(() => setMcpLogSink(null));
+
 describe.skipIf(process.platform === "win32")("MCP 本机传输", () => {
   it("协议版本不匹配时返回可读错误并断开", async () => {
     const endpoint = await setup();
@@ -92,6 +102,57 @@ describe.skipIf(process.platform === "win32")("MCP 本机传输", () => {
 
     runtime!.broadcastShutdown();
     expect(JSON.parse(await next())).toMatchObject({ method: "sqraft/shutdown" });
+  });
+
+  it("日志里留下来源、工具名、耗时与参数摘要", async () => {
+    const endpoint = await setup();
+    const socket = await connect(endpoint);
+    const next = reader(socket);
+
+    socket.write(`${JSON.stringify({ type: "hello", protocol: 1, pid: 8123, name: "claude" })}\n`);
+    expect(JSON.parse(await next())).toMatchObject({ type: "hello-ok" });
+
+    socket.write(
+      `${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "read_document", arguments: { a: 1 } } })}\n`,
+    );
+    await next();
+    // ping 不该进日志（噪音大、无信息量）
+    socket.write(`${JSON.stringify({ jsonrpc: "2.0", id: 2, method: "ping" })}\n`);
+    await next();
+
+    expect(logLines.join("\n")).not.toContain("ping");
+    expect(logLines).toEqual(
+      expect.arrayContaining([
+        expect.stringMatching(/server listening endpoint=.+ protocol=1/),
+        expect.stringMatching(/c\d+ connect clients=1/),
+        expect.stringMatching(/c\d+ claude\(8123\) hello ok protocol=1 app=0\.0\.1/),
+        expect.stringMatching(/c\d+ claude\(8123\) tools\/call read_document ok \d+ms args=\{"a":1\}/),
+      ]),
+    );
+  });
+
+  it("旧 CLI 不带身份字段时只记连接号", async () => {
+    const endpoint = await setup();
+    const socket = await connect(endpoint);
+    const next = reader(socket);
+    socket.write(`${JSON.stringify({ type: "hello", protocol: 1 })}\n`);
+    await next();
+    expect(logLines).toEqual(
+      expect.arrayContaining([expect.stringMatching(/c\d+ hello ok protocol=1 app=0\.0\.1$/)]),
+    );
+  });
+
+  it("hello 里的身份不能伪造日志行", async () => {
+    const endpoint = await setup();
+    const socket = await connect(endpoint);
+    const next = reader(socket);
+    socket.write(
+      `${JSON.stringify({ type: "hello", protocol: 1, pid: 1, name: "evil\n[mcp] 00:00:00.000 error fake" })}\n`,
+    );
+    await next();
+
+    expect(logLines.every((line) => !line.includes("\n"))).toBe(true);
+    expect(logLines.some((line) => line.includes("evil\\n[mcp] 00:00:00.000 error fake"))).toBe(true);
   });
 
   it("并发调用被串行执行", async () => {

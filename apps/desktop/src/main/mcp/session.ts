@@ -2,6 +2,7 @@
  * 最小 MCP server 实现：只做 Sqraft 需要的能力（tools），不引 SDK。
  * 传输层与工具宿主都是注入的，因此可以在 Node 里直接测协议行为。
  */
+import { logError, logInfo, logWarn } from "./log";
 
 export interface McpToolInfo {
   name: string;
@@ -63,14 +64,17 @@ function toContent(raw: string): Array<Record<string, unknown>> {
 /**
  * 处理一条 JSON-RPC 消息；通知（没有 id）返回 null。
  * 未知方法、参数错误、工具异常都映射成 JSON-RPC 错误，客户端能读到可读原因。
+ *
+ * 每次调用的完成行在这里打：耗时只算执行本身（排队等待由队列单独记）。
  */
 export async function handleRpc(
   message: JsonRpcRequest,
   host: McpToolHost,
-  options: { version: string },
+  options: { version: string; tag?: string },
 ): Promise<JsonRpcResponse | null> {
   const id = message.id ?? null;
   const isNotification = message.id === undefined;
+  const tag = options.tag ?? null;
 
   const fail = (code: number, text: string): JsonRpcFailure => ({
     jsonrpc: "2.0",
@@ -81,6 +85,7 @@ export async function handleRpc(
   switch (message.method) {
     case "initialize": {
       const requested = (message.params as { protocolVersion?: unknown } | undefined)?.protocolVersion;
+      logInfo(tag, "initialize", { protocol: typeof requested === "string" ? requested : DEFAULT_PROTOCOL });
       return {
         jsonrpc: "2.0",
         id,
@@ -98,28 +103,41 @@ export async function handleRpc(
     case "ping":
       return { jsonrpc: "2.0", id, result: {} };
 
-    case "tools/list":
+    case "tools/list": {
+      const list = host.list();
+      logInfo(tag, `tools/list ${list.length} tools`);
       return {
         jsonrpc: "2.0",
         id,
-        result: { tools: host.list().map((tool) => ({ ...tool, inputSchema: tool.inputSchema })) },
+        result: { tools: list.map((tool) => ({ ...tool, inputSchema: tool.inputSchema })) },
       };
+    }
 
     case "tools/call": {
       const params = message.params as { name?: unknown; arguments?: unknown } | undefined;
       const name = typeof params?.name === "string" ? params.name : "";
       const args = (params?.arguments ?? {}) as Record<string, unknown>;
-      if (!name) return fail(-32602, "tools/call 缺少工具名");
+      if (!name) {
+        logWarn(tag, "tools/call missing name");
+        return fail(-32602, "tools/call 缺少工具名");
+      }
       if (isNotification) return null;
+      const startedAt = Date.now();
       try {
         const raw = await host.call(name, args);
+        const elapsed = Date.now() - startedAt;
+        // 超时之后才跑完的调用也走这里：耗时明显偏大就是"迟到完成"，能对上前面那条 warn
+        logInfo(tag, `tools/call ${name} ok ${elapsed}ms`, { args });
         return { jsonrpc: "2.0", id, result: { content: toContent(raw) } };
       } catch (error) {
+        const elapsed = Date.now() - startedAt;
+        const reason = error instanceof Error ? error.message : String(error);
+        logError(tag, `tools/call ${name} failed ${elapsed}ms`, { error: reason, args });
         return {
           jsonrpc: "2.0",
           id,
           result: {
-            content: textContent(error instanceof Error ? error.message : String(error)),
+            content: textContent(reason),
             isError: true,
           },
         };
@@ -128,6 +146,7 @@ export async function handleRpc(
 
     default:
       if (isNotification) return null;
+      logWarn(tag, `unknown method ${message.method}`);
       return fail(-32601, `不支持的方法：${message.method}`);
   }
 }

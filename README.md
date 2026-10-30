@@ -89,6 +89,7 @@ pnpm dist:mac    # 也可显式指定；交叉打包需要 wine / docker
 - 端点：`~/Library/Application Support/Sqraft/mcp.sock`（macOS）、`$XDG_CONFIG_HOME/Sqraft/mcp.sock`（Linux，缺省 `~/.config`）、`\\.\pipe\sqraft-mcp`（Windows）
 - 薄 CLI（`resources/bin/sqraft-mcp`，无扩展名）只做 `stdio ↔ 本机 IPC` 管道；应用没在跑时会自动拉起，并跳过欢迎页直接建空稿
 - 多客户端串行执行，单次调用 30s 超时；应用退出前广播关闭通知
+- 操作日志只进终端：运行时所在终端会打出 `[mcp]` 行（连接、工具名、耗时、参数摘要、错误）。不写文件，打包版从 Finder 启动时 stdout 没有出口、看不到——排查问题请从终端启动
 
 图片：`create_node` 的 `kind` 支持 `image`，用 base64 传位图（上限 5MB）；`update_node` 可改 `crop` 与 `mask`。
 

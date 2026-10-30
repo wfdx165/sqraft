@@ -11,6 +11,7 @@ import {
   type McpStatus,
   type McpToolInfo,
 } from "../../shared/ipc";
+import { logError, logInfo } from "./log";
 import { startMcpServer, type McpRuntime } from "./server";
 import { collectSetupInfo, installCli, writableInstallDir } from "./setup";
 
@@ -60,6 +61,9 @@ export function registerMcpChannels(): void {
     const { dir } = await writableInstallDir();
     const info = await setupInfo();
     const result = await installCli(info.cliPath, dir);
+    const fields = { ok: result.ok, path: result.path, message: result.message };
+    if (result.ok) logInfo(null, "cli install", fields);
+    else logError(null, "cli install failed", fields);
     return { ok: result.ok, message: result.message, info: await setupInfo() };
   });
 
@@ -120,12 +124,16 @@ export async function startMcp(endpoint: string, appVersion: string): Promise<vo
 
 function callRenderer(name: string, args: Record<string, unknown>): Promise<string> {
   const window = BrowserWindow.getAllWindows()[0];
-  if (!window) return Promise.reject(new Error("Sqraft 窗口未打开，无法执行工具"));
+  if (!window) {
+    logError(null, "call failed: no window", { tool: name });
+    return Promise.reject(new Error("Sqraft 窗口未打开，无法执行工具"));
+  }
   const id = sequence + 1;
   sequence = id;
   return new Promise<string>((resolve, reject) => {
     const timer = setTimeout(() => {
       pending.delete(id);
+      logError(null, "renderer timeout", { tool: name, after: `${PENDING_TTL_MS}ms` });
       reject(new Error("渲染层没有在预期时间内返回结果"));
     }, PENDING_TTL_MS);
     pending.set(id, { resolve, reject, timer });
