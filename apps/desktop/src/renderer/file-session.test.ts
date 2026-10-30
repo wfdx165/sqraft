@@ -41,7 +41,7 @@ const bridge = {
 
 vi.stubGlobal("window", { sqraft: bridge });
 
-const { newDocument } = await import("./file-session");
+const { fileState, installFileSession, newDocument, saveDocument } = await import("./file-session");
 const { docStore, ui } = await import("./store");
 
 /** 造一份有未保存改动的文档，返回新加节点的 id。 */
@@ -96,5 +96,55 @@ describe("新建文档的未保存检查", () => {
     await expect(newDocument()).resolves.toBe(true);
     expect(bridge.dialog.unsaved).not.toHaveBeenCalled();
     expect(ui.docOpen).toBe(true);
+  });
+});
+
+/**
+ * 工具栏胶囊的圆点读 `fileState.dirty`。
+ * 这里的回归点是"保存后必须立刻变干净"：`docStore.markSaved()` 不 emit，
+ * 如果脏标记只靠文档变更（`ui.version`）驱动，圆点会一直留到下一次编辑。
+ */
+describe("未保存标记跟着保存点走", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    docStore.replace(createEmptyDoc());
+    ui.docOpen = false;
+    fileState.path = null;
+    fileState.dirty = false;
+    installFileSession();
+  });
+
+  it("编辑后变脏，保存成功后立刻变干净", async () => {
+    makeDirtyDocument();
+    expect(fileState.dirty).toBe(true);
+    expect(bridge.app.setDirty).toHaveBeenLastCalledWith(true, "未命名");
+
+    fileState.path = "/tmp/测试.sqraft";
+    fileState.mtimeMs = 0;
+    await expect(saveDocument()).resolves.toBe(true);
+    expect(fileState.dirty).toBe(false);
+    expect(bridge.app.setDirty).toHaveBeenLastCalledWith(false, "未命名");
+  });
+
+  it("保存后再改又变脏，撤销回保存点重新变干净", async () => {
+    const nodeId = makeDirtyDocument();
+    fileState.path = "/tmp/测试.sqraft";
+    fileState.mtimeMs = 0;
+    await expect(saveDocument()).resolves.toBe(true);
+    expect(fileState.dirty).toBe(false);
+
+    docStore.apply({ type: "node.update", params: { nodeId, patch: { x: 8 } } });
+    expect(fileState.dirty).toBe(true);
+
+    expect(docStore.undo()).toBe(true);
+    expect(fileState.dirty).toBe(false);
+  });
+
+  it("新建文档后回到干净状态", async () => {
+    makeDirtyDocument();
+    expect(fileState.dirty).toBe(true);
+    bridge.dialog.unsaved.mockResolvedValueOnce("discard");
+    await expect(newDocument()).resolves.toBe(true);
+    expect(fileState.dirty).toBe(false);
   });
 });

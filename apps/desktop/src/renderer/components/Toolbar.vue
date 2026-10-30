@@ -55,7 +55,11 @@ async function fitBar(reset: boolean): Promise<void> {
 function openOverflowMenu(e: MouseEvent): void {
   const items: ContextMenuItem[] = [];
   if (hiddenGroups.value.has("doc")) {
-    items.push({ label: `当前文件：${docName.value}`, disabled: true, run: () => {} });
+    items.push({
+      label: `当前文件：${docName.value}${docDirty.value ? "（未保存）" : ""}`,
+      disabled: true,
+      run: () => {},
+    });
     items.push({ label: "回到欢迎页", hint: keyOf("file.closeDoc"), run: () => void onClose() });
   }
   if (hiddenGroups.value.has("file")) {
@@ -93,16 +97,13 @@ async function onClose() {
   await closeDocument();
 }
 
-// 当前文件：名字 + 未保存标记（isDirty 不在响应式系统里，靠 ui.version 触发重算）
-const docName = computed(() => {
-  void ui.version;
-  return fileState.name;
+// 当前文件：名字 + 未保存标记（脏状态由 syncTitle 写进 fileState，保存后立刻清掉）
+const docName = computed(() => fileState.name);
+const docDirty = computed(() => fileState.dirty);
+const docTip = computed(() => {
+  const where = fileState.path ?? "尚未保存到磁盘";
+  return fileState.dirty ? `未保存的修改 · ${where}` : where;
 });
-const docDirty = computed(() => {
-  void ui.version;
-  return docStore.isDirty;
-});
-const docTip = computed(() => fileState.path ?? "尚未保存到磁盘");
 
 function toggleShortcuts() {
   shortcutUi.open = !shortcutUi.open;

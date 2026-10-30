@@ -13,6 +13,12 @@ export const fileState = reactive({
   path: null as string | null,
   name: "未命名",
   mtimeMs: 0,
+  /**
+   * 自上次落盘以来是否有改动。
+   * 这是渲染层（工具栏胶囊）的唯一真源：`docStore.isDirty` 本身不在响应式系统里，
+   * 而保存走 `markSaved()` 不会 emit，靠 `ui.version` 触发重算会让圆点留在旧值上。
+   */
+  dirty: false,
 });
 
 const bridge = window.sqraft;
@@ -224,6 +230,8 @@ let lastName = "";
 export function syncTitle(): void {
   const name = ui.docOpen ? fileState.name : "";
   const dirty = ui.docOpen && docStore.isDirty;
+  // 先写响应式状态（工具栏胶囊读它），再决定要不要通知主进程
+  fileState.dirty = dirty;
   if (dirty === lastDirty && name === lastName) return;
   lastDirty = dirty;
   lastName = name;
