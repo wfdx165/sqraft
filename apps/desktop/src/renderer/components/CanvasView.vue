@@ -72,7 +72,14 @@ import { abortRotate, applyRotate, beginRotate, endRotate, rotateZoneAt, type Ro
 import { groupSelection, ungroupSelection } from "../canvas/group-actions";
 import { createDraftGuards } from "../canvas/draft-guard";
 import { paintDropSlot as paintDrop, paintSlotPlaceholders as paintSlots } from "../canvas/slot-overlay";
-import { drawPageLabels, labelAt, pageLabelRect } from "../canvas/labels";
+import { drawRootLabels, rootLabelRect } from "../canvas/labels";
+import {
+  beginRootLabelDrag,
+  beginRootLabelRename,
+  rootLabelAtPointer,
+  rootLabelHover,
+  rootLabelMenuKind,
+} from "../canvas/root-label-actions";
 import {
   handlePointsOfQuad,
   localDelta,
@@ -479,8 +486,8 @@ function draw() {
   }
 
   ctx.restore();
-  drawPageLabels(ctx, vp, {
-    pageRenameId: pageRename.value?.id ?? null,
+  drawRootLabels(ctx, vp, {
+    renameId: pageRename.value?.id ?? null,
     drag,
     resizePreview,
     selection: ui.selection,
@@ -641,9 +648,16 @@ function commitEditors() {
   if (pageRename.value) commitPageRename();
 }
 
-function startPageRename(page: DocNode) {
-  const r = pageLabelRect(page, vp, ctx);
-  pageRename.value = { id: page.id, value: page.name, left: r.x, top: r.y, width: Math.max(r.width, 96) };
+/** 根节点名称标签的改名入口：页面与主组件共用（输入框浮在标签上）。 */
+function startLabelRename(node: DocNode) {
+  const r = rootLabelRect(node, vp, ctx);
+  if (!r) {
+    // 标签被视口夹掉了（对象整块在视口上方）：退回"图层左上角"的旧定位
+    select([node.id]);
+    startRenameForSelection();
+    return;
+  }
+  pageRename.value = { id: node.id, value: node.name, left: r.x, top: r.y, width: Math.max(r.width, 96) };
   markDirty();
   void nextTick(() => {
     renameEl.value?.focus();
@@ -792,10 +806,11 @@ function onContextMenu(e: MouseEvent): void {
   const sx = e.clientX - rect.left;
   const sy = e.clientY - rect.top;
   const position = { x: e.clientX, y: e.clientY };
-  // 标题画在页面矩形之外，hitTest 打不到：按标签命中补一条，右键标题同样弹页面菜单
-  const label = ui.tool === "path" && pen.draft ? null : labelAt(sx, sy, vp, ctx);
+  // 标题画在节点矩形之外，hitTest 打不到：按标签命中补一条，右键标题同样弹菜单
+  const label = rootLabelAtPointer(vp, ctx, sx, sy, Boolean(pen.draft));
   if (label) {
-    openPageMenu(label.id, position);
+    if (rootLabelMenuKind(label) === "page") openPageMenu(label.id, position);
+    else openNodeMenu(label.id, position);
     return;
   }
   const world = screenToWorld(vp, sx, sy);
@@ -846,10 +861,13 @@ function onDoubleClick(e: MouseEvent) {
       }
     }
   }
-  const label = ui.tool === "path" && pen.draft ? null : labelAt(sx, sy, vp, ctx);
+  // 双击根节点标签 = 行内改名（页面与母版同一套；母版不进页面切换）
+  const label = rootLabelAtPointer(vp, ctx, sx, sy, Boolean(pen.draft));
   if (label) {
-    if (label.id !== ui.activePageId) setActivePage(label.id, false);
-    startPageRename(label);
+    beginRootLabelRename(label, {
+      setActivePage: (id) => setActivePage(id, false),
+      startRename: startLabelRename,
+    });
     return;
   }
   if (ui.tool === "path") {
@@ -986,18 +1004,19 @@ function updateHover(e: PointerEvent) {
   const hit = hitTest(vp, w.x, w.y);
   const node = hit && !hit.inactive ? docStore.doc.nodes[hit.id] : null;
   setHoverText(node?.type === "text" ? node.id : null);
+  // 根节点名称标签：用 move 光标提示可拖；悬停母版标签时连它的紫色悬停框一起点亮
+  const label = rootLabelAtPointer(vp, ctx, sx, sy, Boolean(pen.draft));
+  const hover = rootLabelHover(label, node);
   // 库对象（实例 / 主组件）单独一套悬停框；进入实例后命中的是子节点，自然跟着走
-  setHoverLibrary(node && (node.type === "instance" || node.type === "component") ? node.id : null);
+  setHoverLibrary(hover.libraryId);
   // 悬停容器的子元素边界（只读信息层）
   const containerId = hit && !hit.inactive ? hoverContainerAt(w.x, w.y) : null;
   if (hoverContainerId.value !== containerId) {
     hoverContainerId.value = containerId;
     markDirty();
   }
-  // 页面名称标签是编辑模式下移动整页的唯一入口，用 move 光标提示可拖
-  const onLabel = Boolean(labelAt(sx, sy, vp, ctx));
-  if (hoverLabel.value !== onLabel) {
-    hoverLabel.value = onLabel;
+  if (hoverLabel.value !== hover.onLabel) {
+    hoverLabel.value = hover.onLabel;
     markDirty();
   }
   const inactive = Boolean(hit?.inactive);
@@ -1216,6 +1235,24 @@ function onPointerDown(e: PointerEvent) {
     }
   }
 
+  // 0.5) 根节点名称标签（页面 / 主组件）：选中并开始移动——这是整页与整块母版唯一的拖动入口。
+  //      放在旋转热区与缩放手柄之前：标签是刻意的目标，左上角不该被热区抢走。
+  const label = rootLabelAtPointer(vp, ctx, sx, sy, Boolean(pen.draft));
+  if (label) {
+    beginRootLabelDrag(label, { setActivePage: (id) => setActivePage(id, false) });
+    drag = {
+      ...base,
+      startX: w.x,
+      startY: w.y,
+      mode: "move",
+      guide: guideContextFor([label.id]),
+      guideKey: null,
+      snapRects: snapRectsOf([label.id]),
+    };
+    markDirty();
+    return;
+  }
+
   // 1) 四角外侧的旋转热区（手柄本体不落在这里，优先给缩放）
   if (hitRotateZone(sx, sy)) {
     const bounds = selectionWorldBounds();
@@ -1260,26 +1297,6 @@ function onPointerDown(e: PointerEvent) {
       dragging.value = true;
       return;
     }
-  }
-
-  // 3) 页面名称标签：选中并开始移动整页——这是页面唯一的拖动入口
-  //    钢笔草稿期间标签不再是拖动入口，否则画到页顶会误移动整页
-  const label = ui.tool === "path" && pen.draft ? null : labelAt(sx, sy, vp, ctx);
-  if (label) {
-    if (label.id !== ui.activePageId) setActivePage(label.id, false);
-    select([label.id]);
-    ui.expandedPageId = label.id;
-    drag = {
-      ...base,
-      startX: w.x,
-      startY: w.y,
-      mode: "move",
-      guide: guideContextFor([label.id]),
-      guideKey: null,
-      snapRects: snapRectsOf([label.id]),
-    };
-    markDirty();
-    return;
   }
 
   // 4) 绘图工具：只允许在页面内起笔；落在非活动页先切换活动页
@@ -2271,7 +2288,13 @@ onMounted(() => {
       ui.activePageId = node.id;
       ui.expandedPageId = node.id;
       fitActivePage();
-      startPageRename(node);
+      startLabelRename(node);
+      return;
+    }
+    if (node.type === "component") {
+      // 母版回根节点：输入框贴在它的名称标签上，和画布双击标签一致
+      select([id]);
+      startLabelRename(node);
       return;
     }
     select([id]);

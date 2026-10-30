@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
-import { docStore, layoutUi, redo, switchMode, ui, undo, type ToolKind } from "../store";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
+import { docStore, redo, switchMode, ui, undo, type ToolKind } from "../store";
 import { closeDocument, fileState, openDocument, saveDocument, saveDocumentAs } from "../file-session";
 import { openContextMenu, type ContextMenuItem } from "../context-menu";
 import { keyOf, PANEL_BINDING, registerShortcuts, shortcutUi, type ActionId } from "../shortcuts";
@@ -111,7 +111,6 @@ function toggleShortcuts() {
 }
 
 let unregister = () => {};
-let stopLayoutWatch = () => {};
 let resizeTimer: ReturnType<typeof setTimeout> | null = null;
 let lastWidth = window.innerWidth;
 
@@ -134,13 +133,10 @@ function onBarResize(): void {
 onMounted(() => {
   unregister = registerShortcuts({ "file.open": onOpen, "file.save": onSave, "file.saveAs": onSaveAs });
   window.addEventListener("resize", onBarResize);
-  // 面板收起/展开会改工具栏可用宽度（窗口尺寸本身没变，收不到 resize）
-  stopLayoutWatch = watch(() => layoutUi.rev, () => scheduleFit(true));
   void nextTick(() => void fitBar(false));
 });
 onBeforeUnmount(() => {
   unregister();
-  stopLayoutWatch();
   window.removeEventListener("resize", onBarResize);
   if (resizeTimer) clearTimeout(resizeTimer);
 });

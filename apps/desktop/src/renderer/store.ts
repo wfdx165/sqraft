@@ -110,34 +110,6 @@ export const exportUi = reactive({
   suggestedName: "",
 });
 
-/** 面板展开状态（缺省展开）：测试环境没有 localStorage，读写都要兜底。 */
-function readPanelPref(side: "left" | "right"): boolean {
-  try {
-    return localStorage.getItem(`sqraft.${side}Panel.v1`) !== "0";
-  } catch {
-    return true;
-  }
-}
-
-/** 界面骨架（纯 UI 偏好，跨启动保留）：左右面板是否展开。 */
-export const layoutUi = reactive({
-  leftOpen: readPanelPref("left"),
-  rightOpen: readPanelPref("right"),
-  /** 面板状态变更计数：工具栏据此重新算溢出（窗口没变也要重算） */
-  rev: 0,
-});
-
-export function togglePanel(side: "left" | "right"): void {
-  const key = side === "left" ? "leftOpen" : "rightOpen";
-  layoutUi[key] = !layoutUi[key];
-  layoutUi.rev += 1;
-  try {
-    localStorage.setItem(`sqraft.${side}Panel.v1`, layoutUi[key] ? "1" : "0");
-  } catch {
-    /* 隐私模式或测试环境：只在本次会话生效 */
-  }
-}
-
 /** 由 CanvasView 注入的实现（解耦组件引用）。 */
 export const hooks: {
   /** 离屏重绘文档（不含 UI 叠加层）；region 为文档坐标，可只取一块。 */

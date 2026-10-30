@@ -98,7 +98,7 @@ export function hitTest(vp: Viewport, wx: number, wy: number): Hit | null {
   // 主组件是文档根节点，画在页面之上：命中也要先于页面（最上层的先命中）
   for (let i = roots.length - 1; i >= 0; i--) {
     const node = docStore.doc.nodes[roots[i]];
-    if (!node || node.type !== "component") continue;
+    if (!node || node.type !== "component" || !node.visible) continue;
     // 与页面一致：先按子节点真实几何命中（可越出母版边界），
     // 退回到母版本体时才要求指针在母版矩形里
     const deep = hitIn(vp, node.id, wx - node.x, wy - node.y);

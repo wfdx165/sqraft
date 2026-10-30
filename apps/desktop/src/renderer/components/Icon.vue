@@ -1,50 +1,8 @@
 <script setup lang="ts">
-/** 超细线性图标集（1.25px 描边，自绘，不依赖图标库） */
-const props = withDefaults(defineProps<{ name: string; size?: number }>(), { size: 16 });
+/** 超细线性图标集（1.25px 描边，自绘，不依赖图标库）；路径定义在 icons.ts，画布叠加层共用。 */
+import { ICON_PATHS, ICON_STROKE } from "../icons";
 
-const paths: Record<string, string> = {
-  select: "M5.5 3.5 18 11l-5.4 1.4L9.8 18z",
-  frame: "M4 8V5.5A1.5 1.5 0 0 1 5.5 4H8M16 4h2.5A1.5 1.5 0 0 1 20 5.5V8M20 16v2.5a1.5 1.5 0 0 1-1.5 1.5H16M8 20H5.5A1.5 1.5 0 0 1 4 18.5V16",
-  rect: "M5 6.5h14v11H5z",
-  ellipse: "M12 5.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13z",
-  triangle: "M12 4.5 20 18.5H4z",
-  line: "M5.5 18.5 18.5 5.5",
-  pen: "M15.7 21.3a1 1 0 0 1-1.4 0l-1.6-1.6a1 1 0 0 1 0-1.4l5.6-5.6a1 1 0 0 1 1.4 0l1.6 1.6a1 1 0 0 1 0 1.4zM18 13l-1.4-6.9a1 1 0 0 0-.7-.8L3.2 2a1 1 0 0 0-1.2 1.2l3.2 12.7a1 1 0 0 0 .8.7L13 18M2.3 2.3l7.3 7.3",
-  text: "M6 5.5h12M12 5.5v13M9 18.5h6",
-  undo: "M8.5 5 4.5 9l4 4M4.5 9H13a5.5 5.5 0 0 1 0 11H9",
-  redo: "M15.5 5l4 4-4 4M19.5 9H11a5.5 5.5 0 0 0 0 11h4",
-  open: "M3.5 8V6a1.5 1.5 0 0 1 1.5-1.5h4L11 7h7.5A1.5 1.5 0 0 1 20 8.5V17a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17V8z",
-  // 软盘：外框 + 顶部滑片 + 底部标签（下载图标是"箭头落进托盘"，容易被读成导出）
-  save: "M5.5 4.5h10L19.5 8.5V18a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 18V6a1.5 1.5 0 0 1 1-1.5zM8.5 4.5v4.5h6V4.5M8 19.5v-6h8v6",
-  send: "M6 18 18 6M18 6H9.5M18 6v8.5",
-  close: "M6 6l12 12M18 6 6 18",
-  home: "M4 11.2 12 4.4l8 6.8M6.2 10.2V19a.6.6 0 0 0 .6.6H10v-4.4h4v4.4h3.2a.6.6 0 0 0 .6-.6v-8.8",
-  plus: "M12 5v14M5 12h14",
-  chevron: "M7 10l5 5 5-5",
-  eye: "M2.5 12S6 6.5 12 6.5 21.5 12 21.5 12 18 17.5 12 17.5 2.5 12 2.5 12zM12 14.5a2.5 2.5 0 1 0 0-5 2.5 2.5 0 0 0 0 5z",
-  group: "M5 8V5.5h2.5M16.5 5.5H19V8M19 16v2.5h-2.5M7.5 18.5H5V16M9.5 9.5h5v5h-5z",
-  paperclip: "M8.5 12.5l5.6-5.6a3.1 3.1 0 1 1 4.4 4.4l-7.6 7.6a5.1 5.1 0 1 1-7.2-7.2l7-7",
-  "arrow-up": "M12 19V5M12 5l-6 6M12 5l6 6",
-  fit: "M9 4H6a2 2 0 0 0-2 2v3M15 4h3a2 2 0 0 1 2 2v3M20 15v3a2 2 0 0 1-2 2h-3M9 20H6a2 2 0 0 1-2-2v-3",
-  pages: "M9 3.5H20v12H9zM4 8.5h11V21H4z",
-  hand: "M8 11V6.5a1.5 1.5 0 0 1 3 0V11m0-.5V5.5a1.5 1.5 0 0 1 3 0V11m0-.5V7a1.5 1.5 0 0 1 3 0v6.5a6 6 0 0 1-6 6h-1a5 5 0 0 1-4-2l-3.2-4.4a1.6 1.6 0 0 1 2.5-2L8 13.5V11z",
-  keyboard:
-    "M3.5 7h17A1.5 1.5 0 0 1 22 8.5v7a1.5 1.5 0 0 1-1.5 1.5h-17A1.5 1.5 0 0 1 2 15.5v-7A1.5 1.5 0 0 1 3.5 7zM6 10.5h.01M9 10.5h.01M12 10.5h.01M15 10.5h.01M18 10.5h.01M8 13.5h8",
-  palette:
-    "M12 4a8 8 0 1 0 0 16h1.4a1.9 1.9 0 0 0 1.3-3.3 1.9 1.9 0 0 1 1.3-3.3h2A2.9 2.9 0 0 0 21 10.5 6.5 6.5 0 0 0 12 4z",
-  component: "M12 3.5 20.5 12 12 20.5 3.5 12z",
-  slot: "M4.5 6.5h15v11h-15zM8.5 12h2M13.5 12h2",
-  pencil: "M4 20h4L20.5 7.5a2.1 2.1 0 0 0-3-3L5 17v3zM15.5 5.5l3 3",
-  // 对齐/分布：外框 + 参考线 + 被对齐的两根条
-  "align-left": "M4 4v16M7 7.5h9v3H7zM7 13.5h13v3H7z",
-  "align-h-center": "M12 4v16M7.5 7.5h9v3h-9zM5 13.5h14v3H5z",
-  "align-right": "M20 4v16M8 7.5h9v3H8zM4 13.5h13v3H4z",
-  "align-top": "M4 4h16M7.5 7v9h3V7zM13.5 7v13h3V7z",
-  "align-v-center": "M4 12h16M7.5 7.5v9h3v-9zM13.5 5v14h3V5z",
-  "align-bottom": "M4 20h16M7.5 8v9h3V8zM13.5 4v13h3V4z",
-  "distribute-h": "M4 4v16M20 4v16M10 7.5h4v9h-4z",
-  "distribute-v": "M4 4h16M4 20h16M7.5 10h9v4h-9z",
-};
+const props = withDefaults(defineProps<{ name: string; size?: number }>(), { size: 16 });
 </script>
 
 <template>
@@ -54,11 +12,11 @@ const paths: Record<string, string> = {
     viewBox="0 0 24 24"
     fill="none"
     stroke="currentColor"
-    stroke-width="1.25"
+    :stroke-width="ICON_STROKE"
     stroke-linecap="round"
     stroke-linejoin="round"
     aria-hidden="true"
   >
-    <path :d="paths[props.name] ?? paths.rect" />
+    <path :d="ICON_PATHS[props.name] ?? ICON_PATHS.rect" />
   </svg>
 </template>

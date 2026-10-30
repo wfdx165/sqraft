@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watchEffect } from "vue";
+import { onBeforeUnmount, onMounted, ref, watchEffect } from "vue";
 import Toolbar from "./components/Toolbar.vue";
 import PagesPanel from "./components/PagesPanel.vue";
 import InspectorPanel from "./components/InspectorPanel.vue";
@@ -13,10 +13,8 @@ import McpSetupPanel from "./components/McpSetupPanel.vue";
 import AboutPanel from "./components/AboutPanel.vue";
 import ExportPngDialog from "./components/ExportPngDialog.vue";
 import ContextMenu from "./components/ContextMenu.vue";
-import Icon from "./components/Icon.vue";
-import { exportUi, hooks, layoutUi, togglePanel, ui } from "./store";
+import { exportUi, hooks, ui } from "./store";
 import { openExportDefault } from "./export-actions";
-import { vTip } from "./tooltip";
 import { bindingRev, installShortcuts, keyOf, registerShortcuts, runAction, shortcutUi, type ActionId } from "./shortcuts";
 import { closeDocument, installFileSession, newDocument } from "./file-session";
 import { installMcpHost } from "./mcp-host";
@@ -51,74 +49,10 @@ const mcpSetupOpen = ref(false);
 const aboutOpen = ref(false);
 const platform = window.sqraft.platform;
 
-/* ---------- 骨架自适应：窄窗口收起左右面板 ---------- */
-/** 低于这个宽度自动收起左栏 / 检查器（再宽回来时按用户偏好恢复） */
-const LEFT_HIDE_BELOW = 1040;
-const RIGHT_HIDE_BELOW = 1180;
-
-const windowWidth = ref(window.innerWidth);
-/** 因窗口变窄而临时收起（用户手动切换会清掉，避免"点了没反应"） */
-const autoHidden = reactive({
-  left: window.innerWidth < LEFT_HIDE_BELOW,
-  right: window.innerWidth < RIGHT_HIDE_BELOW,
-});
-
-const leftVisible = computed(() => layoutUi.leftOpen && !autoHidden.left);
-const rightVisible = computed(() => layoutUi.rightOpen && !autoHidden.right);
-
-/** 画布可用宽度的两侧占位（工具栏据此居中与收窄） */
-const frameStyle = computed(() => ({
-  "--left-w": leftVisible.value ? "314px" : "0px",
-  "--right-w": rightVisible.value ? "290px" : "0px",
-}));
-
-function toggleSide(side: "left" | "right"): void {
-  const visible = side === "left" ? leftVisible.value : rightVisible.value;
-  if (visible) {
-    togglePanel(side);
-    return;
-  }
-  // 当前不可见：先清掉"因窄自动收起"，只有用户偏好本身是关的才需要真正打开。
-  // 不能直接 togglePanel：窗口很窄时那会把偏好从"开"翻成"关"，把手看起来没反应。
-  autoHidden[side] = false;
-  const open = side === "left" ? layoutUi.leftOpen : layoutUi.rightOpen;
-  if (!open) togglePanel(side);
-}
-
-/* ---------- 折叠把手：面板展开时只在指针贴近那条边时露出 ---------- */
-const EDGE_REVEAL_PX = 28;
-const nearEdge = reactive({ left: false, right: false });
-
-function onPointerMove(e: PointerEvent): void {
-  const leftEdge = leftVisible.value ? 314 : 6;
-  const rightEdge = window.innerWidth - (rightVisible.value ? 290 : 6);
-  nearEdge.left = Math.abs(e.clientX - leftEdge) <= EDGE_REVEAL_PX;
-  nearEdge.right = Math.abs(e.clientX - rightEdge) <= EDGE_REVEAL_PX;
-}
-
-function hideEdgeHandles(): void {
-  nearEdge.left = false;
-  nearEdge.right = false;
-}
-
-function onWindowResize(): void {
-  const width = window.innerWidth;
-  const prev = windowWidth.value;
-  windowWidth.value = width;
-  if (prev >= LEFT_HIDE_BELOW && width < LEFT_HIDE_BELOW) autoHidden.left = true;
-  if (prev < LEFT_HIDE_BELOW && width >= LEFT_HIDE_BELOW) autoHidden.left = false;
-  if (prev >= RIGHT_HIDE_BELOW && width < RIGHT_HIDE_BELOW) autoHidden.right = true;
-  if (prev < RIGHT_HIDE_BELOW && width >= RIGHT_HIDE_BELOW) autoHidden.right = false;
-}
-
 let uninstall = () => {};
 let uninstallMenu = () => {};
 let uninstallDoc = () => {};
 onMounted(() => {
-  window.addEventListener("resize", onWindowResize);
-  window.addEventListener("pointermove", onPointerMove);
-  window.addEventListener("blur", hideEdgeHandles);
-  document.documentElement.addEventListener("mouseleave", hideEdgeHandles);
   uninstall = installShortcuts();
   installFileSession();
   installMcpHost();
@@ -151,10 +85,6 @@ onMounted(() => {
   });
 });
 onBeforeUnmount(() => {
-  window.removeEventListener("resize", onWindowResize);
-  window.removeEventListener("pointermove", onPointerMove);
-  window.removeEventListener("blur", hideEdgeHandles);
-  document.documentElement.removeEventListener("mouseleave", hideEdgeHandles);
   uninstall();
   uninstallMenu();
   uninstallDoc();
@@ -170,29 +100,12 @@ watchEffect(() => {
 </script>
 
 <template>
-  <div class="app" :data-platform="platform" :style="frameStyle">
+  <div class="app" :data-platform="platform">
     <div class="drag-strip" />
     <template v-if="ui.docOpen">
       <CanvasView />
       <Toolbar class="float toolbar rise-in" />
-      <!-- 面板收起/展开：窄窗口下自动收起，手动切换优先 -->
-      <button
-        class="edge-toggle left"
-        :class="{ collapsed: !leftVisible, reveal: !leftVisible || nearEdge.left }"
-        v-tip="{ label: leftVisible ? '收起左栏' : '展开左栏' }"
-        @click="toggleSide('left')"
-      >
-        <Icon name="chevron" :size="12" :class="['chev', { flip: !leftVisible }]" />
-      </button>
-      <button
-        class="edge-toggle right"
-        :class="{ collapsed: !rightVisible, reveal: !rightVisible || nearEdge.right }"
-        v-tip="{ label: rightVisible ? '收起检查器' : '展开检查器' }"
-        @click="toggleSide('right')"
-      >
-        <Icon name="chevron" :size="12" :class="['chev', { flip: !rightVisible }]" />
-      </button>
-      <aside v-if="leftVisible" class="float left glass rise-in" style="animation-delay: 40ms">
+      <aside class="float left glass rise-in" style="animation-delay: 40ms">
         <div class="tabs">
           <button :class="{ on: ui.tab === 'pages' }" @click="ui.tab = 'pages'">页面</button>
           <button :class="{ on: ui.tab === 'components' }" @click="ui.tab = 'components'">组件</button>
@@ -204,7 +117,7 @@ watchEffect(() => {
           <DesignSystemPanel v-show="ui.tab === 'tokens'" />
         </div>
       </aside>
-      <aside v-if="rightVisible" class="float right glass rise-in" style="animation-delay: 80ms">
+      <aside class="float right glass rise-in" style="animation-delay: 80ms">
         <InspectorPanel />
       </aside>
     </template>
@@ -222,6 +135,9 @@ watchEffect(() => {
 
 <style scoped>
 .app {
+  /* 左右面板常驻：面板 300/276 + 边距，工具栏的居中公式按这两个变量算 */
+  --left-w: 314px;
+  --right-w: 290px;
   position: relative;
   height: 100%;
   overflow: hidden;
@@ -259,79 +175,10 @@ watchEffect(() => {
 
 .toolbar {
   top: 14px;
-  /* 在"画布区"居中，而不是在窗口里居中：面板收起/展开时工具栏跟着走 */
+  /* 在"画布区"居中，而不是在窗口里居中：左右面板各占一段固定宽度 */
   left: calc(50% + (var(--left-w, 0px) - var(--right-w, 0px)) / 2);
   translate: -50% 0;
   max-width: calc(100vw - 28px - var(--left-w, 0px) - var(--right-w, 0px));
-}
-
-/* 面板折叠把手：贴在面板内侧边缘，竖排居中 */
-.edge-toggle {
-  position: absolute;
-  top: 50%;
-  z-index: 12;
-  display: grid;
-  place-items: center;
-  width: 18px;
-  height: 44px;
-  padding: 0;
-  translate: 0 -50%;
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-pill);
-  background: var(--surface);
-  color: var(--text-faint);
-  box-shadow: var(--shadow-float);
-  cursor: pointer;
-  /* 默认隐藏且不吃指针：面板展开时只有指针贴近才露出来 */
-  opacity: 0;
-  pointer-events: none;
-  transition:
-    opacity var(--dur-fast) var(--ease),
-    background var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease);
-}
-
-.edge-toggle.reveal {
-  opacity: 1;
-  pointer-events: auto;
-}
-
-.edge-toggle:hover {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-
-.edge-toggle.left {
-  left: calc(var(--left-w, 0px) - 6px);
-}
-
-.edge-toggle.right {
-  right: calc(var(--right-w, 0px) - 6px);
-}
-
-.edge-toggle.left.collapsed {
-  left: 8px;
-}
-
-.edge-toggle.right.collapsed {
-  right: 8px;
-}
-
-/* chevron 图标朝下：左把手收到面板边时指左，收起后指右（点它展开） */
-.chev {
-  transform: rotate(90deg);
-}
-
-.chev.flip {
-  transform: rotate(-90deg);
-}
-
-.edge-toggle.right .chev {
-  transform: rotate(-90deg);
-}
-
-.edge-toggle.right .chev.flip {
-  transform: rotate(90deg);
 }
 
 .left {

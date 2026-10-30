@@ -5,6 +5,7 @@
 import { worldRect, type DocNode, type NodeId } from "@sqraft/core";
 import { worldToScreen, type Viewport } from "@sqraft/render";
 import { docStore } from "../store";
+import { LABEL_CHIP_ABOVE } from "./label-metrics";
 import { handlePointsOfQuad, selectionQuad, selectionScreenRect, type MovePreview, type ResizePreview } from "./selection";
 
 export interface SelectionOverlayOptions {
@@ -100,7 +101,9 @@ export function drawSelectionOverlay(
       const bw = tw + 14;
       const bh = 19;
       const bx = x + width / 2 - bw / 2;
-      const by = y - bh - 8;
+      // 页面 / 母版的名字标签占着节点上方：尺寸徽标再往上让一格，别和标签压在一起
+      const labelAbove = n.type === "page" || n.type === "component";
+      const by = y - bh - (labelAbove ? LABEL_CHIP_ABOVE + 4 : 8);
       g.beginPath();
       (g as unknown as { roundRect(x: number, y: number, w: number, h: number, r: number): void }).roundRect(
         bx,

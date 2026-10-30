@@ -57,6 +57,12 @@ describe("画布命中：主组件是文档根节点", () => {
     expect(hitTest(vp, 840, 90)?.id).toBe(over.id);
   });
 
+  it("隐藏的母版不参与命中", () => {
+    const { masterId } = setup();
+    docStore.apply({ type: "node.update", params: { nodeId: masterId, patch: { visible: false } } });
+    expect(hitTest(vp, 700, 90)).toBeNull();
+  });
+
   it("页面区域仍然命中页面，pageAt 不把母版当页面", () => {
     const { pageId, masterId } = setup();
     expect(hitTest(vp, 100, 100)?.id).toBe(pageId);
