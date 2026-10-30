@@ -106,7 +106,24 @@ describe("Token 改名", () => {
     const store = new DocStore(createDocWithPage());
     store.doc.tokens["color/primary"] = { type: "color", value: "#3366ff" };
     const pageId = store.doc.rootIds[0];
-    const rect = createNode("rect", { name: "R", style: { fill: { token: "color/primary" }, stroke: { token: "color/primary" } } });
+    const rect = createNode("rect", {
+      name: "R",
+      style: {
+        fill: { token: "color/primary" },
+        stroke: { token: "color/primary" },
+        effects: [
+          {
+            type: "drop-shadow",
+            visible: true,
+            x: 0,
+            y: 4,
+            blur: 8,
+            spread: 0,
+            color: { token: "color/primary" },
+          },
+        ],
+      },
+    });
     store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
 
     store.apply({ type: "token.rename", params: { from: "color/primary", to: "brand/primary" } });
@@ -114,6 +131,7 @@ describe("Token 改名", () => {
     expect(store.doc.tokens["brand/primary"]).toEqual({ type: "color", value: "#3366ff" });
     expect(store.doc.nodes[rect.id].style.fill?.token).toBe("brand/primary");
     expect(store.doc.nodes[rect.id].style.stroke?.token).toBe("brand/primary");
+    expect(store.doc.nodes[rect.id].style.effects?.[0]).toMatchObject({ color: { token: "brand/primary" } });
     // 改名不改变渲染结果
     expect(resolvePaint(store.doc, store.doc.nodes[rect.id].style.fill)).toBe("#3366ff");
 
@@ -122,10 +140,12 @@ describe("Token 改名", () => {
     expect(store.doc.tokens["color/primary"]).toEqual({ type: "color", value: "#3366ff" });
     expect(store.doc.nodes[rect.id].style.fill?.token).toBe("color/primary");
     expect(store.doc.nodes[rect.id].style.stroke?.token).toBe("color/primary");
+    expect(store.doc.nodes[rect.id].style.effects?.[0]).toMatchObject({ color: { token: "color/primary" } });
 
     store.redo();
     expect(store.doc.tokens["brand/primary"]).toBeTruthy();
     expect(store.doc.nodes[rect.id].style.fill?.token).toBe("brand/primary");
+    expect(store.doc.nodes[rect.id].style.effects?.[0]).toMatchObject({ color: { token: "brand/primary" } });
   });
 
   it("只改引用了该 Token 的节点，其它节点不动", () => {

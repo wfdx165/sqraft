@@ -4,8 +4,9 @@
  * 与 MCP 的 `screenshot` 不同，这里不吃当前缩放——画布缩放到 5% 时导出的图
  * 依然是 2× 的清晰图。选区导出透明背景，页面导出带页面背景。
  */
-import { subtreeWorldBounds, walkSubtree, worldRect, type DocState, type NodeId, type Rect } from "@sqraft/core";
+import { subtreeWorldBounds, worldRect, type DocState, type NodeId, type Rect } from "@sqraft/core";
 import { Canvas2DBackend, drawDocument, type ResolvedImage, type Viewport } from "@sqraft/render";
+import { imageAssetIds } from "./image-assets";
 
 export interface ExportRequest {
   /** 要导出的页面（选区导出时仍用它取坐标基准） */
@@ -39,22 +40,6 @@ export function exportBounds(doc: DocState, request: Pick<ExportRequest, "pageId
   return { x: left, y: top, width: Math.max(1, right - left), height: Math.max(1, bottom - top) };
 }
 
-/** 导出会画到的图片资源 id（图片节点 + 页面背景图）。 */
-function collectImageIds(doc: DocState, request: ExportRequest): string[] {
-  const ids = new Set<string>();
-  const visit = (node: { type: string; image?: { assetId: string } }) => {
-    if (node.type === "image" && node.image?.assetId) ids.add(node.image.assetId);
-  };
-  if (request.nodeIds?.length) {
-    for (const id of request.nodeIds) walkSubtree(doc, id, visit);
-  } else {
-    const page = doc.nodes[request.pageId];
-    if (page?.backgroundImage?.assetId) ids.add(page.backgroundImage.assetId);
-    walkSubtree(doc, request.pageId, visit);
-  }
-  return [...ids];
-}
-
 /**
  * 先解码再用同步渲染：刚打开文档/刚粘贴时图片可能只在缓存外，
  * 直接 `renderPng` 会画成占位图。
@@ -62,7 +47,8 @@ function collectImageIds(doc: DocState, request: ExportRequest): string[] {
 export async function renderPngAsync(doc: DocState, request: ExportRequest): Promise<string> {
   if (request.ensureImage) {
     const ensure = request.ensureImage;
-    await Promise.all(collectImageIds(doc, request).map((id) => ensure(id).catch(() => null)));
+    const ids = imageAssetIds(doc, { pageId: request.pageId, nodeIds: request.nodeIds });
+    await Promise.all(ids.map((id) => ensure(id).catch(() => null)));
   }
   return renderPng(doc, request);
 }

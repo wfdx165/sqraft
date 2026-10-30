@@ -12,10 +12,10 @@
 
 ## 决策
 
-1. **新文件是空文档**：`createEmptyDoc()` 不建页面、不建 Token。空文档由画布引导卡承接（「新建页面」），绘图工具在无页面时不可用；agent 调用时若无页面则自动建一页。
+1. **新文件是空文档**：`createEmptyDoc()` 不建页面、不建 Token。空文档由画布引导卡承接（「新建页面」），绘图工具在无页面时不可用；agent 可用 `create_page` 显式建页，第一次建节点时若无页面也会自动补一页（`页面 1`）。
 2. **默认颜色用字面量**：人手新建矩形/椭圆/多边形/闭合路径 `#3366ff`、画板 `#ffffff`、文本与开放路径 `#1a1a1a`（描边宽 2）；agent 的默认值同样如此。
 3. **AI 可以用字面量**：`create_node` / `update_node` 新增 `fill` / `stroke` 字面量入参；`fillToken` / `strokeToken` 仍然可用且优先。`assertToken()` 只校验"引用了不存在的 Token"，不再声称禁止字面量。
-4. **设计系统是显式资产**：Token 只由 `token.define` 建立（人手在设计系统面板，或将来 agent 用 `define_token`）。
+4. **设计系统是显式资产**：Token 只由 `token.define` 建立——人手在设计系统面板，agent 用 MCP 的 `define_token`（`rename_token` 负责改名，fill / stroke / 阴影颜色引用随动）。
 
 ## 后果
 

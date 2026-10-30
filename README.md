@@ -73,7 +73,7 @@ pnpm dist:mac    # 也可显式指定；交叉打包需要 wine / docker
 - **一切编辑都是命令**：GUI、MCP、撤销重做、持久化共用同一条命令路径。
 - **文档真源在渲染进程**：主进程不持有文档状态，只负责 MCP 宿主、文件 IO 与窗口生命周期。
 - **渲染只经 `RenderBackend`**：节点效果（投影 / 内阴影 / 图层模糊 / 背景模糊）在离屏层合成，按子树包围盒开层。
-- **AI 只能做 GUI 能做的事**：能力必须同时有工具定义与界面入口；样式颜色只接受 Token 引用。
+- **AI 只能做 GUI 能做的事**：能力必须同时有工具定义与界面入口；颜色可引用 Token，也可直接给字面量（Token 优先）。
 - **一次 MCP 调用 = 一个撤销步**：`DocStore.transact` 合并逆操作，失败时回滚。
 
 ## 接入 MCP
@@ -86,14 +86,14 @@ pnpm dist:mac    # 也可显式指定；交叉打包需要 wine / docker
     "mcp": { "servers": { "sqraft": { "type": "local", "command": ["node", "<cli 路径>"] } } } }
   ```
 - Claude Code：`claude mcp add sqraft -- node <cli 路径>`
-- 端点：`~/Library/Application Support/Sqraft/mcp.sock`（macOS）、`$XDG_CONFIG_HOME/Sqraft/mcp.sock`（Linux，缺省 `~/.config`）、`\\.\pipe\sqraft-mcp`（Windows）
+- 端点：`~/.sqraft/mcp.sock`（macOS / Linux）、`\\.\pipe\sqraft-mcp`（Windows）
 - 薄 CLI（`resources/bin/sqraft-mcp`，无扩展名）只做 `stdio ↔ 本机 IPC` 管道；应用没在跑时会自动拉起，并跳过欢迎页直接建空稿
 - 多客户端串行执行，单次调用 30s 超时；应用退出前广播关闭通知
 - 操作日志只进终端：运行时所在终端会打出 `[mcp]` 行（连接、工具名、耗时、参数摘要、错误）。不写文件，打包版从 Finder 启动时 stdout 没有出口、看不到——排查问题请从终端启动
 
 图片：`create_node` 的 `kind` 支持 `image`，用 base64 传位图（上限 5MB）；`update_node` 可改 `crop` 与 `mask`。
 
-工具（14 个）：`read_document`、`get_tokens`、`create_node`、`update_node`、`delete_node`、`create_instance`、`swap_instance`、`detach_instance`、`define_property`、`set_instance_prop`、`fill_slot`、`screenshot`、`document.new`、`document.open`。
+工具：读 `read_document` / `get_tokens` / `inspect_layout` / `screenshot` / `export_png`；写 `define_token` / `rename_token` / `create_page` / `create_node` / `update_node` / `delete_node` / 组件与布局相关工具 / `import_font` / `document.*`。完整清单与参数以 `packages/ai-tools/src/index.ts` 的 `tools`（`toMCPManifest()`）为准，欢迎页显示实时数量。
 
 ## 文件格式
 

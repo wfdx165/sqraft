@@ -1,6 +1,6 @@
 /**
  * AI 工具定义：内置对话面板与 MCP Server 的唯一真源（ADR-0004）。
- * 纪律：样式只接受 Token 引用，字面量色值在工具层直接拒绝。
+ * 纪律：颜色优先引用 Token，也可以直接用字面量（ADR-0024）。
  */
 
 import type { Command, DocNode, DocStore, Effect, NodeId, NodeStyle, VectorAnchor } from "@sqraft/core";
@@ -14,12 +14,17 @@ import {
   firstPageId,
   makeAnchor,
   newId,
+  nextPageName,
+  nextPagePosition,
   planDuplicate,
   type AlignEdge,
   type DistributeAxis,
   type ReorderAction,
   nextComponentName,
   validateVector,
+  tokenColorOf,
+  tokenNumberOf,
+  tokenPathOf,
   walkSubtree,
   worldRect,
   type CornerRadius,
@@ -168,14 +173,60 @@ export const tools: ToolDefinition[] = [
   },
   {
     name: "get_tokens",
-    description: "读取设计 Token 集合及当前模式下的取值。样式必须引用这些 Token。",
+    description:
+      "读取设计 Token 集合与取值；没有 Token 时返回空表。样式可以引用 Token（fillToken / strokeToken），也可以直接给 fill / stroke 字面量。",
     readonly: true,
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
   {
+    name: "define_token",
+    description:
+      "新增或覆盖一个设计 Token。path 形如 color/primary、spacing/md（至少含一个 /，不能有空格或空段）；type=color 时 value 接受 #hex（3/6/8 位）、rgb() / rgba()（带 alpha 也可用 8 位 hex），type=number 时接受有限数值。已存在的同类型路径覆盖取值（可撤销）；不能把已有 Token 改成另一种类型。",
+    input_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Token 路径，如 color/primary" },
+        type: { type: "string", enum: ["color", "number"] },
+        value: { description: "color 传字符串，number 传数字", oneOf: [{ type: "string" }, { type: "number" }] },
+      },
+      required: ["path", "type", "value"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "rename_token",
+    description:
+      "重命名设计 Token；节点里对旧路径的 fill / stroke / 阴影颜色引用会一起改过去（可撤销）。旧路径不存在或目标路径已存在时拒绝。",
+    input_schema: {
+      type: "object",
+      properties: {
+        from: { type: "string", description: "原路径" },
+        to: { type: "string", description: "新路径" },
+      },
+      required: ["from", "to"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "create_page",
+    description:
+      "新建一个页面并返回 pageId。页面是根节点，不能嵌在其它节点里；省略 name 时按「页面 N」自动编号，省略 x/y 时放在最右侧页面之右。",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "页面名；省略自动编号" },
+        x: { type: "number", description: "省略时放在最右侧页面之右" },
+        y: { type: "number", description: "省略时与最上方页面对齐" },
+        width: { type: "number", description: "默认 1440" },
+        height: { type: "number", description: "默认 1024" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "create_node",
     description:
-      "在父节点下创建一个节点。kind 支持 frame/rect/ellipse/polygon/line/path/text/image/component/slot。component 只能建在页面顶层；slot 必须位于主组件内并提供唯一名字。polygon 是参数化多边形，用 sides 指定边数（3–12，默认 3，3 即三角形），顶点由 width/height 包围盒推导。path 用 points 描述锚点（父容器坐标，手柄为相对锚点的偏移），闭合路径至少 3 个锚点、开放路径至少 2 个。image 用 image.data 传 base64（上限 5MB），不接受文件路径。样式颜色必须用 fillToken / strokeToken（Token 名），不允许字面量色值。",
+      "在父节点下创建一个节点。kind 支持 frame/rect/ellipse/polygon/line/path/text/image/component/slot。component 只能建在页面顶层；slot 必须位于主组件内并提供唯一名字。polygon 是参数化多边形，用 sides 指定边数（3–12，默认 3，3 即三角形），顶点由 width/height 包围盒推导。path 用 points 描述锚点（父容器坐标，手柄为相对锚点的偏移），闭合路径至少 3 个锚点、开放路径至少 2 个。image 用 image.data 传 base64（上限 5MB），不接受文件路径。颜色可引用 fillToken / strokeToken，也可直接给 fill / stroke 字面量（Token 优先）。",
     input_schema: {
       type: "object",
       properties: {
@@ -306,11 +357,12 @@ export const tools: ToolDefinition[] = [
   {
     name: "update_node",
     description:
-      "更新节点属性。fill 仅接受 Token 引用（fillToken）。polygon 可用 sides 改边数（3–12）。path 可用 points（父容器坐标）整体替换锚点、用 closed 切换闭合；只改 width/height 时锚点会按比例缩放。图片节点可用 crop 改可见区域（原图像素坐标）、用 mask 标记为蒙版（遮罩同父级上方相邻兄弟）。",
+      "更新节点属性（含改名）。颜色可引用 fillToken / strokeToken，也可给 fill / stroke 字面量（Token 优先）。polygon 可用 sides 改边数（3–12）。path 可用 points（父容器坐标）整体替换锚点、用 closed 切换闭合；只改 width/height 时锚点会按比例缩放。图片节点可用 crop 改可见区域（原图像素坐标）、用 mask 标记为蒙版（遮罩同父级上方相邻兄弟）。",
     input_schema: {
       type: "object",
       properties: {
         nodeId: { type: "string" },
+        name: { type: "string", description: "新名字；页面 / 图层 / 组件都可改" },
         text: { type: "string" },
         sides: { type: "number", description: "polygon 的边数，3–12" },
         closed: { type: "boolean" },
@@ -528,6 +580,8 @@ export interface DocumentHost {
   addImage?(data: string, mimeType: string): Promise<{ assetId: string; width: number; height: number }>;
   /** 返回是否真的打开了文件；用户取消返回 false。 */
   openDocument(): Promise<boolean>;
+  /** 切到某个页面：create_page 后让「省略 parentId」的后续操作落到新页 */
+  activatePage?(pageId: NodeId): void;
   /** 按倍率渲染 PNG data URL（由宿主注入，工具层不碰 DOM；允许先解码图片再返回） */
   exportPng?(request: { pageId: NodeId; nodeIds?: NodeId[]; scale: number }): string | Promise<string>;
   /** 导入字体（字节内联，不收路径），返回字族/字重/风格 */
@@ -607,7 +661,9 @@ function applyStyleTokens(style: NodeStyle, args: Record<string, unknown>): void
 export function assertToken(store: DocStore, token: string | undefined, field: string): void {
   if (token === undefined) return;
   if (!store.doc.tokens[token]) {
-    throw new Error(`${field} 引用了不存在的 Token "${token}"；调用 get_tokens 查看可用 Token，或改用 fill / stroke 传字面量色值。`);
+    throw new Error(
+      `${field} 引用了不存在的 Token "${token}"；先调用 define_token 建这个 Token，或改用 fill / stroke 传字面量色值。`,
+    );
   }
 }
 
@@ -727,6 +783,9 @@ function applyNodeArgs(args: Record<string, unknown>): Partial<DocNode> {
 
 /** 会改动文档的工具：一次调用包成一个事务，撤销时只算一步。 */
 const MUTATING_TOOLS = new Set([
+  "define_token",
+  "rename_token",
+  "create_page",
   "create_node",
   "create_instance",
   "define_property",
@@ -740,6 +799,21 @@ const MUTATING_TOOLS = new Set([
   "arrange_nodes",
   "duplicate_node",
 ]);
+
+/** 空文档没有页面：先建第一页（与人工"新建页面"同一套命令，仍在这一条事务里）。 */
+function ensurePage(store: DocStore): NodeId {
+  const existing = firstPageId(store.doc);
+  if (existing) return existing;
+  const page = createNode("page", {
+    name: nextPageName(store.doc),
+    x: 0,
+    y: 0,
+    width: DEFAULT_PAGE_WIDTH,
+    height: DEFAULT_PAGE_HEIGHT,
+  });
+  store.apply({ type: "node.create", params: { nodes: [page], parentId: null } }, "ai:page");
+  return page.id;
+}
 
 export function makeExecutor(
   store: DocStore,
@@ -767,7 +841,71 @@ export function makeExecutor(
         return JSON.stringify({ pages });
       }
       case "get_tokens": {
-        return JSON.stringify({ tokens: store.doc.tokens });
+        const tokens = store.doc.tokens;
+        if (Object.keys(tokens).length === 0) {
+          return JSON.stringify({
+            tokens,
+            hint: "当前文档没有设计系统。可以先用 define_token 建 Token，或直接用 fill / stroke 字面量。",
+          });
+        }
+        return JSON.stringify({ tokens });
+      }
+      case "define_token": {
+        const path = tokenPathOf(args.path);
+        if (!path) {
+          throw new Error(
+            `Token 路径 "${String(args.path ?? "")}" 不合法：至少形如 color/primary，不能含空格或空段`,
+          );
+        }
+        const type = args.type === "color" || args.type === "number" ? args.type : null;
+        if (!type) throw new Error('type 只能是 "color" 或 "number"');
+        const raw = args.value;
+        const value = type === "color" ? tokenColorOf(raw) : tokenNumberOf(raw);
+        if (value === null) {
+          throw new Error(
+            type === "color"
+              ? `颜色 "${String(raw ?? "")}" 不合法：需要 #hex、rgb() 或 rgba()`
+              : `数值 "${String(raw ?? "")}" 不合法`,
+          );
+        }
+        const prev = store.doc.tokens[path];
+        if (prev && prev.type !== type) {
+          throw new Error(`Token "${path}" 已存在且类型为 ${prev.type}，不能改成 ${type}`);
+        }
+        store.apply({ type: "token.define", params: { path, tokenType: type, value } }, "ai:define_token");
+        return JSON.stringify({ ok: true, path, type, value });
+      }
+      case "rename_token": {
+        const from = tokenPathOf(args.from);
+        const to = tokenPathOf(args.to);
+        if (!from) throw new Error(`Token 路径 "${String(args.from ?? "")}" 不合法：至少形如 color/primary`);
+        if (!to) throw new Error(`Token 路径 "${String(args.to ?? "")}" 不合法：至少形如 color/primary`);
+        if (from === to) throw new Error("from 与 to 不能相同");
+        if (!store.doc.tokens[from]) throw new Error(`Token "${from}" 不存在`);
+        if (store.doc.tokens[to]) throw new Error(`Token "${to}" 已存在，不能重命名`);
+        store.apply({ type: "token.rename", params: { from, to } }, "ai:rename_token");
+        return JSON.stringify({ ok: true, from, to });
+      }
+      case "create_page": {
+        const position = nextPagePosition(store.doc);
+        const name = args.name === undefined ? nextPageName(store.doc) : String(args.name).trim();
+        if (!name) throw new Error("页面名不能为空");
+        const width = args.width === undefined ? DEFAULT_PAGE_WIDTH : Number(args.width);
+        const height = args.height === undefined ? DEFAULT_PAGE_HEIGHT : Number(args.height);
+        if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
+          throw new Error("页面宽高必须是正数");
+        }
+        const page = createNode("page", {
+          name,
+          x: typeof args.x === "number" ? args.x : position.x,
+          y: typeof args.y === "number" ? args.y : position.y,
+          width,
+          height,
+        });
+        store.apply({ type: "node.create", params: { nodes: [page], parentId: null } }, "ai:create_page");
+        // 让后续不带 parentId 的操作默认落到新页（与左栏「+」一致）
+        documentHost?.activatePage?.(page.id);
+        return JSON.stringify({ ok: true, pageId: page.id, name });
       }
       case "create_node": {
         const kind = String(args.kind) as
@@ -783,17 +921,7 @@ export function makeExecutor(
         if (Array.isArray(args.effects)) assertEffectTokens(store, effectsFrom(args.effects));
         // 空文档没有页面：先建一页再画（与人工"新建页面"同一套命令，仍是一次撤销）
         let parentId = (args.parentId as NodeId | undefined) ?? getActivePageId?.() ?? firstPageId(store.doc);
-        if (!parentId && args.parentId === undefined) {
-          const page = createNode("page", {
-            name: "页面 1",
-            x: 0,
-            y: 0,
-            width: DEFAULT_PAGE_WIDTH,
-            height: DEFAULT_PAGE_HEIGHT,
-          });
-          store.apply({ type: "node.create", params: { nodes: [page], parentId: null } }, "ai:page");
-          parentId = page.id;
-        }
+        if (!parentId && args.parentId === undefined) parentId = ensurePage(store);
         if (!parentId || !store.doc.nodes[parentId]) throw new Error("parentId 不存在");
 
         let name = args.name as string | undefined;
@@ -900,17 +1028,7 @@ export function makeExecutor(
         if (!master || master.type !== "component") throw new Error(`组件 ${componentId} 不存在`);
         // 空文档没有页面：先建一页再画（与人工"新建页面"同一套命令，仍是一次撤销）
         let parentId = (args.parentId as NodeId | undefined) ?? getActivePageId?.() ?? firstPageId(store.doc);
-        if (!parentId && args.parentId === undefined) {
-          const page = createNode("page", {
-            name: "页面 1",
-            x: 0,
-            y: 0,
-            width: DEFAULT_PAGE_WIDTH,
-            height: DEFAULT_PAGE_HEIGHT,
-          });
-          store.apply({ type: "node.create", params: { nodes: [page], parentId: null } }, "ai:page");
-          parentId = page.id;
-        }
+        if (!parentId && args.parentId === undefined) parentId = ensurePage(store);
         if (!parentId || !store.doc.nodes[parentId]) throw new Error("parentId 不存在");
         const nodeId = newId();
         store.apply(
@@ -996,6 +1114,11 @@ export function makeExecutor(
           throw new Error("layout 仅适用于 frame / component / instance");
         }
         const patch: Partial<DocNode> = { ...applyNodeArgs(args) };
+        if (args.name !== undefined) {
+          const name = String(args.name).trim();
+          if (!name) throw new Error("name 不能为空");
+          patch.name = name;
+        }
 
         if (args.backgroundImage !== undefined) {
           if (node.type !== "page") throw new Error("backgroundImage 仅适用于页面");

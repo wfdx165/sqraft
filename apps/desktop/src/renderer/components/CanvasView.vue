@@ -59,6 +59,7 @@ import { flushNudge, nudgeSelection } from "../canvas/nudge";
 import { marqueeHits } from "../canvas/marquee";
 import { boundsHandlePoints, selectionBounds as boundsOfSelection } from "../canvas/selection-bounds";
 import { renderPngAsync } from "../canvas/export-image";
+import { imageAssetIds } from "../canvas/image-assets";
 import { RULER_SIZE, drawGuidesOverlay, drawRulers, guideAt } from "../canvas/rulers";
 import {
   abortMultiScale,
@@ -2198,9 +2199,18 @@ onMounted(() => {
     const off = document.createElement("canvas");
     const offCtx = off.getContext("2d");
     if (!offCtx) return "";
+
+    // 截图只覆盖视口（或给定 region）：先把相交的位图解码好，再交给同步渲染。
+    // 不传 resolveImage 的话 drawDocument 会把所有图片画成占位灰叉。
+    const viewportRegion = { x: vp.x, y: vp.y, width: vp.width / vp.zoom, height: vp.height / vp.zoom };
+    const ids = imageAssetIds(docStore.doc, { region: region ?? viewportRegion });
+    await Promise.all(ids.map((id) => ensureAssetDecoded(id).catch(() => null)));
+    // 字体同理：刚导入字体就截图时，别落成回退字体
+    await document.fonts.ready;
+
     const offBackend = new Canvas2DBackend(offCtx);
     offBackend.beginFrame(vp);
-    drawDocument(offBackend, docStore.doc);
+    drawDocument(offBackend, docStore.doc, { resolveImage: (assetId) => imageFor(assetId) });
     offBackend.endFrame();
     if (!region) return off.toDataURL("image/png");
 

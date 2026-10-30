@@ -4,7 +4,7 @@
  * 所有写入都走命令（`token.define` / `token.rename`，文档变更唯一入口，可撤销）；不支持删除。
  */
 import { computed, nextTick, ref } from "vue";
-import type { TokenEntry } from "@sqraft/core";
+import { tokenColorOf, tokenNumberOf, tokenPathOf, type TokenEntry } from "@sqraft/core";
 import { dispatch, docStore, ui } from "../store";
 import Icon from "./Icon.vue";
 
@@ -48,20 +48,14 @@ function toggle(prefix: string) {
 
 /* ---------- 改值 ---------- */
 
-const HEX = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i;
-const RGB = /^rgba?\(\s*[\d.]+%?\s*[, ]\s*[\d.]+%?\s*[, ]\s*[\d.]+%?\s*(?:[,/]\s*[\d.]+%?\s*)?\)$/i;
-
+/** 与 AI 工具共用 core 的判定；浏览器里再让 CSS.supports 兜一次底。 */
 function isValidColor(value: string): boolean {
-  const v = value.trim();
-  if (!HEX.test(v) && !RGB.test(v)) return false;
-  return typeof CSS === "undefined" || CSS.supports("color", v);
+  const color = tokenColorOf(value);
+  return color !== null && (typeof CSS === "undefined" || CSS.supports("color", color));
 }
 
 function isValidNumber(value: string): boolean {
-  const v = value.trim();
-  if (!v) return false;
-  const n = Number(v);
-  return Number.isFinite(n);
+  return tokenNumberOf(value) !== null;
 }
 
 function commit(path: string, tokenType: "color" | "number", raw: string): void {
@@ -113,10 +107,9 @@ function startAdd(groupPrefix?: string) {
   };
 }
 
-/** 路径校验：新增与改名共用（`/`、无空格、不重复）。 */
+/** 路径校验：新增与改名共用（至少两段、无空格/空段、不重复）。 */
 function validatePath(path: string): string {
-  if (!path.includes("/")) return "路径需含 /，如 color/brand";
-  if (/\s/.test(path)) return "路径不能含空格";
+  if (!tokenPathOf(path)) return "路径需至少两段且不含空格，如 color/brand";
   if (docStore.doc.tokens[path]) return "该路径已存在，直接改值即可";
   return "";
 }

@@ -53,6 +53,7 @@ export function installMcpHost(): void {
     {
       newDocument: () => newDocument(),
       openDocument: () => openDocument(),
+      activatePage: (pageId) => hooks.activatePage(pageId),
     exportPng: (request) => hooks.renderExport(request),
     importFont: async (fileName, dataBase64) => {
       const binary = atob(dataBase64);

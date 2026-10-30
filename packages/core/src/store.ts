@@ -5,6 +5,7 @@
 
 import type { ComponentPropertyDef, DocNode, DocState, NodeId } from "./model";
 import { createNode, walkSubtree, worldRect } from "./model";
+import { applyTokenCommand } from "./token-commands";
 import { clampSides } from "./polygon";
 import {
   buildSlotDefaultRoots,
@@ -1410,52 +1411,10 @@ export class DocStore {
         for (const n of nodes) changed.add(n.id);
         return { cmd: { type: "node.delete", params: { nodeId: nodes[0].id } } };
       }
-      case "token.define": {
-        const { path, tokenType, value } = cmd.params;
-        const prevToken = this.state.tokens[path];
-        this.state.tokens[path] = { type: tokenType, value };
-        changed.add("__doc__" as NodeId);
-        if (prevToken) {
-          return {
-            cmd: { type: "token.define", params: { path, tokenType: prevToken.type, value: prevToken.value } },
-          };
-        }
-        // 新建 token 的逆是删除：撤销"粘贴带过来的 Token"要能真的清掉
-        return { cmd: { type: "token.delete", params: { path } } };
-      }
-      case "token.delete": {
-        const { path } = cmd.params;
-        const prev = this.state.tokens[path];
-        if (!prev) return { cmd: { type: "token.delete", params: { path } } };
-        delete this.state.tokens[path];
-        changed.add("__doc__" as NodeId);
-        return { cmd: { type: "token.define", params: { path, tokenType: prev.type, value: prev.value } } };
-      }
-      case "token.rename": {
-        const { from, to } = cmd.params;
-        // 非法改名直接抛错：静默 no-op 会留下一条"撤销了却什么也没变"的历史
-        if (from === to) throw new Error(`Token "${from}" 的目标路径与原名相同`);
-        const entry = this.state.tokens[from];
-        if (!entry) throw new Error(`Token "${from}" 不存在`);
-        if (this.state.tokens[to]) throw new Error(`Token "${to}" 已存在，不能重命名`);
-
-        delete this.state.tokens[from];
-        this.state.tokens[to] = entry;
-
-        // 引用随动：节点的填充/描边是仅有的两处 Paint 引用
-        for (const node of Object.values(this.state.nodes)) {
-          const style = node.style;
-          let next: typeof style | null = null;
-          if (style.fill?.token === from) next = { ...style, fill: { ...style.fill, token: to } };
-          if (style.stroke?.token === from) next = { ...(next ?? style), stroke: { ...style.stroke, token: to } };
-          if (next) {
-            node.style = next;
-            changed.add(node.id);
-          }
-        }
-        changed.add("__doc__" as NodeId);
-        return { cmd: { type: "token.rename", params: { from: to, to: from } } };
-      }
+      case "token.define":
+      case "token.delete":
+      case "token.rename":
+        return applyTokenCommand(this.state, cmd, changed);
     }
   }
 

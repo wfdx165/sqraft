@@ -278,12 +278,19 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 | 工具 | 读/写 | 说明 |
 |---|---|---|
 | `read_document` | 读 | 返回页面/节点树的紧凑摘要 |
-| `get_tokens` | 读 | Token 集合与取值 |
-| `create_node` | 写 | 建节点（样式仅接受 Token 引用） |
-| `update_node` | 写 | 改属性（同上约束） |
+| `get_tokens` | 读 | Token 集合与取值；没有 Token 时返回空表 |
+| `define_token` | 写 | 新增/覆盖 Token（颜色接受 #hex 3/6/8 位、rgb/rgba；不能改类型） |
+| `rename_token` | 写 | 重命名 Token，fill / stroke / 阴影颜色引用随动 |
+| `create_page` | 写 | 新建页面（省略名字按「页面 N」编号；位置默认接在最右侧） |
+| `create_node` | 写 | 建节点（颜色可引用 Token，也可给字面量） |
+| `update_node` | 写 | 改属性与名字（页面 / 图层 / 组件；颜色规则同上） |
 | `delete_node` | 写 | 删除节点 |
+| `duplicate_node` / `group_nodes` / `arrange_nodes` | 写 | 复制、分组/解组、对齐/分布 |
 | `create_instance` / `swap_instance` / `detach_instance` | 写 | 组件实例的建立、替换与解绑 |
 | `define_property` / `set_instance_prop` / `fill_slot` | 写 | 组件属性定义、实例属性覆盖、插槽填充 |
+| `import_font` | 写 | 导入字体文件（base64，≤5MB），返回字族/字重/风格 |
+| `inspect_layout` | 读 | 世界坐标、绝对定位、自动布局与 hug/fill 数据 |
+| `export_png` | 读 | 页面或选区按倍率渲染 PNG（透明底选区） |
 | `screenshot` | 读 | 离屏重绘文档为 PNG（不含编辑器叠加层）；可选 `region` 只截文档坐标下的某块 |
 | `document.new` | 写 | 新建未命名空稿并切换过去 |
 | `document.open` | 写 | 只能触发系统文件对话框；不接受路径参数（agent 不能读任意磁盘文件） |
@@ -292,9 +299,9 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 
 **截图自检闭环**：agent 生成 → `screenshot` → 模型看图 → 修正命令。这是"AI 全流程"质量的下限保障。
 
-**矢量路径**：`create_node` 的 `kind` 支持 `path`，用 `points`（父容器坐标）与 `closed` 描述锚点；`update_node` 可整体替换 `points` 或切换 `closed`；`read_document` 回传 `vector`。颜色仍只接受 `fillToken` / `strokeToken`，未给颜色时按 GUI 默认（开放描边、闭合填充）。
+**矢量路径**：`create_node` 的 `kind` 支持 `path`，用 `points`（父容器坐标）与 `closed` 描述锚点；`update_node` 可整体替换 `points` 或切换 `closed`；`read_document` 回传 `vector`。颜色可引用 `fillToken` / `strokeToken`，也可给 `fill` / `stroke` 字面量；未给颜色时按 GUI 默认（开放描边、闭合填充）。
 
-**参数化多边形**：`create_node` 的 `kind` 支持 `polygon`，用 `sides`（3–12，默认 3）指定边数、`width/height` 指定包围盒；`update_node` 可改 `sides`；`read_document` 回传 `sides`。默认填充 `color/primary`，颜色规则与其它节点一致。
+**参数化多边形**：`create_node` 的 `kind` 支持 `polygon`，用 `sides`（3–12，默认 3）指定边数、`width/height` 指定包围盒；`update_node` 可改 `sides`；`read_document` 回传 `sides`。默认填充 `#3366ff`，颜色规则与其它节点一致。
 
 ## 13. 性能预算
 

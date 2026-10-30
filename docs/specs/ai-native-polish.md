@@ -111,13 +111,14 @@
 ### 字面量纪律（AI）
 
 - `ai-tools` 不再拒绝字面量色值：`fillToken`/`strokeToken` 仍优先，新增 `fill`/`stroke` 字面量入参。
-- `get_tokens` 在无 Token 时返回空表。
+- `get_tokens` 在无 Token 时返回空表并附一句提示；agent 用 `define_token` 自建 Token（同路径同类型覆盖，不允许改类型；颜色接受 #hex 3/6/8 位、rgb/rgba），用 `rename_token` 改名并带走 fill / stroke / 阴影颜色引用。
+- `define_token` 的覆盖是 agent 入口的幂等语义；设计系统面板的新增仍拒绝重名（防手滑），两边有意不同。
 - 同步 AGENTS 不变式 6 与新增 ADR-0024（纪律从"强制"降为"约定"）。
 
 ### 页面背景
 
 - 背景色复用 `page.style.fill`（缺省白）。
-- 新增 `page.backgroundImage?: { assetId; naturalWidth; naturalHeight; fit: "cover" | "contain" | "tile" }`；图片进 `.sqraft` 的 `assets/`，按内容哈希命名。
+- 新增 `page.backgroundImage?: { assetId; fit: "cover" | "contain" | "tile" }`（尺寸以解码后的位图为准，旧文件里的 `natural*` 忽略）；图片进 `.sqraft` 的 `assets/`，按内容哈希命名。
 - 渲染顺序：背景色 → 背景图 → 子节点；背景图不参与命中测试、不出现在图层树。
 - 检查器「背景」组：颜色在上、图片在下（缩略图 + 适配方式 + 清除）。
 

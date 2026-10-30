@@ -784,6 +784,83 @@ describe("AI 工具：空文档自动建页", () => {
   });
 });
 
+describe("AI 工具：页面", () => {
+  it("create_page 在空文档里默认叫页面 1、放在原点", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const run = makeExecutor(store, async () => "", () => null);
+    const res = await call(run, "create_page", {});
+    expect(res).toMatchObject({ ok: true, name: "页面 1" });
+    expect(store.doc.rootIds).toEqual([res.pageId]);
+    expect(store.doc.nodes[res.pageId as string]).toMatchObject({
+      type: "page",
+      x: 0,
+      y: 0,
+      width: 1440,
+      height: 1024,
+    });
+  });
+
+  it("create_page 支持显式名字/位置/尺寸，第二页默认接在最右侧", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const run = makeExecutor(store, async () => "", () => null);
+    const first = await call(run, "create_page", { name: "登录", x: 50, y: 60, width: 800, height: 600 });
+    expect(store.doc.nodes[first.pageId as string]).toMatchObject({
+      name: "登录",
+      x: 50,
+      y: 60,
+      width: 800,
+      height: 600,
+    });
+    const second = await call(run, "create_page", {});
+    expect(second.name).toBe("页面 2");
+    // 最右侧（50 + 800）再留 160 的 PAGE_GAP，顶部与第一页对齐
+    expect(store.doc.nodes[second.pageId as string]).toMatchObject({ x: 1010, y: 60 });
+  });
+
+  it("create_page 会切到新页（宿主实现 activatePage 时）", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const activated: string[] = [];
+    const run = makeExecutor(store, async () => "", () => null, undefined, {
+      newDocument: async () => true,
+      openDocument: async () => true,
+      activatePage: (pageId) => activated.push(pageId),
+    });
+    const res = await call(run, "create_page", { name: "详情" });
+    expect(activated).toEqual([res.pageId]);
+  });
+
+  it("create_page 拒绝空名与非正尺寸", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const run = makeExecutor(store, async () => "", () => null);
+    await expect(run("create_page", { name: "   " })).rejects.toThrow(/页面名/);
+    await expect(run("create_page", { width: 0 })).rejects.toThrow(/正数/);
+    await expect(run("create_page", { height: Number.NaN })).rejects.toThrow(/正数/);
+  });
+
+  it("create_page 一次调用一条撤销", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const run = makeExecutor(store, async () => "", () => null);
+    await run("create_page", { name: "一" });
+    await run("create_page", { name: "二" });
+    expect(store.doc.rootIds).toHaveLength(2);
+    store.undo();
+    expect(store.doc.rootIds).toHaveLength(1);
+    expect(store.doc.nodes[store.doc.rootIds[0]].name).toBe("一");
+  });
+
+  it("update_node 可以改页面名与图层名", async () => {
+    const { store, run, pageId } = setup();
+    await run("update_node", { nodeId: pageId, name: "  首页  " });
+    expect(store.doc.nodes[pageId].name).toBe("首页");
+
+    const rect = await call(run, "create_node", { kind: "rect" });
+    await run("update_node", { nodeId: rect.nodeId, name: "按钮" });
+    expect(store.doc.nodes[rect.nodeId as string].name).toBe("按钮");
+
+    await expect(run("update_node", { nodeId: pageId, name: "   " })).rejects.toThrow(/name/);
+  });
+});
+
 describe("AI 工具：导出与布局检查", () => {
   it("export_png 校验倍率并交给宿主渲染", async () => {
     const store = new DocStore(createDocWithPage());
@@ -830,5 +907,75 @@ describe("AI 工具：导出与布局检查", () => {
     expect(await rows([frame.id])).toEqual([`${frame.id}:0`, `${child.id}:1`]);
     // 同时请求父与子：子作为后代只出现一次，depth 以根为准
     expect(await rows([frame.id, child.id])).toEqual([`${frame.id}:0`, `${child.id}:1`]);
+  });
+});
+
+describe("AI 工具：设计 Token", () => {
+  it("define_token 新增颜色/数字，同类型可覆盖", async () => {
+    const { store, run } = setup();
+    expect(await call(run, "define_token", { path: "color/brand", type: "color", value: "#3366ff" })).toMatchObject({
+      ok: true,
+      path: "color/brand",
+    });
+    expect(store.doc.tokens["color/brand"]).toEqual({ type: "color", value: "#3366ff" });
+
+    await run("define_token", { path: "color/brand", type: "color", value: "rgba(0, 0, 0, 0.5)" });
+    expect(store.doc.tokens["color/brand"]).toEqual({ type: "color", value: "rgba(0, 0, 0, 0.5)" });
+
+    // 8 位 hex（带 alpha）也是合法颜色，应用自身的阴影默认色就用这种写法
+    await run("define_token", { path: "color/overlay", type: "color", value: "#0f172a29" });
+    expect(store.doc.tokens["color/overlay"]).toEqual({ type: "color", value: "#0f172a29" });
+
+    await run("define_token", { path: "spacing/md", type: "number", value: 12 });
+    expect(store.doc.tokens["spacing/md"]).toEqual({ type: "number", value: 12 });
+  });
+
+  it("define_token 拒绝非法路径 / 类型 / 取值 / 改类型", async () => {
+    const { run } = setup();
+    await expect(run("define_token", { path: "brand", type: "color", value: "#fff" })).rejects.toThrow(/路径/);
+    await expect(run("define_token", { path: "color//x", type: "color", value: "#fff" })).rejects.toThrow(/路径/);
+    await expect(run("define_token", { path: "color/x", type: "paint", value: "#fff" })).rejects.toThrow(/type/);
+    await expect(run("define_token", { path: "color/x", type: "color", value: "red" })).rejects.toThrow(/颜色/);
+    await expect(run("define_token", { path: "spacing/x", type: "number", value: "" })).rejects.toThrow(/数值/);
+    await expect(run("define_token", { path: "spacing/x", type: "number", value: "Infinity" })).rejects.toThrow(/数值/);
+
+    await run("define_token", { path: "color/x", type: "color", value: "#fff" });
+    await expect(run("define_token", { path: "color/x", type: "number", value: 1 })).rejects.toThrow(/类型/);
+  });
+
+  it("rename_token 重命名后节点引用随动，撤销能整体恢复", async () => {
+    const { store, run } = setup();
+    await run("define_token", { path: "color/brand", type: "color", value: "#3366ff" });
+    const created = await call(run, "create_node", { kind: "rect", fillToken: "color/brand" });
+    const nodeId = created.nodeId as string;
+    expect(store.doc.nodes[nodeId].style.fill).toEqual({ token: "color/brand" });
+
+    await run("rename_token", { from: "color/brand", to: "color/primary" });
+    expect(store.doc.tokens["color/brand"]).toBeUndefined();
+    expect(store.doc.tokens["color/primary"]).toEqual({ type: "color", value: "#3366ff" });
+    expect(store.doc.nodes[nodeId].style.fill).toEqual({ token: "color/primary" });
+
+    store.undo();
+    expect(store.doc.tokens["color/brand"]).toEqual({ type: "color", value: "#3366ff" });
+    expect(store.doc.nodes[nodeId].style.fill).toEqual({ token: "color/brand" });
+  });
+
+  it("rename_token 拒绝不存在的源与已存在的目标", async () => {
+    const { run } = setup();
+    await run("define_token", { path: "color/a", type: "color", value: "#000" });
+    await run("define_token", { path: "color/b", type: "color", value: "#fff" });
+    await expect(run("rename_token", { from: "color/missing", to: "color/c" })).rejects.toThrow(/不存在/);
+    await expect(run("rename_token", { from: "color/a", to: "color/b" })).rejects.toThrow(/已存在/);
+    await expect(run("rename_token", { from: "color/a", to: "color/a" })).rejects.toThrow(/相同/);
+  });
+
+  it("define_token 是一条撤销", async () => {
+    const { store, run } = setup();
+    await run("define_token", { path: "color/one", type: "color", value: "#111111" });
+    await run("define_token", { path: "color/two", type: "color", value: "#222222" });
+    expect(Object.keys(store.doc.tokens)).toHaveLength(2);
+    store.undo();
+    expect(store.doc.tokens["color/two"]).toBeUndefined();
+    expect(store.doc.tokens["color/one"]).toBeDefined();
   });
 });
