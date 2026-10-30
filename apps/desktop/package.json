@@ -1,0 +1,38 @@
+{
+  "name": "@sqraft/desktop",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Sqraft 桌面应用（Electron 壳 + 渲染层）",
+  "main": "out/main/index.js",
+  "scripts": {
+    "dev": "electron-vite dev",
+    "build": "pnpm typecheck && electron-vite build",
+    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.preload.json && tsc --noEmit -p tsconfig.web.json",
+    "preview": "electron-vite preview",
+    "test": "vitest run",
+    "dist": "node scripts/dist.mjs",
+    "dist:mac": "pnpm build && electron-builder --mac --arm64",
+    "dist:win": "pnpm build && electron-builder --win nsis",
+    "dist:linux": "pnpm build && electron-builder --linux AppImage",
+    "dist:dir": "pnpm build && electron-builder --dir"
+  },
+  "dependencies": {
+    "@fontsource-variable/geist": "5.3.0",
+    "@fontsource-variable/geist-mono": "5.3.0",
+    "@sqraft/ai-tools": "workspace:*",
+    "@sqraft/core": "workspace:*",
+    "@sqraft/render": "workspace:*",
+    "fflate": "0.8.3",
+    "vue": "3.5.44"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "@vitejs/plugin-vue": "5.2.4",
+    "electron": "45.1.0",
+    "electron-vite": "6.0.0",
+    "typescript": "5.9.3",
+    "vite": "6.4.5",
+    "vitest": "2.1.9",
+    "electron-builder": "26.18.0"
+  }
+}

@@ -2350,3 +2350,123 @@ describe("子树绘制包围盒", () => {
     expect(box).toEqual({ x: -14, y: -4, width: 98, height: 88 });
   });
 });
+
+describe("脏标记", () => {
+  function withRect() {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = firstPageId(store.doc)!;
+    const rect = createNode("rect", { parentId: pageId, x: 0, y: 0, width: 10, height: 10 });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+    return { store, rect };
+  }
+
+  it("apply 后变脏，markSaved 后干净，undo/redo 各自重新变脏", () => {
+    const { store } = withRect();
+    expect(store.isDirty).toBe(true);
+    store.markSaved();
+    expect(store.isDirty).toBe(false);
+    store.undo();
+    expect(store.isDirty).toBe(true);
+    store.redo();
+    expect(store.isDirty).toBe(false);
+  });
+
+  it("打开文件（replace）后视为干净", () => {
+    const { store } = withRect();
+    store.replace(createEmptyDoc());
+    expect(store.isDirty).toBe(false);
+  });
+
+  it("派生几何写回不算脏（自动高度不应让文件立刻变脏）", () => {
+    const { store, rect } = withRect();
+    store.markSaved();
+    store.applyDerived({ type: "node.update", params: { nodeId: rect.id, patch: { height: 24 } } });
+    expect(store.isDirty).toBe(false);
+  });
+});
+
+describe("事务", () => {
+  function seed(store: DocStore) {
+    const pageId = firstPageId(store.doc)!;
+    const rect = createNode("rect", { parentId: pageId, x: 0, y: 0, width: 10, height: 10 });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+    return { pageId, rect };
+  }
+
+  it("多条命令合并成一条撤销记录，撤销后全部消失", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const { pageId } = seed(store);
+    const a = createNode("rect", { parentId: pageId, x: 0, y: 0, width: 10, height: 10 });
+    const b = createNode("rect", { parentId: pageId, x: 20, y: 0, width: 10, height: 10 });
+    await store.transact("批量建", () => {
+      store.apply({ type: "node.create", params: { nodes: [a], parentId: pageId } });
+      store.apply({ type: "node.create", params: { nodes: [b], parentId: pageId } });
+    });
+    expect(store.doc.nodes[a.id]).toBeDefined();
+    expect(store.doc.nodes[b.id]).toBeDefined();
+    store.undo();
+    expect(store.doc.nodes[a.id]).toBeUndefined();
+    expect(store.doc.nodes[b.id]).toBeUndefined();
+    // 只剩 seed 那一步
+    expect(store.undoLabel).toBe("edit");
+  });
+
+  it("异常时回滚已执行的命令，且不留撤销记录", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const { rect } = seed(store);
+    await expect(
+      store.transact("会失败", () => {
+        store.apply({ type: "node.update", params: { nodeId: rect.id, patch: { x: 50 } } });
+        store.apply({ type: "node.update", params: { nodeId: rect.id, patch: { width: 200 } } });
+        throw new Error("boom");
+      }),
+    ).rejects.toThrow("boom");
+    expect(store.doc.nodes[rect.id].x).toBe(0);
+    expect(store.doc.nodes[rect.id].width).toBe(10);
+    expect(store.undoLabel).toBe("edit");
+  });
+
+  it("嵌套事务并入最外层，只产生一条记录", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const { pageId } = seed(store);
+    const a = createNode("rect", { parentId: pageId, x: 0, y: 0, width: 10, height: 10 });
+    const b = createNode("rect", { parentId: pageId, x: 30, y: 0, width: 10, height: 10 });
+    await store.transact("外", async () => {
+      store.apply({ type: "node.create", params: { nodes: [a], parentId: pageId } });
+      await store.transact("内", () => {
+        store.apply({ type: "node.create", params: { nodes: [b], parentId: pageId } });
+      });
+    });
+    expect(store.doc.nodes[b.id]).toBeDefined();
+    store.undo();
+    expect(store.doc.nodes[a.id]).toBeUndefined();
+    expect(store.doc.nodes[b.id]).toBeUndefined();
+  });
+
+  it("提交后脏标记生效", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const { pageId } = seed(store);
+    store.markSaved();
+    const a = createNode("rect", { parentId: pageId, x: 0, y: 0, width: 10, height: 10 });
+    await store.transact("一步", () => {
+      store.apply({ type: "node.create", params: { nodes: [a], parentId: pageId } });
+    });
+    expect(store.isDirty).toBe(true);
+    store.undo();
+    expect(store.isDirty).toBe(false);
+  });
+
+  it("提交后再通知一次订阅者，脏标记才不会漏报", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const { pageId } = seed(store);
+    store.markSaved();
+    const seen: boolean[] = [];
+    store.subscribe(() => seen.push(store.isDirty));
+    const a = createNode("rect", { parentId: pageId, x: 0, y: 0, width: 10, height: 10 });
+    await store.transact("一步", () => {
+      store.apply({ type: "node.create", params: { nodes: [a], parentId: pageId } });
+    });
+    // 命令执行中的那次通知发生在提交之前，必须还有一次在提交之后
+    expect(seen.at(-1)).toBe(true);
+  });
+});

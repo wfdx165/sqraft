@@ -81,8 +81,14 @@ function syncOpToCommand(op: SyncOp): Command {
 
 export class DocStore {
   private state: DocState;
-  private undoStack: Array<{ label: string; inverses: Inverse[] }> = [];
-  private redoStack: Array<{ label: string; inverses: Inverse[] }> = [];
+  private undoStack: Array<{ label: string; inverses: Inverse[]; revision: number }> = [];
+  private redoStack: Array<{ label: string; inverses: Inverse[]; revision: number }> = [];
+  /** 内容修订号：每条可撤销记录带一个；撤销/重做回到该记录时修订号也随之回到原值。 */
+  private revisionSeq = 0;
+  /** 进行中的事务：其内的 apply 不单独入栈，提交时合并成一条。 */
+  private transaction: { label: string; inverses: Inverse[] } | null = null;
+  /** 落盘时的内容修订号；与当前修订号一致即"干净"。 */
+  private savedRevision = 0;
   private listeners = new Set<ChangeListener>();
 
   constructor(initial: DocState) {
@@ -1073,11 +1079,60 @@ export class DocStore {
     this.syncComponents(affected, changed, inverses);
     this.runLayoutPass(changed, inverses);
     if (inverses.length > 0) {
-      this.undoStack.push({ label, inverses });
-      this.redoStack = [];
+      if (this.transaction) {
+        // 逆操作按"后发生的在前"合并，撤销时才能正确倒放
+        this.transaction.inverses = [...inverses, ...this.transaction.inverses];
+      } else {
+        this.undoStack.push({ label, inverses, revision: ++this.revisionSeq });
+        this.redoStack = [];
+      }
       this.state.version += 1;
       this.emit(changed);
     }
+  }
+
+  /**
+   * 事务：把一段同步/异步执行中的多条命令合并成**一条**撤销记录。
+   *
+   * - 内层事务不新建记录，并入最外层（内层抛错会继续向上抛，回滚由最外层负责）；
+   * - 抛错时把已执行的命令按逆序回滚，文档回到进入事务前的状态，撤销栈不留记录；
+   * - 命令的确定性约束不变：事务内仍然禁止 `Date.now`／随机／IO。
+   *
+   * **只允许一个事务在飞**：合并语义是针对嵌套设计的，区分不了"嵌套"与"并发"。
+   * 并发进入的事务会被并进第一个事务（撤销/回滚会连带影响另一个调用），
+   * 所以宿主（MCP 执行器）必须保证调用串行——见 `apps/desktop/src/main/mcp/queue.ts`。
+   */
+  async transact<T>(label: string, fn: () => T | Promise<T>): Promise<T> {
+    if (this.transaction) return fn();
+
+    this.transaction = { label, inverses: [] };
+    try {
+      const result = await fn();
+      const tx = this.transaction;
+      this.transaction = null;
+      if (tx && tx.inverses.length > 0) {
+        this.undoStack.push({ label, inverses: tx.inverses, revision: ++this.revisionSeq });
+        this.redoStack = [];
+        // 提交发生在最后一次 emit 之后：再通知一次，让"脏标记 / 窗口标题"这类订阅者看到新状态。
+        // 少了这一下，MCP 改完文档主进程仍以为它是干净的（⌘Q 会静默丢稿）。
+        this.emit(new Set<NodeId>());
+      }
+      return result;
+    } catch (error) {
+      const tx = this.transaction;
+      this.transaction = null;
+      if (tx) this.rollback(tx.inverses);
+      throw error;
+    }
+  }
+
+  /** 事务失败时倒放已执行的命令；不产生撤销记录。 */
+  private rollback(inverses: Inverse[]): void {
+    if (inverses.length === 0) return;
+    const changed = new Set<NodeId>();
+    for (const inv of inverses) this.applyOne(inv.cmd, changed, inv.snapshot);
+    this.state.version += 1;
+    this.emit(changed);
   }
 
   undo(): boolean {
@@ -1088,7 +1143,7 @@ export class DocStore {
     for (const inv of entry.inverses) {
       forward.unshift(this.applyOne(inv.cmd, changed, inv.snapshot));
     }
-    this.redoStack.push({ label: entry.label, inverses: forward });
+    this.redoStack.push({ label: entry.label, inverses: forward, revision: entry.revision });
     this.state.version += 1;
     this.emit(changed);
     return true;
@@ -1102,14 +1157,38 @@ export class DocStore {
     for (const inv of entry.inverses) {
       back.unshift(this.applyOne(inv.cmd, changed, inv.snapshot));
     }
-    this.undoStack.push({ label: entry.label, inverses: back });
+    this.undoStack.push({ label: entry.label, inverses: back, revision: entry.revision });
     this.state.version += 1;
     this.emit(changed);
     return true;
   }
 
+  /**
+   * 当前文档自上次落盘以来是否有改动。
+   * 以"保存点"为准：分支号与撤销/重做栈深度都回到保存时的值才算干净，
+   * 因此"改一下 → 撤销 → 重做"会正确回到干净状态。
+   */
+  get isDirty(): boolean {
+    return this.currentRevision() !== this.savedRevision;
+  }
+
+  /** 当前内容对应的修订号（撤销到某条记录时回到它的修订号，因此"撤销→重做"会重新变干净）。 */
+  private currentRevision(): number {
+    return this.undoStack.length > 0 ? this.undoStack[this.undoStack.length - 1].revision : 0;
+  }
+
+  /** 标记"当前状态已落盘"；打开文件后也用它把基线对齐。 */
+  markSaved(): void {
+    this.savedRevision = this.currentRevision();
+  }
+
   get canUndo(): boolean {
     return this.undoStack.length > 0;
+  }
+
+  /** 下一条将被撤销的记录名（调试与"agent 改了什么"的提示用）。 */
+  get undoLabel(): string | null {
+    return this.undoStack.length > 0 ? this.undoStack[this.undoStack.length - 1].label : null;
   }
 
   get canRedo(): boolean {
@@ -1320,6 +1399,7 @@ export class DocStore {
     this.state = state;
     this.undoStack = [];
     this.redoStack = [];
+    this.savedRevision = 0;
     this.emit(new Set());
   }
 

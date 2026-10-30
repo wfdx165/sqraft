@@ -4,18 +4,18 @@
 
 ## 1. 总览
 
-Sqraft 是纯单机应用：一个 Web 应用（Vue 3 + Canvas 2D），读写本地 `.sqraft` 文件，内嵌 AI 对话面板并可作为 MCP Server 对外暴露。架构的唯一主轴是：**一切编辑都是命令，一切消费方（GUI、AI、撤销重做、持久化）都走命令层**。
+Sqraft 是纯单机桌面应用（Electron 壳 + Vue 3 / Canvas 2D 渲染层），读写本地 `.sqraft` 文件，并把 `packages/ai-tools` 的工具定义作为 MCP Server 暴露给外部 agent。应用内不调用任何模型端点。架构的唯一主轴是：**一切编辑都是命令，一切消费方（GUI、AI、撤销重做、持久化）都走命令层**。
 
 ```
 ┌─────────────────────────────────────────────────────┐
-│  apps/web（Vue 3 面板层）                             │
-│  工具栏 / 图层面板 / 检查器 / 对话面板（BYOK）          │
+│  apps/desktop（Electron 壳 + Vue 3 渲染层）                             │
+│  工具栏 / 图层面板 / 检查器 / 欢迎页                    │
 └───────────────┬─────────────────────┬───────────────┘
                 │ 用户事件 → 命令        │ 工具调用
 ┌───────────────▼─────────────┐ ┌─────▼───────────────┐
 │  packages/core（领域核心）    │ │  packages/ai-tools   │
 │  文档模型 / 命令系统          │◄──┤  工具 schema（唯一真源）│
-│  布局求解 / Token / 组件      │ │  对话面板与 MCP 共用   │
+│  布局求解 / Token / 组件      │ │  MCP 与 GUI 共用       │
 └───────────────┬─────────────┘ └─────────────────────┘
                 │ 状态变更事件
 ┌───────────────▼─────────────┐
@@ -25,7 +25,7 @@ Sqraft 是纯单机应用：一个 Web 应用（Vue 3 + Canvas 2D），读写本
 └─────────────────────────────┘
 ```
 
-依赖方向自上而下单向：`web → core ← render`，`ai-tools → core` 的类型。`core` 不依赖任何 UI/渲染/浏览器 API（可在 Node 下测试）。
+依赖方向自上而下单向：`desktop → core ← render`，`ai-tools → core` 的类型。`core` 不依赖任何 UI/渲染/浏览器 API（可在 Node 下测试）。
 
 数据流固定为单向：
 
@@ -49,7 +49,7 @@ packages/core/src/
 packages/render/src/
 ├── backend.ts    RenderBackend 接口 + 世界↔屏幕坐标
 ├── canvas2d.ts   Canvas 2D 实现（含效果离屏合成）
-└── renderer.ts   文档树遍历与绘制序（命中检测在 apps/web/src/canvas/hit.ts）
+└── renderer.ts   文档树遍历与绘制序（命中检测在 apps/desktop/src/renderer/canvas/hit.ts）
 
 packages/ai-tools/src/
 └── tools.ts      工具定义（JSON Schema + 执行器类型）
@@ -177,12 +177,12 @@ interface RenderBackend {
 
 ### 5.2 面板与快捷键（UI 层，非文档状态）
 
-- **左栏 tab**：`对话 | 页面 | 组件 | 设计系统`，默认停在对话；每次刷新都回到对话（不持久化）；`⌘K` 切到对话并聚焦输入框。
+- **左栏 tab**：`页面 | 组件 | 设计系统`，默认停在页面；tab 不持久化。
 - **页面面板**：页面列表可搜索（忽略大小写子串 + 命中片段高亮 + 「命中 / 总数」徽标），过滤不改变手风琴与展开状态；`⌘F` 从任意位置切到页面 tab 并聚焦搜索框（全局动作，已在框内则全选）。
 - **设计系统面板**：按路径前缀分组列出 `DocState.tokens`（可折叠、可过滤）；颜色行用色块 + 完整路径 + hex（色块点开系统取色器），数字行给数值输入；**改值 / 新增 / 双击改名都走命令**（`token.define` / `token.rename`，可撤销，引用随动）。v1 不支持删除、不统计引用。
-- **快捷键注册表**（`apps/web/src/shortcuts.ts`）：动作表 + 默认键位 + `localStorage` 覆盖（只存差异）+ 冲突校验 + 全局分发。tooltip、面板、画布、对话全部从 `keyOf()` 读取，禁止硬编码键位文案（见 ADR-0011）。
+- **快捷键注册表**（`apps/desktop/src/renderer/shortcuts.ts`）：动作表 + 默认键位 + `localStorage` 覆盖（只存差异）+ 冲突校验 + 全局分发。tooltip、面板、画布全部从 `keyOf()` 读取，禁止硬编码键位文案（见 ADR-0011）。
 - **快捷键面板**是居中对话框（遮罩 + 对话框），点行就地录制；`Esc` / 点遮罩 / `⌘/` 关闭；冲突与浏览器保留键当场拒绝；「恢复默认」需 3 秒内二次确认。
-- 单键快捷键在输入框（input / textarea / select / contentEditable）内一律让位；文件与对话类命令（`⌘O / ⌘S / ⌘K`）除外。
+- 单键快捷键在输入框（input / textarea / select / contentEditable）内一律让位；文件类命令（`⌘O / ⌘S`）与页面搜索（`⌘F`）除外。
 
 ## 6. 自动布局求解器
 
@@ -231,7 +231,7 @@ interface RenderBackend {
 - 字体族是**受控栈**：Geist / Geist Mono / 系统无衬线 / 系统衬线 / 系统等宽；字重 100–900；不做字体导入与可变字体轴。
 - `textAutoResize` 三模式：`auto-width`（不换行）、`auto-height`（固定宽度换行，高度随内容）、`fixed`（宽高固定，可截断）。检查器改 W/H 会切到 fixed。
 - 行盒算法在 `packages/core/src/text.ts`（纯函数，宽度测量由调用方注入）：换行、列表缩进、段落间距、截断省略号都由它产出，Canvas 渲染与检查器测量共用同一份结果。
-- 测量留在 UI 层：`apps/web/src/text-metrics.ts` 注入 Canvas `measureText`，提交前一次性写回 `text + width/height`；AI 工具通过 `makeExecutor` 的测量参数获得同一能力，无测量的宿主按字号估算。
+- 测量留在 UI 层：`apps/desktop/src/renderer/text-metrics.ts` 注入 Canvas `measureText`，提交前一次性写回 `text + width/height`；AI 工具通过 `makeExecutor` 的测量参数获得同一能力，无测量的宿主按字号估算。
 - 行内编辑使用 **contenteditable** 浮层：与画布共享字体、行高、字距、对齐、装饰与列表 CSS；`⌘Enter` 提交、Esc 取消、失焦提交。编辑期间画布停绘该节点。
 
 ## 10. 文件格式
@@ -251,16 +251,22 @@ assets/            图片、嵌入字体
 
 ## 11. 存储层
 
-- 主路径：**File System Access API**——"打开/保存"直接操作本地文件，自动保存写回已授权句柄；
-- 降级路径（Safari / Firefox）：内存 + 下载导出 / 上传导入，功能等价但无自动写回；
-- 浏览器不支持 File System Access 时给出明确提示与降级 UI。
+- 文件操作全部在主进程：系统对话框选文件，渲染层只拿到字节与路径；`.sqraft` 的序列化/解析仍只在渲染层（主进程不懂格式）。
+- **全手动保存**：磁盘文件只在用户按保存时变化，没有自动写回，也没有崩溃恢复快照（明确取舍）。
+- 写盘走"同目录临时文件 + rename"的原子替换；保存前比对 mtime，文件被外部改过时提示"覆盖 / 另存为"。
+- 关闭窗口/退出时由主进程拦下，向渲染层询问是否有未保存改动；"保存 / 不保存 / 取消"由系统对话框呈现。
 
 ## 12. AI 层
 
-**双插槽、一套 schema**：
+**单插槽：MCP**（见 ADR-0004）。应用把 `packages/ai-tools` 的工具定义挂在 MCP 协议上，外部 agent（Claude Code、Cursor 等）通过本机 IPC 接入并驱动 Sqraft；应用自身不调用模型、不保存密钥。
 
-1. **内置对话面板**：BYOK——Provider 管理（添加时可选预置 OpenCode Go，或自定义任意 OpenAI 兼容接入点：DeepSeek / Ollama 等）；模型为**全局选择**、位于底部输入区，历史会话存 IndexedDB（自动标题、可删除）；无可用模型时输入禁用并引导添加 Provider；标准工具调用循环（模型 → 工具调用 → core 执行 → 结果回填 → 继续）；
-2. **MCP Server**：把同一套工具定义挂到 MCP 协议上，外部 agent（Claude Code 等）可直接驱动 Sqraft。
+接入链路：
+
+- 主进程跑 MCP server（自实现的最小协议层，不引 SDK），端点：macOS/Linux 为 `userData/mcp.sock`，Windows 为命名管道 `\\.\pipe\sqraft-mcp`；
+- 随应用分发一个薄 CLI：它只做 `stdio ↔ 本机 IPC` 的双向管道；连不上时先拉起应用（带 `--mcp`，应用跳过欢迎页直接建空稿），再 attach。agent 杀掉 CLI 只影响管道，不影响应用与文档；
+- 连接建立先做 hello 握手（协议版本 + 应用版本），不兼容直接返回可读错误；
+- 多客户端并存，所有工具调用进同一队列串行执行；单次调用 30s 超时；连接断开时排队中的调用直接丢弃；应用退出前向所有客户端广播关闭通知；
+- 工具清单与执行器都在渲染进程（`@sqraft/ai-tools` 的唯一真源），主进程只转发；截图只取文档层画布，不含编辑器叠加层。
 
 工具清单（v1）：
 
@@ -268,13 +274,16 @@ assets/            图片、嵌入字体
 |---|---|---|
 | `read_document` | 读 | 返回页面/节点树的紧凑摘要 |
 | `get_tokens` | 读 | Token 集合与取值 |
-| `create_page / create_node` | 写 | 建页面/节点（样式仅接受 Token 引用） |
+| `create_node` | 写 | 建节点（样式仅接受 Token 引用） |
 | `update_node` | 写 | 改属性（同上约束） |
-| `delete_node / move_node` | 写 | 结构操作 |
-| `set_component_property` | 写 | 组件/实例属性操作 |
-| `screenshot` | 读 | 渲染指定区域为 PNG，回传给多模态模型自检 |
-| `export_assets` | 读 | 导出切图，返回文件 |
-| `set_prototype_link` | 写 | 页面间原型连线 |
+| `delete_node` | 写 | 删除节点 |
+| `create_instance` / `swap_instance` / `detach_instance` | 写 | 组件实例的建立、替换与解绑 |
+| `define_property` / `set_instance_prop` / `fill_slot` | 写 | 组件属性定义、实例属性覆盖、插槽填充 |
+| `screenshot` | 读 | 离屏重绘文档为 PNG（不含编辑器叠加层）；可选 `region` 只截文档坐标下的某块 |
+| `document.new` | 写 | 新建未命名空稿并切换过去 |
+| `document.open` | 写 | 只能触发系统文件对话框；不接受路径参数（agent 不能读任意磁盘文件） |
+
+**撤销粒度**：一次工具调用里的多条命令通过 `DocStore.transact` 合并成单条撤销记录；事务失败时回滚，文档不会停在半成品状态。
 
 **截图自检闭环**：agent 生成 → `screenshot` → 模型看图 → 修正命令。这是"AI 全流程"质量的下限保障。
 
@@ -302,6 +311,16 @@ assets/            图片、嵌入字体
 |---|---|---|
 | wrap + min/max 求解器复杂度 | 高 | M2 专项攻坚；迭代上限防死循环；golden 测试先行 |
 | 中文断行/字体嵌入 | 中 | v1 限单一样式；断行先做基础规则，禁则完整版后置 |
-| File System Access 兼容面 | 中 | 降级路径从 M1 就存在，不事后补 |
+| 各平台文件对话框差异 | 中 | 主进程统一封装，只有路径分隔符与文件名规则需要分平台 |
 | 多模态截图反馈的模型差异 | 低 | 截图统一为定尺寸 PNG；工具结果结构化 |
 | Canvas 2D 性能撞墙 | 低 | RenderBackend 抽象已就位，可换 WebGL2 后端不动文档模型 |
+
+## 16. 桌面壳与进程边界
+
+- **进程**：主进程（MCP 宿主、文件 IO、窗口/菜单/生命周期）＋ 渲染进程（文档真源、命令层、渲染器、AI 工具执行器）＋ preload（白名单桥）。主进程不持有 `DocState`。
+- **IPC**：通道名与请求/响应类型集中在 `shared/ipc`，preload 只暴露 `window.sqraft` 一个对象；渲染层拿不到 `require` 与任意 IPC。安全基线见 ADR-0019。
+- **文件**：主进程负责系统对话框、字节搬运、原子写与 mtime 比对；`.sqraft` 的序列化/解析/迁移只在渲染层。全手动保存，无自动写回、无崩溃恢复。
+- **窗口**：单窗口两态（欢迎页 / 一个文档）；`⌘W` 关闭文档回欢迎页，`⌘Q` 退出；单实例转发打开请求；窗口位置与最近列表存 `userData/preferences.json`。
+- **菜单与快捷键**：系统级动作走菜单 role；文档编辑类动作仍由渲染层注册表独占，菜单点击只发送同一个动作 id（ADR-0011 的桌面补充）。
+- **MCP**：主进程协议层 + 本机 IPC + 薄 CLI，详见 ADR-0020 与 §12。
+- **打包**：electron-builder，`appId com.yjsoft.sqraft`；asar 打包，CLI 走 `extraResources` 放在 asar 外；macOS 出 arm64 dmg，Windows/Linux 配置齐备但未验证。

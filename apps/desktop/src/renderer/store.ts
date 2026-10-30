@@ -1,0 +1,118 @@
+/**
+ * 应用状态桥：DocStore（非响应式，命令驱动）↔ Vue reactive UI 状态。
+ * 纪律：画布热路径不进 Vue 响应式；store 变更通过订阅推增量。
+ */
+import { reactive } from "vue";
+import { DocStore, createEmptyDoc, firstPageId, type Command, type NodeId } from "@sqraft/core";
+import { textSizeOf } from "./text-metrics";
+
+export type ToolKind = "select" | "frame" | "rect" | "ellipse" | "triangle" | "line" | "path" | "text";
+export type PanelTab = "pages" | "tokens" | "components";
+/** 画布模式：pan = 浏览/平移，edit = 编辑活动页 */
+export type EditorMode = "pan" | "edit";
+
+export const docStore = new DocStore(createEmptyDoc());
+
+export const ui = reactive({
+  version: 0,
+  /** 窗口两态：false = 欢迎页，true = 打开了一个文档 */
+  docOpen: false,
+  mode: "edit" as EditorMode,
+  tool: "select" as ToolKind,
+  /** 编辑模式下的唯一活动页（UI 状态，不是文档状态） */
+  activePageId: firstPageId(docStore.doc) as NodeId | null,
+  selection: [] as NodeId[],
+  /** 左栏手风琴展开的页面（纯 UI 状态，无"当前页"概念） */
+  expandedPageId: firstPageId(docStore.doc) as NodeId | null,
+  /** 图层树里展开的实例（默认折叠） */
+  expandedLayers: {} as Record<NodeId, boolean>,
+  /** 当前进入的实例上下文（栈，Esc 逐级退出） */
+  instanceContext: [] as NodeId[],
+  /** 左栏 tab：默认对话（每次刷新都回到对话，不持久化） */
+  tab: "pages" as PanelTab,
+});
+
+docStore.subscribe(() => {
+  ui.version += 1;
+  if (ui.expandedPageId && !docStore.doc.nodes[ui.expandedPageId]) {
+    ui.expandedPageId = firstPageId(docStore.doc);
+  }
+  if (ui.activePageId && !docStore.doc.nodes[ui.activePageId]) {
+    ui.activePageId = firstPageId(docStore.doc);
+  }
+  ui.selection = ui.selection.filter((id) => docStore.doc.nodes[id]);
+  ui.instanceContext = ui.instanceContext.filter((id) => docStore.doc.nodes[id]?.type === "instance");
+  queueMicrotask(reflowAutoHeightText);
+});
+
+let reflowing = false;
+
+/**
+ * 自动高度文本：宽度由布局或用户决定，高度必须由测量得出。
+ * 测量在 UI 层完成，写回走 applyDerived（不进撤销栈）。
+ */
+function reflowAutoHeightText(): void {
+  if (reflowing) return;
+  const updates: Command[] = [];
+  for (const n of Object.values(docStore.doc.nodes)) {
+    if (n.type !== "text" || (n.textAutoResize ?? "auto-width") !== "auto-height") continue;
+    const size = textSizeOf(n, n.style, n.text ?? "");
+    if (Math.abs(size.height - n.height) > 0.5) {
+      updates.push({ type: "node.update", params: { nodeId: n.id, patch: { height: size.height } } });
+    }
+  }
+  if (updates.length === 0) return;
+  reflowing = true;
+  try {
+    docStore.applyDerived(updates);
+  } finally {
+    reflowing = false;
+  }
+}
+
+/** 切换模式：拖动模式清空选区（纯浏览）；编辑模式的取景由 CanvasView 负责。 */
+export function switchMode(mode: EditorMode): void {
+  if (ui.mode === mode) return;
+  ui.mode = mode;
+  if (mode === "pan") {
+    ui.selection = [];
+    ui.tool = "select";
+    ui.instanceContext = [];
+  }
+}
+
+export function dispatch(cmd: Command | Command[], label?: string): void {
+  docStore.apply(cmd, label);
+}
+
+export function undo(): void {
+  docStore.undo();
+}
+
+export function redo(): void {
+  docStore.redo();
+}
+
+export function select(ids: NodeId[]): void {
+  ui.selection = ids;
+}
+
+/** 由 CanvasView 注入的实现（解耦组件引用）。 */
+export const hooks: {
+  /** 离屏重绘文档（不含 UI 叠加层）；region 为文档坐标，可只取一块。 */
+  getScreenshot: (region?: { x: number; y: number; width: number; height: number }) => Promise<string>;
+  focusNode: (id: NodeId) => void;
+  focusPage: (id: NodeId) => void;
+  /** AI 建节点的目标页：编辑模式 = 活动页，拖动模式 = 视口中心页。 */
+  getActivePageId: () => NodeId | null;
+  /** 在活动页视口中心插入组件实例（由画布实现，面板只负责调用）。 */
+  insertInstance: (componentId: NodeId) => void;
+  requestRedraw: () => void;
+} = {
+  getScreenshot: async () => "",
+  focusNode: () => {},
+  focusPage: () => {},
+  getActivePageId: () => null,
+  insertInstance: () => {},
+  requestRedraw: () => {},
+};

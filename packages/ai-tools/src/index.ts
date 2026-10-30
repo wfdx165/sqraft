@@ -332,13 +332,57 @@ export const tools: ToolDefinition[] = [
   },
   {
     name: "screenshot",
-    description: "截取当前画布视口为 PNG（data URL），用于自检生成结果。",
+    description:
+      "截取当前画布视口为 PNG（data URL），用于自检生成结果。只包含设计稿本身（不含网格、选中框、参考线）。可用 region 只截文档坐标下的某个范围，例如某个画板。",
     readonly: true,
+    input_schema: {
+      type: "object",
+      properties: {
+        region: {
+          type: "object",
+          description: "文档坐标下的矩形；省略则截整个视口",
+          properties: {
+            x: { type: "number" },
+            y: { type: "number" },
+            width: { type: "number" },
+            height: { type: "number" },
+          },
+          required: ["x", "y", "width", "height"],
+          additionalProperties: false,
+        },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "document.new",
+    description: "新建一份未命名空稿并切换过去。",
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "document.open",
+    description: "让用户通过系统文件对话框选择一个 .sqraft 并打开。不接受路径参数——文件必须由用户亲自选择。",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
 ];
 
 export type ToolExecutor = (name: string, args: Record<string, unknown>) => Promise<string>;
+
+/** 截图区域（文档坐标）；省略表示整个视口。 */
+export interface ScreenshotRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** 文档级操作由宿主提供：工具层不直接碰文件系统与窗口。 */
+export interface DocumentHost {
+  /** 返回是否真的新建了；用户在"保存 / 不保存 / 取消"里选取消时返回 false。 */
+  newDocument(): Promise<boolean>;
+  /** 返回是否真的打开了文件；用户取消返回 false。 */
+  openDocument(): Promise<boolean>;
+}
 
 function serializeSubtree(store: DocStore, id: NodeId): string {
   const out: unknown[] = [];
@@ -525,14 +569,40 @@ function applyNodeArgs(args: Record<string, unknown>): Partial<DocNode> {
   return patch;
 }
 
+/** 会改动文档的工具：一次调用包成一个事务，撤销时只算一步。 */
+const MUTATING_TOOLS = new Set([
+  "create_node",
+  "create_instance",
+  "define_property",
+  "set_instance_prop",
+  "fill_slot",
+  "swap_instance",
+  "detach_instance",
+  "update_node",
+  "delete_node",
+]);
+
 export function makeExecutor(
   store: DocStore,
-  getScreenshot: () => Promise<string>,
+  getScreenshot: (region?: ScreenshotRegion) => Promise<string>,
   getActivePageId?: () => NodeId | null,
   measureText?: (node: DocNode, style: NodeStyle, text: string) => { width: number; height: number },
+  documentHost?: DocumentHost,
 ): ToolExecutor {
   return async (name, args) => {
+    const run = async (): Promise<string> => {
     switch (name) {
+      case "document.new": {
+        if (!documentHost) throw new Error("当前宿主不支持新建文档");
+        const created = await documentHost.newDocument();
+        return JSON.stringify(created ? { ok: true } : { ok: false, canceled: true });
+      }
+      case "document.open": {
+        if (!documentHost) throw new Error("当前宿主不支持打开文档");
+        if ("path" in args) throw new Error("document.open 只接受系统对话框选择文件，不接受路径参数");
+        const opened = await documentHost.openDocument();
+        return JSON.stringify(opened ? { ok: true } : { ok: false, canceled: true });
+      }
       case "read_document": {
         const pages = store.doc.rootIds.map((pid) => ({ pageId: pid, name: store.doc.nodes[pid]?.name, subtree: serializeSubtree(store, pid) }));
         return JSON.stringify({ pages });
@@ -761,11 +831,25 @@ export function makeExecutor(
         store.apply({ type: "node.delete", params: { nodeId } }, "ai:delete");
         return JSON.stringify({ ok: true });
       }
-      case "screenshot":
-        return JSON.stringify({ ok: true, image: await getScreenshot() });
+      case "screenshot": {
+        const region = args.region as ScreenshotRegion | undefined;
+        if (region) {
+          const valid =
+            Number.isFinite(region.x) &&
+            Number.isFinite(region.y) &&
+            Number.isFinite(region.width) &&
+            Number.isFinite(region.height) &&
+            region.width > 0 &&
+            region.height > 0;
+          if (!valid) throw new Error("screenshot.region 需要 x/y/width/height，且宽高为正数");
+        }
+        return JSON.stringify({ ok: true, image: await getScreenshot(region) });
+      }
       default:
         throw new Error(`未知工具: ${name}`);
     }
+    };
+    return MUTATING_TOOLS.has(name) ? store.transact(`MCP：${name}`, run) : run();
   };
 }
 

@@ -541,3 +541,100 @@ describe("AI 工具：节点效果", () => {
     ).rejects.toThrow(/未知的效果类型/);
   });
 });
+
+describe("AI 工具：文档级操作与截图区域", () => {
+  it("document.new 交给宿主执行", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const calls: string[] = [];
+    const run = makeExecutor(store, async () => "", undefined, undefined, {
+      newDocument: async () => {
+        calls.push("new");
+        return true;
+      },
+      openDocument: async () => true,
+    });
+    expect(await call(run, "document.new")).toEqual({ ok: true });
+    expect(calls).toEqual(["new"]);
+  });
+
+  it("document.new 把用户取消如实回报", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const run = makeExecutor(store, async () => "", undefined, undefined, {
+      newDocument: async () => false,
+      openDocument: async () => true,
+    });
+    expect(await call(run, "document.new")).toEqual({ ok: false, canceled: true });
+  });
+
+  it("document.open 把用户取消如实回报", async () => {
+    const store = new DocStore(createEmptyDoc());
+    let opened = 0;
+    const run = makeExecutor(store, async () => "", undefined, undefined, {
+      newDocument: async () => true,
+      openDocument: async () => {
+        opened += 1;
+        return false;
+      },
+    });
+    expect(await call(run, "document.open")).toEqual({ ok: false, canceled: true });
+    expect(opened).toBe(1);
+  });
+
+  it("document.open 拒绝路径参数（文件必须由用户选择）", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const run = makeExecutor(store, async () => "", undefined, undefined, {
+      newDocument: async () => true,
+      openDocument: async () => true,
+    });
+    await expect(run("document.open", { path: "/etc/passwd" })).rejects.toThrow(/不接受路径参数/);
+  });
+
+  it("没有宿主时文档类工具给出可读错误", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const run = makeExecutor(store, async () => "");
+    await expect(run("document.new", {})).rejects.toThrow(/不支持新建文档/);
+  });
+
+  it("screenshot 把区域交给宿主，并校验参数", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const regions: unknown[] = [];
+    const run = makeExecutor(store, async (region) => {
+      regions.push(region);
+      return "data:image/png;base64,AA";
+    });
+    const res = await call(run, "screenshot", { region: { x: 10, y: 20, width: 100, height: 50 } });
+    expect(res.image).toBe("data:image/png;base64,AA");
+    expect(regions[0]).toEqual({ x: 10, y: 20, width: 100, height: 50 });
+    await expect(run("screenshot", { region: { x: 0, y: 0, width: 0, height: 10 } })).rejects.toThrow(/宽高为正数/);
+  });
+});
+
+describe("AI 工具：撤销粒度", () => {
+  it("一次调用只产生一条撤销记录，撤销把整次调用撤干净", async () => {
+    const { store, run } = setup();
+    const res = await call(run, "create_node", { kind: "frame", width: 200, height: 120 });
+    expect(store.canUndo).toBe(true);
+    expect(store.undoLabel).toContain("create_node");
+    store.undo();
+    expect(store.doc.nodes[res.nodeId as string]).toBeUndefined();
+    expect(store.canUndo).toBe(false);
+  });
+
+  it("插入实例时物化出的整棵子树算一步", async () => {
+    const { store, run } = setup();
+    const component = await call(run, "create_node", { kind: "component", width: 100, height: 60 });
+    const componentId = component.nodeId as string;
+    await call(run, "create_node", { kind: "rect", parentId: componentId, width: 40, height: 40 });
+    await call(run, "create_node", { kind: "text", parentId: componentId, text: "hi", width: 40, height: 20 });
+
+    const before = Object.keys(store.doc.nodes).length;
+    const instance = await call(run, "create_instance", { componentId });
+    const after = Object.keys(store.doc.nodes).length;
+    expect(after).toBeGreaterThan(before + 1); // 整棵子树被物化
+
+    expect(store.undoLabel).toContain("create_instance");
+    store.undo();
+    expect(Object.keys(store.doc.nodes).length).toBe(before);
+    expect(store.doc.nodes[instance.nodeId as string]).toBeUndefined();
+  });
+});

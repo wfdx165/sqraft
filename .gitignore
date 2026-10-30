@@ -4,5 +4,6 @@ dist/
 .DS_Store
 .vite/
 *.log
-.playwright-mcp/
+out/
+release/
 .scratch/
