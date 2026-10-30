@@ -16,6 +16,7 @@ import { canDeletePage, deletePage as deletePageAction } from "../canvas/page-ac
 import { openNodeMenu, openPageMenu } from "../object-menu";
 import { registerShortcuts } from "../shortcuts";
 import { planLayerDrop, type DropPosition } from "../canvas/layer-drag";
+import { canExpand, isLayerExpanded } from "../canvas/layer-tree";
 import Icon from "./Icon.vue";
 import { assetUrl } from "../assets";
 
@@ -98,8 +99,8 @@ const rows = computed<Row[]>(() => {
     if (node.type !== "page") out.push({ node, depth });
     // 锁定整棵子树：后代在解锁前不可选
     if (node.locked) return;
-    // 实例默认折叠，展开后才显示内部图层
-    if (node.type === "instance" && !ui.expandedLayers[node.id]) return;
+    // 容器行可折叠：实例默认折叠，其它容器默认展开（见 isLayerExpanded）
+    if (node.children.length > 0 && !isLayerExpanded(node, ui.expandedLayers)) return;
     for (const c of [...node.children].reverse()) visit(c, depth + 1);
   };
   for (const c of [...docStore.doc.nodes[pageId].children].reverse()) visit(c, 0);
@@ -266,14 +267,16 @@ function onLayerClick(row: Row, e: MouseEvent) {
     ui.expandedPageId = pageId;
   }
   if (e.shiftKey) {
+    // 多选只改选区，不切换折叠（否则一次多选会连带折掉好几个容器）
     const set = new Set(ui.selection);
     set.has(row.node.id) ? set.delete(row.node.id) : set.add(row.node.id);
     select([...set]);
     hooks.requestRedraw();
-  } else {
-    select([row.node.id]);
-    hooks.focusNode(row.node.id); // 选中 + 定位 + 脉冲标记
+    return;
   }
+  select([row.node.id]);
+  hooks.focusNode(row.node.id); // 选中 + 定位 + 脉冲标记
+  if (canExpand(row.node)) toggleLayer(row.node);
 }
 
 function hasOverride(node: DocNode): boolean {
@@ -281,8 +284,8 @@ function hasOverride(node: DocNode): boolean {
   return Boolean(patch && Object.keys(patch).length);
 }
 
-function toggleLayer(id: NodeId): void {
-  ui.expandedLayers[id] = !ui.expandedLayers[id];
+function toggleLayer(node: DocNode): void {
+  ui.expandedLayers[node.id] = !isLayerExpanded(node, ui.expandedLayers);
 }
 
 function onLayerDelete(id: NodeId) {
@@ -377,11 +380,11 @@ function onLayerDelete(id: NodeId) {
             @dragend="onDragEnd"
           >
             <button
-              v-if="row.node.type === 'instance'"
+              v-if="canExpand(row.node)"
               class="disclosure"
-              :class="{ open: ui.expandedLayers[row.node.id] }"
-              title="展开 / 折叠"
-              @click.stop="toggleLayer(row.node.id)"
+              :class="{ open: isLayerExpanded(row.node, ui.expandedLayers) }"
+              :title="isLayerExpanded(row.node, ui.expandedLayers) ? '折叠子图层' : '展开子图层'"
+              @click.stop="toggleLayer(row.node)"
             >
               <Icon name="chevron" :size="10" />
             </button>

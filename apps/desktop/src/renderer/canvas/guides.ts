@@ -3,7 +3,7 @@
  * 拖动 / 绘制 / 缩放共用同一套目标：同父兄弟 + 父容器内容区 + 父容器边界。
  * 目标几何统一用 `worldRect`（累加祖先平移的轴对齐包围盒）。
  */
-import { paddingOf, worldRect, type DocNode, type NodeId, type Rect } from "@sqraft/core";
+import { paddingOf, unionRects, worldRect, type DocNode, type NodeId, type Rect } from "@sqraft/core";
 import { worldToScreen, type Viewport } from "@sqraft/render";
 import { docStore } from "../store";
 
@@ -41,14 +41,6 @@ export interface GuideContext {
 const SNAP_PX = 6;
 const GUIDE_COLOR = "rgba(244, 63, 142, 0.95)";
 const GUIDE_TEXT_COLOR = "#c9166b";
-
-export function unionRects(rects: Rect[]): Rect {
-  const x = Math.min(...rects.map((r) => r.x));
-  const y = Math.min(...rects.map((r) => r.y));
-  const right = Math.max(...rects.map((r) => r.x + r.width));
-  const bottom = Math.max(...rects.map((r) => r.y + r.height));
-  return { x, y, width: right - x, height: bottom - y };
-}
 
 const sameRect = (a: Rect, b: Rect): boolean =>
   a.x === b.x && a.y === b.y && a.width === b.width && a.height === b.height;
@@ -175,6 +167,7 @@ export function computeGuides(
   let dy = offset.dy;
   const threshold = SNAP_PX / zoom;
   const moved = unionRects(dragRects.map((r) => ({ ...r, x: r.x + dx, y: r.y + dy })));
+  if (!moved) return { lines, gaps: [], dx: offset.dx, dy: offset.dy };
   const movedXs = anchors(moved, "x");
   const movedYs = anchors(moved, "y");
 
@@ -219,7 +212,7 @@ export function computeGuides(
   }
 
   const box = unionRects(dragRects.map((r) => ({ ...r, x: r.x + dx, y: r.y + dy })));
-  return { lines, gaps: computeGapMarks(box, targets), dx, dy };
+  return { lines, gaps: box ? computeGapMarks(box, targets) : [], dx, dy };
 }
 
 export interface SnapRectResult {

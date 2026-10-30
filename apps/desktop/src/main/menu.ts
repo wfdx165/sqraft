@@ -1,5 +1,5 @@
 /**
- * 应用菜单：五组标准结构，只放已实现的动作。
+ * 应用菜单：标准分组结构，只放已实现的动作。
  *
  * 分工（ADR-0011 修订）：
  * - 系统级动作（退出/关闭/最小化/复制粘贴/关于）走 Electron role；
@@ -92,8 +92,33 @@ function closeWindowItem(label: string): MenuItemConstructorOptions {
   };
 }
 
-export function buildTemplate(platform: NodeJS.Platform = process.platform): MenuItemConstructorOptions[] {
+export interface TemplateOptions {
+  /** 是否显示「开发者工具」：只有未打包运行（`pnpm dev`）才给，安装包里不出现 */
+  showDevTools?: boolean;
+}
+
+/** 开发者工具：右侧停靠，再点一次关闭（与 Chrome 一致）。 */
+function devToolsMenuItem(mac: boolean): MenuItemConstructorOptions {
+  return {
+    label: "开发者工具",
+    // Windows/Linux 不用 Ctrl+Shift+I：渲染层把 ctrlKey 当 ⌘，那个组合是「插入图片」
+    accelerator: mac ? "Command+Alt+I" : "F12",
+    click: () => {
+      const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+      if (!target) return;
+      const contents = target.webContents;
+      if (contents.isDevToolsOpened()) contents.closeDevTools();
+      else contents.openDevTools({ mode: "right" });
+    },
+  };
+}
+
+export function buildTemplate(
+  platform: NodeJS.Platform = process.platform,
+  options: TemplateOptions = {},
+): MenuItemConstructorOptions[] {
   const mac = platform === "darwin";
+  const showDevTools = options.showDevTools ?? false;
   const template: MenuItemConstructorOptions[] = [];
 
   if (mac) {
@@ -164,25 +189,6 @@ export function buildTemplate(platform: NodeJS.Platform = process.platform): Men
   });
 
   template.push({
-    label: "开发者",
-    submenu: [
-      // Windows/Linux 不用 Ctrl+Shift+I：渲染层把 ctrlKey 当 ⌘，那个组合是「插入图片」
-      {
-        label: "开发者工具",
-        accelerator: mac ? "Command+Alt+I" : "F12",
-        click: () => {
-          const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
-          if (!target) return;
-          const contents = target.webContents;
-          // 再点一次关闭，与 Chrome 的内置行为一致；停靠固定在右侧
-          if (contents.isDevToolsOpened()) contents.closeDevTools();
-          else contents.openDevTools({ mode: "right" });
-        },
-      },
-    ],
-  });
-
-  template.push({
     label: "视图",
     submenu: [
       actionItem("view.zoomIn", "放大", mac),
@@ -222,32 +228,35 @@ export function buildTemplate(platform: NodeJS.Platform = process.platform): Men
         ],
   });
 
-  template.push({
-    label: "帮助",
-    submenu: [
-      {
-        label: "配置 MCP…",
-        click: () => {
-          const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
-          target?.webContents.send(CHANNELS.menuCommand, "app.mcpSetup");
-        },
+  const help: MenuItemConstructorOptions[] = [
+    {
+      label: "配置 MCP…",
+      click: () => {
+        const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+        target?.webContents.send(CHANNELS.menuCommand, "app.mcpSetup");
       },
-      { type: "separator" },
-      {
-        label: "关于 Sqraft",
-        click: () => {
-          const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
-          target?.webContents.send(CHANNELS.menuCommand, "app.about");
-        },
+    },
+  ];
+  if (showDevTools) help.push({ type: "separator" }, devToolsMenuItem(mac));
+  help.push(
+    { type: "separator" },
+    {
+      label: "关于 Sqraft",
+      click: () => {
+        const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+        target?.webContents.send(CHANNELS.menuCommand, "app.about");
       },
-    ],
-  });
+    },
+  );
+
+  template.push({ label: "帮助", submenu: help });
 
   return template;
 }
 
 export function rebuildMenu(): void {
-  Menu.setApplicationMenu(Menu.buildFromTemplate(buildTemplate()));
+  // 开发者工具只在未打包运行时给（安装包里不出现）
+  Menu.setApplicationMenu(Menu.buildFromTemplate(buildTemplate(process.platform, { showDevTools: !app.isPackaged })));
 }
 
 export function registerMenuChannels(): void {

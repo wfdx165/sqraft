@@ -43,7 +43,7 @@ import { hitTest, isLocked, pageAt, slotUnder } from "../canvas/hit";
 import { containerAt, layoutParentOf, reorderGuide, reorderIndexAt } from "../canvas/layout-drag";
 import { dropAllowed, dropTargetAt, type DropTarget } from "../canvas/drop-target";
 import { paintDropTarget } from "../canvas/drop-overlay";
-import { hoverContainerAt, paintChildOutlines } from "../canvas/child-outlines";
+import { hoverContainerAt } from "../canvas/child-outlines";
 import {
   buildInsertPreview,
   isEmptyTransition,
@@ -102,6 +102,7 @@ import {
   type GuideContext,
   type GuideLine,
 } from "../canvas/guides";
+import { paintInfoOverlays } from "../canvas/info-overlays";
 import { keyOf, registerShortcuts } from "../shortcuts";
 import { vTip } from "../tooltip";
 import Icon from "./Icon.vue";
@@ -406,10 +407,20 @@ function draw() {
   ctx.setTransform(vp.dpr, 0, 0, vp.dpr, 0, 0);
   ctx.clearRect(0, 0, vp.width, vp.height);
 
-  // 悬停容器的子元素边界：信息层，压在选中框下面；任何手势 / 编辑态都不画
-  if (editing && ui.tool === "select" && !drag && !pen.pathEdit && !textEdit.value) {
-    paintChildOutlines(ctx, vp, hoverContainerId.value);
-  }
+  // 只读信息层：悬停容器子元素边界、选中量距、多选整体虚线框
+  // 框选与拖标尺参考线也属于手势（不写 drag），统一按 busy 收口
+  const busyGesture =
+    Boolean(drag) || Boolean(marquee) || Boolean(guideDrag) ||
+    Boolean(pen.pathEdit) || Boolean(pen.draft) || Boolean(ui.cropNodeId) || Boolean(textEdit.value);
+  paintInfoOverlays(ctx, vp, {
+    editing,
+    tool: ui.tool,
+    busy: busyGesture,
+    doc: docStore.doc,
+    selection: ui.selection,
+    hoverContainerId: hoverContainerId.value,
+    multiBounds: editing && ui.selection.length > 1 && !drag ? selectionWorldBounds() : null,
+  });
 
   drawSelectionOverlay(ctx, vp, {
     selection: ui.selection,
@@ -420,28 +431,6 @@ function draw() {
     pathEditId: pen.pathEdit?.id ?? null,
     hoverTextId: hoverTextId.value,
   });
-
-  if (editing && ui.selection.length > 1 && !drag) {
-    const bounds = selectionWorldBounds();
-    if (bounds) {
-      const tl = worldToScreen(vp, bounds.x, bounds.y);
-      const br = worldToScreen(vp, bounds.x + bounds.width, bounds.y + bounds.height);
-      ctx.save();
-      ctx.strokeStyle = "rgba(79, 70, 229, 0.7)";
-      ctx.lineWidth = 1;
-      ctx.setLineDash([4, 3]);
-      ctx.strokeRect(tl.x + 0.5, tl.y + 0.5, Math.max(0, br.x - tl.x), Math.max(0, br.y - tl.y));
-      ctx.setLineDash([]);
-      ctx.fillStyle = "#ffffff";
-      for (const [, hx, hy] of boundsHandlePoints(tl, br)) {
-        ctx.beginPath();
-        ctx.rect(hx - 3.5, hy - 3.5, 7, 7);
-        ctx.fill();
-        ctx.stroke();
-      }
-      ctx.restore();
-    }
-  }
 
   const activePageNode = ui.activePageId ? docStore.doc.nodes[ui.activePageId] : null;
   if (editing) {
@@ -797,9 +786,15 @@ function onContextMenu(e: MouseEvent): void {
   const rect = canvasRef.value.getBoundingClientRect();
   const sx = e.clientX - rect.left;
   const sy = e.clientY - rect.top;
+  const position = { x: e.clientX, y: e.clientY };
+  // 标题画在页面矩形之外，hitTest 打不到：按标签命中补一条，右键标题同样弹页面菜单
+  const label = ui.tool === "path" && pen.draft ? null : labelAt(sx, sy, vp, ctx);
+  if (label) {
+    openPageMenu(label.id, position);
+    return;
+  }
   const world = screenToWorld(vp, sx, sy);
   const hit = hitTest(vp, world.x, world.y);
-  const position = { x: e.clientX, y: e.clientY };
   if (!hit) {
     closeContextMenu();
     return;
@@ -2343,6 +2338,8 @@ onMounted(() => {
   stopSelectionWatch = watch(
     () => ui.selection,
     (selection) => {
+      // 选区变化要重绘：选中框与「选中量距」都直接读 ui.selection
+      markDirty();
       if (pen.pathEdit && !selection.includes(pen.pathEdit.id)) {
         pen.pathEdit = null;
         pen.vectorDrag = null;

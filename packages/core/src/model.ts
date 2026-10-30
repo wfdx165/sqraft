@@ -337,6 +337,22 @@ export interface Rect {
   height: number;
 }
 
+/** 多个矩形的并集包围盒；空数组返回 null（避免 Math.min() 得到 Infinity）。 */
+export function unionRects(rects: readonly Rect[]): Rect | null {
+  if (rects.length === 0) return null;
+  let x1 = Infinity;
+  let y1 = Infinity;
+  let x2 = -Infinity;
+  let y2 = -Infinity;
+  for (const r of rects) {
+    x1 = Math.min(x1, r.x);
+    y1 = Math.min(y1, r.y);
+    x2 = Math.max(x2, r.x + r.width);
+    y2 = Math.max(y2, r.y + r.height);
+  }
+  return { x: x1, y: y1, width: x2 - x1, height: y2 - y1 };
+}
+
 /** 节点在画布世界坐标中的包围盒（累加祖先偏移，忽略旋转）。 */
 export function worldRect(state: DocState, id: NodeId): Rect | null {
   const node = state.nodes[id];

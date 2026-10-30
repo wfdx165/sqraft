@@ -24,7 +24,7 @@ export const ui = reactive({
   selection: [] as NodeId[],
   /** 左栏手风琴展开的页面（纯 UI 状态，无"当前页"概念） */
   expandedPageId: firstPageId(docStore.doc) as NodeId | null,
-  /** 图层树里展开的实例（默认折叠） */
+  /** 图层树里容器行的展开状态（未点过的行：实例折叠，其它容器展开） */
   expandedLayers: {} as Record<NodeId, boolean>,
   /** 当前进入的实例上下文（栈，Esc 逐级退出） */
   instanceContext: [] as NodeId[],

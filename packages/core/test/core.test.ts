@@ -4,6 +4,7 @@ import {
   createNode,
   resolvePaint,
   worldRect,
+  unionRects,
   defaultLayoutFor,
   nextPagePosition,
   worldQuad,
@@ -324,6 +325,17 @@ describe("页面与世界坐标", () => {
     store.apply({ type: "node.create", params: { nodes: [frame, rect], parentId: pageId } });
     const r = worldRect(store.doc, rect.id);
     expect(r).toMatchObject({ x: 110, y: 70, width: rect.width, height: rect.height });
+  });
+
+  it("unionRects 求多个矩形的并集", () => {
+    expect(unionRects([])).toBeNull();
+    expect(unionRects([{ x: 10, y: 20, width: 30, height: 40 }])).toEqual({ x: 10, y: 20, width: 30, height: 40 });
+    expect(
+      unionRects([
+        { x: 0, y: 0, width: 10, height: 10 },
+        { x: 40, y: 25, width: 10, height: 5 },
+      ]),
+    ).toEqual({ x: 0, y: 0, width: 50, height: 30 });
   });
 
   it("nextPagePosition 放在最右侧页面之右", () => {

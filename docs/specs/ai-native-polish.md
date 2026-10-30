@@ -20,7 +20,7 @@
 1. **清 bug 与默认值**：页面背景色生效；新文件没有页面也没有 Token（空画布引导卡，绘图工具置灰，agent 自动建页）；新建图形用字面色值，AI 也能写字面量。
 2. **小改动**：调试端口默认关闭（保留环境变量开关）；欢迎页标语改为「为 AI 原生而设计的 UI/UX 工具」；agent 连接列表（只读）+ 心跳清理僵尸连接。
 3. **图片能力**：`⌘⇧C` 复制选区/页面为 PNG、`文件 → 导出 PNG…` 落盘（默认 2×，页面带底色、选区透明）；页面支持背景图（cover/contain/tile）。
-4. **字体与开发者菜单**：导入并嵌入字体文件（按 family/weight 归组）；菜单「开发者 → 开发者工具」直接打开 Electron 自带的 DevTools。
+4. **字体与开发者工具**：导入并嵌入字体文件（按 family/weight 归组）；菜单「帮助 → 开发者工具」在开发态直接打开 Electron 自带的 DevTools。
 5. **数据目录**：统一到 `~/.sqraft/`，首次启动迁移偏好，socket 路径与 CLI 同步。
 
 ## User Stories
@@ -145,7 +145,7 @@
 
 ### 开发者工具
 
-- 菜单「开发者 → 开发者工具」打开 Electron 自带 DevTools（`openDevTools({ mode: "right" })`），再点一次关闭；开发态与打包版都可用。
+- 菜单「帮助 → 开发者工具」打开 Electron 自带 DevTools（`openDevTools({ mode: "right" })`），再点一次关闭；**只有未打包运行（`pnpm dev`）才有这一项**，安装包与 `dist:dir` 产物里不出现，也不留空分组。
 - 快捷键：macOS `⌥⌘I`，Windows/Linux `F12`（不用 `Ctrl+Shift+I`：渲染层把 ctrlKey 当 `⌘`，那是「插入图片」）；两个组合进渲染层的保留键表。
 - 早先的「布局检查」只读面板按产品决定删除；需要结构化几何时走 `inspect_layout` 工具。
 

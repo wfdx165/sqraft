@@ -5,7 +5,7 @@ import type { MenuItemConstructorOptions } from "electron";
 let windows: Array<{ webContents: Record<string, unknown> }> = [];
 
 vi.mock("electron", () => ({
-  app: { name: "Sqraft", getVersion: () => "0.0.1" },
+  app: { name: "Sqraft", getVersion: () => "0.0.1", isPackaged: false },
   BrowserWindow: { getFocusedWindow: () => null, getAllWindows: () => windows },
   Menu: { buildFromTemplate: (template: unknown) => ({ template }), setApplicationMenu: vi.fn() },
   ipcMain: { on: vi.fn() },
@@ -28,10 +28,20 @@ function clickItem(item: MenuItemConstructorOptions | undefined): void {
   click?.();
 }
 
-function devtoolsItem(platform: NodeJS.Platform): MenuItemConstructorOptions | undefined {
-  const group = buildTemplate(platform).find((item) => item.label === "开发者");
-  if (!Array.isArray(group?.submenu)) return undefined;
-  return group.submenu.find((item) => item.label === "开发者工具");
+/** 帮助菜单的子项（Electron 的 submenu 类型是数组或 Menu，这里只取数组） */
+function helpSubmenu(
+  platform: NodeJS.Platform,
+  options: { showDevTools?: boolean } = {},
+): MenuItemConstructorOptions[] {
+  const help = buildTemplate(platform, options).find((item) => item.label === "帮助");
+  return Array.isArray(help?.submenu) ? help.submenu : [];
+}
+
+function devtoolsItem(
+  platform: NodeJS.Platform,
+  options: { showDevTools?: boolean } = { showDevTools: true },
+): MenuItemConstructorOptions | undefined {
+  return helpSubmenu(platform, options).find((item) => item.label === "开发者工具");
 }
 
 describe("应用菜单", () => {
@@ -62,18 +72,34 @@ describe("应用菜单", () => {
     }
   });
 
-  it("菜单分组齐全（含开发者）", () => {
-    const labels = buildTemplate("darwin").map((item) => item.label);
-    expect(labels).toEqual(["Sqraft", "文件", "编辑", "开发者", "视图", "窗口", "帮助"]);
+  it("菜单分组齐全（没有开发者分组，开发者工具在帮助里）", () => {
+    const labels = buildTemplate("darwin", { showDevTools: true }).map((item) => item.label);
+    expect(labels).toEqual(["Sqraft", "文件", "编辑", "视图", "窗口", "帮助"]);
   });
 
-  it("开发者菜单只有自带 DevTools，快捷键按平台区分", () => {
-    const macGroup = buildTemplate("darwin").find((item) => item.label === "开发者");
-    expect(macGroup?.submenu).toHaveLength(1);
+  it("开发者工具在帮助菜单，快捷键按平台区分", () => {
+    expect(helpSubmenu("darwin", { showDevTools: true }).map((item) => item.label)).toEqual([
+      "配置 MCP…",
+      undefined,
+      "开发者工具",
+      undefined,
+      "关于 Sqraft",
+    ]);
     expect(devtoolsItem("darwin")?.accelerator).toBe("Command+Alt+I");
     // Windows/Linux 的 Ctrl+Shift+I 是渲染层的「插入图片」，所以用 F12
     for (const platform of ["win32", "linux"] as const) {
       expect(devtoolsItem(platform)?.accelerator).toBe("F12");
+    }
+  });
+
+  it("打包版不显示开发者工具，也不留悬空分隔线", () => {
+    for (const platform of ["darwin", "win32", "linux"] as const) {
+      expect(devtoolsItem(platform, { showDevTools: false })).toBeUndefined();
+      expect(helpSubmenu(platform, { showDevTools: false }).map((item) => item.label)).toEqual([
+        "配置 MCP…",
+        undefined,
+        "关于 Sqraft",
+      ]);
     }
   });
 
