@@ -45,6 +45,13 @@ app.on("open-file", (event, path) => {
 
 const isDev = !app.isPackaged;
 
+// dev 默认开调试端口：agent 可以连上来做只读的界面检查（截图 / 读 DOM），不必重启实例。
+// `SQRAFT_DEBUG_PORT=0` 关闭，设成别的值就换端口；端口被占用时 Chromium 只报警，不影响启动。
+if (isDev) {
+  const port = process.env.SQRAFT_DEBUG_PORT ?? "9222";
+  if (port !== "0") app.commandLine.appendSwitch("remote-debugging-port", port);
+}
+
 /** 生产构建的 CSP：只允许应用自身资源，脚本不接受 eval。 */
 function applyContentSecurityPolicy(): void {
   session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
@@ -113,7 +120,18 @@ function createWindow(): void {
     },
   });
 
-  window.once("ready-to-show", () => window.show());
+  window.once("ready-to-show", () => {
+    // 启动铺满"上次窗口所在那块屏"的工作区（产品决定，不是 macOS 全屏模式）：
+    // 先设尺寸再 show，避免先闪一下小窗。菜单栏与 Dock 仍在，绿灯是普通状态。
+    const area = screen.getDisplayMatching({
+      x: bounds.x ?? 0,
+      y: bounds.y ?? 0,
+      width: bounds.width,
+      height: bounds.height,
+    }).workArea;
+    window.setBounds(area);
+    window.show();
+  });
   attachCloseGuard(window);
 
   // 记住窗口位置：拖动/缩放时防抖写盘，关闭前再兜一次
@@ -134,7 +152,7 @@ function createWindow(): void {
     void saveWindowBounds({ ...normal, maximized: window.isMaximized() });
   });
 
-  if (bounds.maximized) window.maximize();
+  // 启动铺满工作区：不再走"上次最大化"这条路（尺寸在 ready-to-show 里统一设置）
 
   const devUrl = process.env.ELECTRON_RENDERER_URL;
   if (isDev && devUrl) void window.loadURL(devUrl);

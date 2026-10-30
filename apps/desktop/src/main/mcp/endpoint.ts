@@ -1,6 +1,6 @@
 /**
  * 本机 IPC 端点：macOS/Linux 用 Unix domain socket，Windows 用命名管道。
- * CLI（resources/bin/sqraft-mcp.js）里有一份等价实现，改动时两边必须同步。
+ * CLI（resources/bin/sqraft-mcp）里有一份等价实现，改动时两边必须同步。
  */
 import { join } from "node:path";
 

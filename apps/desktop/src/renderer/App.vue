@@ -95,8 +95,8 @@ watchEffect(() => {
       </aside>
       <aside class="float right glass rise-in" style="animation-delay: 80ms"><InspectorPanel /></aside>
     </template>
-    <WelcomeView v-else />
-    <ConnectionStatus />
+    <WelcomeView v-else @open-mcp-setup="mcpSetupOpen = true" />
+    <ConnectionStatus v-if="ui.docOpen" />
 
     <!-- 快捷键面板：居中对话框，放在根节点以避免被工具条的 translate 约束 -->
     <ShortcutsPanel v-if="shortcutUi.open" />

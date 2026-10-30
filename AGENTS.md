@@ -5,13 +5,15 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 ## 工作流约束
 
 - **任务完成后不要执行任何 git 命令**（add / commit / push / tag / reset 等，含 `--no-verify`）。改动留在工作区即可，由用户自行提交。
-- **可以自行运行 `pnpm dev`**：它会启动 Electron 窗口（渲染层带热更新）。界面改动用它做目视验证；无头环境只跑 `pnpm test && pnpm build` 并说明未做界面验证。
-- Playwright 已移除（连同浏览器部署目标）。不要再引入浏览器自动化，界面验证靠手点清单。
+- **不要重启用户的开发实例**：`pnpm dev` 在跑时，渲染层走 HMR、preload 自动 reload、主进程由 electron-vite 自己重启。不要 `pkill` dev / Electron 进程，也不要为了验证另起实例——两者共用单实例锁，会互相踢掉。
+- **不主动起 `pnpm dev`**：dev 没在跑时，任务收尾只跑 `pnpm test && pnpm build`，界面验证交给用户。dev 在跑时用它的调试端口做只读检查（`Page.captureScreenshot` 截图、`Runtime.evaluate` 读 DOM），不点系统对话框、不改用户文档。
+- **不跑打包版做日常验证**：`pnpm dist:dir` 与启动 `.app` 只在用户明确要求时做（改到打包配置、CLI 分发、asar 行为这类才需要）。
+- Playwright 已移除（连同浏览器部署目标）。不要再引入浏览器自动化，界面验证靠 CDP 只读检查 + 手点清单。
 
 ## 常用命令
 
 - 安装：`pnpm install`（pnpm 10；只有 `electron` / `esbuild` 允许跑安装脚本，见根 `package.json` 的 `pnpm.onlyBuiltDependencies`）
-- 开发：`pnpm dev` → `electron-vite dev`，同时起主进程、preload 与渲染层（Vite，渲染层 HMR）。渲染层源码在 `apps/desktop/src/renderer`，主进程在 `src/main`，preload 在 `src/preload`
+- 开发：`pnpm dev` → `electron-vite dev`，同时起主进程、preload 与渲染层（Vite，渲染层 HMR）。dev 自动加 `--remote-debugging-port=9222` 供只读检查，`SQRAFT_DEBUG_PORT=0` 关闭、设别的值换端口。渲染层源码在 `apps/desktop/src/renderer`，主进程在 `src/main`，preload 在 `src/preload`
 - 类型检查 + 构建：`pnpm build` —— packages 内 `tsc` 只做类型检查（`noEmit`）；桌面应用先跑 `typecheck`（main / preload / renderer 三份 `tsc --noEmit`）再 `electron-vite build` 到 `apps/desktop/out`
 - 测试：`pnpm test` —— 递归跑有 `test` 脚本的包（`@sqraft/core`、`@sqraft/ai-tools`、`@sqraft/desktop` 的 vitest）；`@sqraft/render` 无测试运行器
 - 打包：`pnpm dist` —— 按当前系统自动选命令（macOS → arm64 dmg，Windows → nsis，Linux → AppImage），产物在 `apps/desktop/release/`
@@ -69,10 +71,12 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 - MCP 端点：`userData/mcp.sock`（Unix）或 `\\.\pipe\sqraft-mcp`（Windows）；CLI 里有一份等价路径规则，改路径要两边同步
 - 菜单里**别用 `role: "close"`**：它自带 `CmdOrCtrl+W` 并直接注册，会在渲染层之前吃掉 ⌘W，而 ⌘W 是"关闭文档回欢迎页"（渲染层注册表）。关闭窗口用显式的 ⇧⌘W
 - `CloseGuard` 的放行状态必须随窗口重建复位（`attach()`）：macOS 关窗后从 Dock 重开，留着的 `allow` 会让守卫永久失效、静默丢稿
+- 窗口**启动铺满工作区**（`ready-to-show` 里 `setBounds(display.workArea)`）：不是 macOS 全屏模式、也不进系统「最大化」，所以手动缩放的尺寸不跨启动保留；`preferences.json` 里的 `maximized` 字段目前不参与恢复，别以为它还有用
+- CLI 改过名（`sqraft-mcp.js` → `sqraft-mcp`）：`setup.ts` 的 `inspectEntry()` 必须把指向本应用 `bin` 下旧文件的软链判成 `stale` 并替换；否则老用户升级后 agent 断链，UI 还会因为"不是本应用创建"拒绝覆盖
 
 ## 验证
 
 - 代码改动：`pnpm test && pnpm build`
-- 交互改动：`pnpm dev` 起 App 后手点——矩形工具拖拽画框 → 图层面板出现节点、检查器显示属性、填充解析为 Token 色、撤销可用
+- 交互改动：dev 在跑时用调试端口做只读检查（截图 + 读 DOM，不重启实例）；dev 没在跑就只跑 `pnpm test && pnpm build`，把下面的手点清单交给用户
 - 桌面能力（无自动化回归，必须手点）：欢迎页 → 新建 → 改 → 保存 → 关窗 → 重开；MCP 连入 → 建节点 → 截图 → 一次撤销全撤；拖到副屏再拖回
 - 文件相关：新建/画一个矩形 → `⌘S`（首次弹另存为）→ `⌘W`（不应直接关闭）→ 重开 App 打开该文件，内容一致；外部改动该文件后再保存应出现"覆盖 / 另存为"

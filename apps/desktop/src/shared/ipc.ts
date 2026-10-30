@@ -55,8 +55,21 @@ export interface McpSetupInfo {
   installed: boolean;
   installedPath: string | null;
   targetDir: string;
+  /** Claude Code：`claude mcp add …` */
   commandLine: string;
+  /** OpenCode V2：`opencode mcp add …` */
+  opencodeCommand: string;
+  /** Claude Desktop / 通用 `mcpServers` 形状 */
   json: string;
+  /** OpenCode V2 形状（`mcp.servers`） */
+  opencodeJson: string;
+}
+
+export interface McpStatus {
+  /** 服务是否在监听（端口占用等原因启动失败时为 false） */
+  listening: boolean;
+  /** 已连接的 agent 客户端数量 */
+  clients: number;
 }
 
 export interface McpInstallResult {
@@ -109,8 +122,10 @@ export interface SqraftApi {
     respond(result: McpCallResult): void;
     /** 渲染层是工具清单的真源（来自 @sqraft/ai-tools），启动时同步一次 */
     setTools(tools: McpToolInfo[]): void;
-    /** 已连接的 agent 客户端数量变化 */
-    onStatus(handler: (status: { clients: number }) => void): () => void;
+    /** 已连接的 agent 客户端与监听状态变化 */
+    onStatus(handler: (status: McpStatus) => void): () => void;
+    /** 当前状态（渲染层挂载时主动取一次：服务可能比页面先就绪） */
+    status(): Promise<McpStatus>;
     /** 接入配置（路径由主进程计算） */
     setup(): Promise<McpSetupInfo>;
     installCli(): Promise<McpInstallResult>;
@@ -158,6 +173,7 @@ export const CHANNELS = {
   mcpRespond: "mcp:respond",
   mcpSetTools: "mcp:set-tools",
   mcpStatus: "mcp:status",
+  mcpStatusQuery: "mcp:status:query",
   mcpSetup: "mcp:setup",
   mcpInstallCli: "mcp:install-cli",
   appCopyText: "app:copy-text",

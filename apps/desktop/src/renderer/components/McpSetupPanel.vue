@@ -1,20 +1,25 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
-import type { McpSetupInfo } from "../../shared/ipc";
+import { mcpSetup } from "../mcp-setup";
 
 const emit = defineEmits<{ close: [] }>();
 
-const info = ref<McpSetupInfo | null>(null);
+const info = mcpSetup.info;
 const message = ref("");
 const installing = ref(false);
-const copied = ref<"command" | "json" | null>(null);
+const copied = ref<"claude" | "opencode" | "json" | "opencodeJson" | null>(null);
 
 const commandLine = computed(() => info.value?.commandLine ?? "");
+const opencodeCommand = computed(() => info.value?.opencodeCommand ?? "");
 const json = computed(() => info.value?.json ?? "");
+const opencodeJson = computed(() => info.value?.opencodeJson ?? "");
 
-async function load(): Promise<void> {
-  info.value = await window.sqraft.mcp.setup();
-}
+const texts = computed<Record<"claude" | "opencode" | "json" | "opencodeJson", string>>(() => ({
+  claude: commandLine.value,
+  opencode: opencodeCommand.value,
+  json: json.value,
+  opencodeJson: opencodeJson.value,
+}));
 
 async function install(): Promise<void> {
   installing.value = true;
@@ -22,14 +27,17 @@ async function install(): Promise<void> {
   try {
     const result = await window.sqraft.mcp.installCli();
     message.value = result.message;
-    info.value = result.info;
+    // 写回共享 store：关掉面板后欢迎页的 CTA 立刻变成"复制接入命令"
+    mcpSetup.set(result.info);
+  } catch (error) {
+    message.value = `安装失败：${error instanceof Error ? error.message : String(error)}`;
   } finally {
     installing.value = false;
   }
 }
 
-function copy(kind: "command" | "json"): void {
-  const text = kind === "command" ? commandLine.value : json.value;
+function copy(kind: "claude" | "opencode" | "json" | "opencodeJson"): void {
+  const text = texts.value[kind];
   if (!text) return;
   window.sqraft.app.copyText(text);
   copied.value = kind;
@@ -43,7 +51,8 @@ function onKey(event: KeyboardEvent): void {
 }
 
 onMounted(() => {
-  void load();
+  // 面板每次打开都重新核对磁盘上的软链（force）：CLI 可能被外部删掉或换过路径
+  void mcpSetup.ensure(true);
   window.addEventListener("keydown", onKey);
 });
 onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
@@ -58,21 +67,45 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       </header>
 
       <p class="lede">
-        外部 agent（Claude Code、Cursor 等）通过下面的命令连上 Sqraft。应用没在运行时，客户端会自动把它拉起来。
+        外部 agent（OpenCode、Claude Code、Cursor 等）通过下面的命令连上 Sqraft。应用没在运行时，客户端会自动把它拉起来。
       </p>
 
       <section>
         <div class="label">
+          <span>OpenCode</span>
+          <button class="copy" @click="copy('opencode')">
+            {{ copied === "opencode" ? "已复制" : "复制" }}
+          </button>
+        </div>
+        <pre>{{ opencodeCommand }}</pre>
+      </section>
+
+      <section>
+        <div class="label">
           <span>Claude Code</span>
-          <button class="copy" @click="copy('command')">{{ copied === "command" ? "已复制" : "复制" }}</button>
+          <button class="copy" @click="copy('claude')">
+            {{ copied === "claude" ? "已复制" : "复制" }}
+          </button>
         </div>
         <pre>{{ commandLine }}</pre>
       </section>
 
       <section>
         <div class="label">
-          <span>通用 JSON 配置</span>
-          <button class="copy" @click="copy('json')">{{ copied === "json" ? "已复制" : "复制" }}</button>
+          <span>JSON · OpenCode（mcp.servers）</span>
+          <button class="copy" @click="copy('opencodeJson')">
+            {{ copied === "opencodeJson" ? "已复制" : "复制" }}
+          </button>
+        </div>
+        <pre>{{ opencodeJson }}</pre>
+      </section>
+
+      <section>
+        <div class="label">
+          <span>JSON · Claude / 通用（mcpServers）</span>
+          <button class="copy" @click="copy('json')">
+            {{ copied === "json" ? "已复制" : "复制" }}
+          </button>
         </div>
         <pre>{{ json }}</pre>
       </section>

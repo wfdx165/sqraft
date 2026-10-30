@@ -78,10 +78,16 @@ pnpm dist:mac    # 也可显式指定；交叉打包需要 wine / docker
 
 ## 接入 MCP
 
-在应用里打开 `帮助 > 配置 MCP…`，面板会给出可直接粘贴的配置（路径由应用自己计算），并提供"安装命令行工具到 PATH"。
+欢迎页就是接入口：顶部显示 MCP 服务状态与在线 agent 数，并给出一行可直接复制的接入命令（可在 `Claude Code` / `OpenCode` 之间切换）；按状态给动作（`安装命令行工具` / `复制接入命令`）。完整的客户端配置（两套命令、两套 JSON、安装到 PATH）在 `帮助 > 配置 MCP…` 面板里。
 
+- OpenCode：`opencode mcp add sqraft --global -- node <cli 路径>`，或手写配置
+  ```jsonc
+  { "$schema": "https://opencode.ai/config.json",
+    "mcp": { "servers": { "sqraft": { "type": "local", "command": ["node", "<cli 路径>"] } } } }
+  ```
+- Claude Code：`claude mcp add sqraft -- node <cli 路径>`
 - 端点：`~/Library/Application Support/Sqraft/mcp.sock`（macOS）、`$XDG_CONFIG_HOME/Sqraft/mcp.sock`（Linux，缺省 `~/.config`）、`\\.\pipe\sqraft-mcp`（Windows）
-- 薄 CLI 只做 `stdio ↔ 本机 IPC` 管道；应用没在跑时会自动拉起，并跳过欢迎页直接建空稿
+- 薄 CLI（`resources/bin/sqraft-mcp`，无扩展名）只做 `stdio ↔ 本机 IPC` 管道；应用没在跑时会自动拉起，并跳过欢迎页直接建空稿
 - 多客户端串行执行，单次调用 30s 超时；应用退出前广播关闭通知
 
 工具（14 个）：`read_document`、`get_tokens`、`create_node`、`update_node`、`delete_node`、`create_instance`、`swap_instance`、`detach_instance`、`define_property`、`set_instance_prop`、`fill_slot`、`screenshot`、`document.new`、`document.open`。

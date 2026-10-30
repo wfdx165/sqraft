@@ -3,7 +3,12 @@
  * 工具清单与执行器都在渲染层（@sqraft/ai-tools 的真源），这里只转发。
  */
 import { app, BrowserWindow, clipboard, ipcMain } from "electron";
-import { CHANNELS, type McpCallResult, type McpToolInfo } from "../../shared/ipc";
+import {
+  CHANNELS,
+  type McpCallResult,
+  type McpStatus,
+  type McpToolInfo,
+} from "../../shared/ipc";
 import { startMcpServer, type McpRuntime } from "./server";
 import { collectSetupInfo, installCli, writableInstallDir } from "./setup";
 
@@ -30,8 +35,21 @@ async function setupInfo() {
   });
 }
 
+/** 服务状态：`listening` 由运行时是否存在推导，渲染层据此显示"监听中 / 未启动"。 */
+function currentStatus(): McpStatus {
+  return { listening: runtime !== null, clients: runtime?.clientCount() ?? 0 };
+}
+
+function broadcastStatus(): void {
+  const status = currentStatus();
+  for (const window of BrowserWindow.getAllWindows()) {
+    window.webContents.send(CHANNELS.mcpStatus, status);
+  }
+}
+
 export function registerMcpChannels(): void {
   ipcMain.handle(CHANNELS.mcpSetup, () => setupInfo());
+  ipcMain.handle(CHANNELS.mcpStatusQuery, () => currentStatus());
 
   ipcMain.handle(CHANNELS.mcpInstallCli, async () => {
     const { dir } = await writableInstallDir();
@@ -62,16 +80,14 @@ export async function startMcp(endpoint: string, appVersion: string): Promise<vo
   runtime = await startMcpServer({
     endpoint,
     appVersion,
-    onClientChange: (clients) => {
-      for (const window of BrowserWindow.getAllWindows()) {
-        window.webContents.send(CHANNELS.mcpStatus, { clients });
-      }
-    },
+    onClientChange: () => broadcastStatus(),
     host: {
       list: () => tools,
       call: (name, args) => callRenderer(name, args),
     },
   });
+  // 服务可能在页面挂载之后才就绪：主动推一次，欢迎页不必轮询
+  broadcastStatus();
 }
 
 function callRenderer(name: string, args: Record<string, unknown>): Promise<string> {

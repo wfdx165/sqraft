@@ -4,15 +4,26 @@
  */
 import { reactive } from "vue";
 import { makeExecutor, toMCPManifest } from "@sqraft/ai-tools";
+import type { McpStatus } from "../shared/ipc";
 import { docStore, hooks, ui } from "./store";
 import { newDocument, openDocument } from "./file-session";
 import { textSizeOf } from "./text-metrics";
 
-/** 连接状态条的数据源（纯 UI，不进文档） */
+/** 连接状态（纯 UI，不进文档）：欢迎页的状态行与文档态的胶囊共用它 */
 export const mcpUi = reactive({
+  listening: false,
   clients: 0,
   busy: false,
 });
+
+/** 工具数从真源取，界面不写死数字 */
+const manifest = toMCPManifest();
+export const MCP_TOOL_COUNT = manifest.length;
+
+function applyStatus(status: McpStatus): void {
+  mcpUi.listening = status.listening;
+  mcpUi.clients = status.clients;
+}
 
 let installed = false;
 
@@ -21,10 +32,10 @@ export function installMcpHost(): void {
   installed = true;
 
   const bridge = window.sqraft;
-  bridge.mcp.setTools(toMCPManifest());
-  bridge.mcp.onStatus(({ clients }) => {
-    mcpUi.clients = clients;
-  });
+  bridge.mcp.setTools(manifest);
+  bridge.mcp.onStatus(applyStatus);
+  // 服务可能比页面先就绪，也可能稍后才监听成功：挂载时主动取一次
+  void bridge.mcp.status().then(applyStatus);
 
   const executor = makeExecutor(
     docStore,

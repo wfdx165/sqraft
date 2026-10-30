@@ -7,6 +7,7 @@ import {
   type McpCallResult,
   type McpInstallResult,
   type McpSetupInfo,
+  type McpStatus,
   type McpToolInfo,
   type OpenFileResult,
   type OverwriteChoice,
@@ -45,11 +46,12 @@ const api: SqraftApi = {
     setTools: (tools: McpToolInfo[]) => ipcRenderer.send(CHANNELS.mcpSetTools, tools),
     setup: () => ipcRenderer.invoke(CHANNELS.mcpSetup) as Promise<McpSetupInfo>,
     installCli: () => ipcRenderer.invoke(CHANNELS.mcpInstallCli) as Promise<McpInstallResult>,
-    onStatus: (handler: (status: { clients: number }) => void) => {
-      const listener = (_event: Electron.IpcRendererEvent, status: { clients: number }) => handler(status);
+    onStatus: (handler: (status: McpStatus) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, status: McpStatus) => handler(status);
       ipcRenderer.on(CHANNELS.mcpStatus, listener);
       return () => ipcRenderer.removeListener(CHANNELS.mcpStatus, listener);
     },
+    status: () => ipcRenderer.invoke(CHANNELS.mcpStatusQuery) as Promise<McpStatus>,
   },
   recent: {
     list: () => ipcRenderer.invoke(CHANNELS.recentList) as Promise<{ path: string; name: string }[]>,
