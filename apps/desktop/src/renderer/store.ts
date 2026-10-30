@@ -30,6 +30,8 @@ export const ui = reactive({
   instanceContext: [] as NodeId[],
   /** 左栏 tab：默认对话（每次刷新都回到对话，不持久化） */
   tab: "pages" as PanelTab,
+  /** 正在裁切的图片节点（double-click 进入，Esc 退出） */
+  cropNodeId: null as NodeId | null,
 });
 
 docStore.subscribe(() => {
@@ -42,6 +44,8 @@ docStore.subscribe(() => {
   }
   ui.selection = ui.selection.filter((id) => docStore.doc.nodes[id]);
   ui.instanceContext = ui.instanceContext.filter((id) => docStore.doc.nodes[id]?.type === "instance");
+  // 裁切中的节点被删/换文档后就失效了，别让它继续拦住指针
+  if (ui.cropNodeId && !docStore.doc.nodes[ui.cropNodeId]) ui.cropNodeId = null;
   queueMicrotask(reflowAutoHeightText);
 });
 
@@ -103,16 +107,22 @@ export const hooks: {
   getScreenshot: (region?: { x: number; y: number; width: number; height: number }) => Promise<string>;
   focusNode: (id: NodeId) => void;
   focusPage: (id: NodeId) => void;
+  /** 适配当前活动页（与缩放菜单里的「适配活动页」同一条路径） */
+  fitActivePage: () => void;
   /** AI 建节点的目标页：编辑模式 = 活动页，拖动模式 = 视口中心页。 */
   getActivePageId: () => NodeId | null;
   /** 在活动页视口中心插入组件实例（由画布实现，面板只负责调用）。 */
   insertInstance: (componentId: NodeId) => void;
+  /** 把一张位图插到视口中心（⌘V / 菜单粘贴用） */
+  insertImageBytes: (bytes: Uint8Array, name: string) => Promise<void>;
   requestRedraw: () => void;
 } = {
   getScreenshot: async () => "",
   focusNode: () => {},
   focusPage: () => {},
+  fitActivePage: () => {},
   getActivePageId: () => null,
   insertInstance: () => {},
+  insertImageBytes: async () => {},
   requestRedraw: () => {},
 };

@@ -9,7 +9,7 @@ Sqraft 是一款面向个人与小团队的 UI 设计软件：用画板、组件
 ## 产品定位
 
 - **给谁用**：个人与小团队设计师；多人实时协作不在范围内
-- **做什么**：矢量画布、自动布局、组件/实例/插槽、设计 Token、多页面、节点效果、切图导出
+- **做什么**：矢量画布、自动布局、组件/实例/插槽、设计 Token、多页面、节点效果、图片（拖入 / 粘贴 / 裁切 / 蒙版）、切图导出
 - **怎么用**：桌面应用（macOS / Windows / Linux）；GUI 与外部 agent 两个入口
 - **不做什么**：云端协作、账户体系、白板、代码生成（Token→CSS 除外）
 
@@ -89,6 +89,8 @@ pnpm dist:mac    # 也可显式指定；交叉打包需要 wine / docker
 - 端点：`~/Library/Application Support/Sqraft/mcp.sock`（macOS）、`$XDG_CONFIG_HOME/Sqraft/mcp.sock`（Linux，缺省 `~/.config`）、`\\.\pipe\sqraft-mcp`（Windows）
 - 薄 CLI（`resources/bin/sqraft-mcp`，无扩展名）只做 `stdio ↔ 本机 IPC` 管道；应用没在跑时会自动拉起，并跳过欢迎页直接建空稿
 - 多客户端串行执行，单次调用 30s 超时；应用退出前广播关闭通知
+
+图片：`create_node` 的 `kind` 支持 `image`，用 base64 传位图（上限 5MB）；`update_node` 可改 `crop` 与 `mask`。
 
 工具（14 个）：`read_document`、`get_tokens`、`create_node`、`update_node`、`delete_node`、`create_instance`、`swap_instance`、`detach_instance`、`define_property`、`set_instance_prop`、`fill_slot`、`screenshot`、`document.new`、`document.open`。
 

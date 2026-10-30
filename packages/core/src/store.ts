@@ -1105,25 +1105,40 @@ export class DocStore {
   async transact<T>(label: string, fn: () => T | Promise<T>): Promise<T> {
     if (this.transaction) return fn();
 
-    this.transaction = { label, inverses: [] };
+    const mine: { label: string; inverses: Inverse[] } = { label, inverses: [] };
+    this.transaction = mine;
     try {
       const result = await fn();
-      const tx = this.transaction;
-      this.transaction = null;
-      if (tx && tx.inverses.length > 0) {
-        this.undoStack.push({ label, inverses: tx.inverses, revision: ++this.revisionSeq });
-        this.redoStack = [];
-        // 提交发生在最后一次 emit 之后：再通知一次，让"脏标记 / 窗口标题"这类订阅者看到新状态。
-        // 少了这一下，MCP 改完文档主进程仍以为它是干净的（⌘Q 会静默丢稿）。
-        this.emit(new Set<NodeId>());
+      // 可能已被 `abortTransact()` 中止：那样就不再落撤销记录
+      if (this.transaction === mine) {
+        this.transaction = null;
+        if (mine.inverses.length > 0) {
+          this.undoStack.push({ label, inverses: mine.inverses, revision: ++this.revisionSeq });
+          this.redoStack = [];
+          // 提交发生在最后一次 emit 之后：再通知一次，让"脏标记 / 窗口标题"这类订阅者看到新状态。
+          // 少了这一下，MCP 改完文档主进程仍以为它是干净的（⌘Q 会静默丢稿）。
+          this.emit(new Set<NodeId>());
+        }
       }
       return result;
     } catch (error) {
-      const tx = this.transaction;
-      this.transaction = null;
-      if (tx) this.rollback(tx.inverses);
+      if (this.transaction === mine) {
+        this.transaction = null;
+        this.rollback(mine.inverses);
+      }
       throw error;
     }
+  }
+
+  /**
+   * 中止进行中的事务：把已执行的命令倒放回事务开始前，且**不留撤销记录**。
+   * 用于"拖到一半按 Esc"——手势取消不该在撤销栈里留下一条净效果为空的记录。
+   */
+  abortTransact(): void {
+    const tx = this.transaction;
+    if (!tx) return;
+    this.transaction = null;
+    this.rollback(tx.inverses);
   }
 
   /** 事务失败时倒放已执行的命令；不产生撤销记录。 */

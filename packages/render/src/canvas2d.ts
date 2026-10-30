@@ -15,7 +15,7 @@ import {
   type Rect,
   type VectorPath,
 } from "@sqraft/core";
-import type { RenderBackend, RenderEffect, RenderShadowEffect, Viewport } from "./backend";
+import type { RenderBackend, RenderEffect, RenderShadowEffect, ResolvedImage, Viewport } from "./backend";
 
 /** 两个矩形求交；无交集时退化为 1×1 的空层。 */
 function intersectRect(a: Rect, b: Rect): Rect {
@@ -802,6 +802,79 @@ export class Canvas2DBackend implements RenderBackend {
       y += layout.lineHeight;
     });
     ctx.restore();
+  }
+
+  drawImage(node: DocNode, image: ResolvedImage, crop: Rect, radius: CornerRadius = ZERO_CORNER_RADIUS): void {
+    if (node.width <= 0 || node.height <= 0) return;
+    const ctx = this.ctx;
+    const sx = Math.max(0, crop.x);
+    const sy = Math.max(0, crop.y);
+    const sw = Math.max(1, Math.min(crop.width, image.width - sx));
+    const sh = Math.max(1, Math.min(crop.height, image.height - sy));
+    ctx.save();
+    // 叶子节点在父坐标系里绘制：必须先按 node.x/y 落位（与 drawRect 一致），
+    // 否则图片会画到父容器原点，和选中框/命中区完全错位。
+    this.applyRotation(node);
+    this.roundedPath(ctx, node.x, node.y, node.width, node.height, radius);
+    ctx.clip();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    try {
+      ctx.drawImage(image.source, sx, sy, sw, sh, node.x, node.y, node.width, node.height);
+    } catch {
+      // 位图已失效（被 GC/尺寸为 0）：退回占位，别让整帧失败
+      this.paintImagePlaceholder(node, radius);
+    }
+    ctx.restore();
+  }
+
+  drawImagePlaceholder(node: DocNode, radius: CornerRadius = ZERO_CORNER_RADIUS): void {
+    this.paintImagePlaceholder(node, radius);
+  }
+
+  /** 缺失图片的占位：浅灰底 + 对角叉，和"图裂了"的通用语汇一致。 */
+  private paintImagePlaceholder(node: DocNode, radius: CornerRadius): void {
+    if (node.width <= 0 || node.height <= 0) return;
+    const ctx = this.ctx;
+    ctx.save();
+    this.applyRotation(node);
+    this.roundedPath(ctx, node.x, node.y, node.width, node.height, radius);
+    ctx.clip();
+    ctx.fillStyle = "rgba(148, 163, 184, 0.16)";
+    ctx.fillRect(node.x, node.y, node.width, node.height);
+    ctx.strokeStyle = "rgba(100, 116, 139, 0.35)";
+    ctx.lineWidth = Math.max(0.5, Math.min(node.width, node.height) * 0.01);
+    ctx.beginPath();
+    ctx.moveTo(node.x, node.y);
+    ctx.lineTo(node.x + node.width, node.y + node.height);
+    ctx.moveTo(node.x + node.width, node.y);
+    ctx.lineTo(node.x, node.y + node.height);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  pushMaskLayer(bounds?: Rect): void {
+    const world = intersectRect(bounds ?? this.visibleWorldRect(), this.visibleWorldRect());
+    this.openLayer(this.worldRectToLocal(world), {
+      downsample: false,
+      effects: [],
+      alpha: 1,
+      node: null,
+    });
+  }
+
+  popMaskLayer(drawMask: () => void, alpha = 1): void {
+    const frame = this.frames[this.frames.length - 1];
+    if (frame && !frame.passthrough) {
+      const ctx = frame.ctx;
+      ctx.save();
+      // 只留蒙版形状与已画内容的交集；alpha 让"半透明蒙版"也成立
+      ctx.globalCompositeOperation = "destination-in";
+      ctx.globalAlpha = Math.max(0, Math.min(1, alpha));
+      drawMask();
+      ctx.restore();
+    }
+    this.finishFrame();
   }
 
   endFrame(): void {

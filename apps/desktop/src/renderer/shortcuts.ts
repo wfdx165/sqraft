@@ -21,6 +21,7 @@ export type ActionId =
   | "edit.undo"
   | "edit.redo"
   | "edit.delete"
+  | "edit.paste"
   | "component.create"
   | "component.detach"
   | "view.zoomIn"
@@ -31,6 +32,7 @@ export type ActionId =
   | "focus.pageSearch"
   | "file.new"
   | "file.open"
+  | "file.insertImage"
   | "file.save"
   | "file.saveAs"
   | "file.closeDoc";
@@ -63,6 +65,7 @@ export const ACTIONS: ShortcutAction[] = [
   { id: "edit.undo", group: "编辑", label: "撤销", default: "⌘Z" },
   { id: "edit.redo", group: "编辑", label: "重做", default: "⌘⇧Z" },
   { id: "edit.delete", group: "编辑", label: "删除选中", default: "Delete" },
+  { id: "edit.paste", group: "编辑", label: "粘贴", default: "⌘V" },
   { id: "component.create", group: "组件", label: "创建组件", default: "⌘⌥K" },
   { id: "component.detach", group: "组件", label: "脱离实例", default: "⌘⌥B" },
   { id: "view.zoomIn", group: "视图", label: "放大", default: "⌘+" },
@@ -73,6 +76,7 @@ export const ACTIONS: ShortcutAction[] = [
   { id: "focus.pageSearch", group: "其它", label: "聚焦页面搜索", default: "⌘F" },
   { id: "file.new", group: "其它", label: "新建文档", default: "⌘N" },
   { id: "file.open", group: "其它", label: "打开文件", default: "⌘O" },
+  { id: "file.insertImage", group: "其它", label: "插入图片", default: "⇧⌘I" },
   { id: "file.save", group: "其它", label: "保存文件", default: "⌘S" },
   { id: "file.saveAs", group: "其它", label: "另存为", default: "⇧⌘S" },
   { id: "file.closeDoc", group: "其它", label: "关闭文档", default: "⌘W" },
@@ -93,6 +97,8 @@ const RESERVED = new Set(["⌘R", "⌘T", "⌘Q", "⌘M", "⌘H", "⌘⌥Esc", "
 const GLOBAL_ACTIONS = new Set<ActionId>([
   "file.new",
   "file.open",
+  "file.insertImage",
+  "edit.paste",
   "file.save",
   "file.saveAs",
   "file.closeDoc",

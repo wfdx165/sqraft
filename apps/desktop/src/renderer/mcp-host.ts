@@ -8,6 +8,7 @@ import type { McpStatus } from "../shared/ipc";
 import { docStore, hooks, ui } from "./store";
 import { newDocument, openDocument } from "./file-session";
 import { textSizeOf } from "./text-metrics";
+import { putAsset } from "./assets";
 
 /** 连接状态（纯 UI，不进文档）：欢迎页的状态行与文档态的胶囊共用它 */
 export const mcpUi = reactive({
@@ -45,6 +46,14 @@ export function installMcpHost(): void {
     {
       newDocument: () => newDocument(),
       openDocument: () => openDocument(),
+      addImage: async (data, mimeType) => {
+        const bytes = Uint8Array.from(atob(data), (ch) => ch.charCodeAt(0));
+        const asset = await putAsset(bytes);
+        if (!asset.ok) throw new Error(asset.reason);
+        // MIME 以实际内容为准（magic bytes），不信任 agent 传的值
+        void mimeType;
+        return { assetId: asset.id, width: asset.width, height: asset.height };
+      },
     },
   );
 

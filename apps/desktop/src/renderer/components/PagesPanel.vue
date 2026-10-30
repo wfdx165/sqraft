@@ -14,6 +14,7 @@ import {
 import { dispatch, docStore, hooks, select, ui } from "../store";
 import { registerShortcuts } from "../shortcuts";
 import Icon from "./Icon.vue";
+import { assetUrl } from "../assets";
 
 interface Row {
   node: DocNode;
@@ -78,7 +79,11 @@ onMounted(() => {
 onBeforeUnmount(() => stopSearchShortcut());
 
 
-/** 当前页面下的图层树（手风琴：仅展开活动页面） */
+/**
+ * 当前页面下的图层树（手风琴：仅展开活动页面）。
+ * `children` 是"从下往上"的绘制顺序，列表按 Figma 习惯**倒序**显示（最上层在最前），
+ * 否则新图层会出现在列表底部，且 `isMask` 遮罩的"上方相邻"会读成"下方相邻"。
+ */
 const rows = computed<Row[]>(() => {
   void ui.version;
   const pageId = ui.expandedPageId;
@@ -92,9 +97,9 @@ const rows = computed<Row[]>(() => {
     if (node.locked) return;
     // 实例默认折叠，展开后才显示内部图层
     if (node.type === "instance" && !ui.expandedLayers[node.id]) return;
-    for (const c of node.children) visit(c, depth + 1);
+    for (const c of [...node.children].reverse()) visit(c, depth + 1);
   };
-  for (const c of docStore.doc.nodes[pageId].children) visit(c, 0);
+  for (const c of [...docStore.doc.nodes[pageId].children].reverse()) visit(c, 0);
   return out;
 });
 
@@ -115,6 +120,11 @@ const iconOf: Record<string, string> = {
   slot: "slot",
 };
 
+/** 图片图层用缩略图代替类型图标；资源缺失时退回图标。 */
+function thumbOf(n: DocNode): string | null {
+  return n.image ? assetUrl(n.image.assetId) : null;
+}
+
 function toggleLayerLock(n: DocNode): void {
   dispatch({ type: "node.update", params: { nodeId: n.id, patch: { locked: !n.locked } } }, "lock");
 }
@@ -122,12 +132,14 @@ function toggleLayerLock(n: DocNode): void {
 /* ---------- 页面操作 ---------- */
 
 function togglePage(id: NodeId) {
-  // 编辑模式：点左栏页面 = 切换活动页 + 适配该页（与画布活动页保持同步）
+  // 编辑模式：点左栏页面 = 切换活动页 + 适配该页
+  // 必须走 fitActivePage（padding 80），与缩放菜单的「适配活动页」完全一致；
+  // focusPage 用的是 focusRect(id, 40)，缩放进近一倍，看起来"效果不一样"
   if (ui.mode === "edit") {
     ui.activePageId = id;
     ui.expandedPageId = id;
     select([]);
-    hooks.focusPage(id);
+    hooks.fitActivePage();
     return;
   }
   if (ui.expandedPageId === id) {
@@ -176,9 +188,14 @@ function addPage() {
     height: DEFAULT_PAGE_HEIGHT,
   });
   dispatch({ type: "node.create", params: { nodes: [node], parentId: null } }, "create-page");
-  if (ui.mode === "edit") ui.activePageId = node.id;
   ui.expandedPageId = node.id;
   select([]);
+  if (ui.mode === "edit") {
+    // 与点左栏页面、缩放菜单「适配活动页」同一条路径：切过去并铺满视口
+    ui.activePageId = node.id;
+    hooks.fitActivePage();
+    return;
+  }
   hooks.focusPage(node.id);
 }
 
@@ -319,7 +336,13 @@ function onLayerDelete(id: NodeId) {
               <Icon name="chevron" :size="10" />
             </button>
             <span v-else class="disclosure-spacer" />
-            <Icon class="type" :name="iconOf[row.node.type] ?? 'rect'" :size="13" />
+            <img
+              v-if="row.node.type === 'image' && thumbOf(row.node)"
+              class="thumb"
+              :src="thumbOf(row.node)!"
+              alt=""
+            />
+            <Icon v-else class="type" :name="iconOf[row.node.type] ?? 'rect'" :size="13" />
             <span class="name">{{ row.node.name }}</span>
             <span v-if="row.node.type === 'slot'" class="slot-state">
               {{ row.node.slotFilled ? "已填充" : row.node.children.length ? "默认" : "空插槽" }}
@@ -512,6 +535,15 @@ header {
   font-family: var(--mono);
   font-size: 9.5px;
   color: var(--text-faint);
+}
+
+.thumb {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: cover;
+  flex: none;
+  border: 1px solid var(--hairline);
 }
 
 .layers {

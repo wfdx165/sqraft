@@ -11,6 +11,9 @@ import {
   PAGE_GAP,
   createLayoutSpec,
   firstPageId,
+  imageCropOf,
+  maskPlan,
+  type DocNode,
 } from "../src/model";
 import { subtreeWorldBounds } from "../src/model";
 import {
@@ -20,7 +23,7 @@ import {
   effectPadding,
   sanitizeEffect,
 } from "../src/effects";
-import { migrateDoc } from "../src/migrate";
+import { CURRENT_FORMAT_VERSION, migrateDoc } from "../src/migrate";
 import { layoutText, lineHeightPx, letterSpacingPx } from "../src/text";
 import { DocStore } from "../src/store";
 import { solveLayout } from "../src/layout";
@@ -2013,7 +2016,7 @@ describe("迁移：formatVersion 1 → 2", () => {
       tokens: {},
     };
     migrateDoc(state as never, 1);
-    expect(state.formatVersion).toBe(2);
+    expect(state.formatVersion).toBe(CURRENT_FORMAT_VERSION);
     const f = state.nodes[frame.id];
     expect(f.layout?.padding).toEqual({ top: 12, right: 12, bottom: 12, left: 12 });
     expect(f.layout?.wrap).toBe(false);
@@ -2468,5 +2471,118 @@ describe("事务", () => {
     });
     // 命令执行中的那次通知发生在提交之前，必须还有一次在提交之后
     expect(seen.at(-1)).toBe(true);
+  });
+});
+
+describe("图片节点", () => {
+  const image = (overrides: Partial<DocNode> = {}) =>
+    createNode("image", {
+      width: 400,
+      height: 300,
+      image: {
+        assetId: "a1",
+        naturalWidth: 1000,
+        naturalHeight: 500,
+        crop: { x: 0, y: 0, width: 1000, height: 500 },
+      },
+      ...overrides,
+    });
+
+  it("缺省裁切等于整图", () => {
+    const node = image({ image: { assetId: "a1", naturalWidth: 1000, naturalHeight: 500, crop: undefined as never } });
+    expect(imageCropOf(node)).toEqual({ x: 0, y: 0, width: 1000, height: 500 });
+  });
+
+  it("越界的裁切被夹回图片范围", () => {
+    const node = image({
+      image: { assetId: "a1", naturalWidth: 1000, naturalHeight: 500, crop: { x: 900, y: 400, width: 500, height: 500 } },
+    });
+    expect(imageCropOf(node)).toEqual({ x: 500, y: 0, width: 500, height: 500 });
+  });
+
+  it("没有 image 字段时给 1×1，渲染层据此画占位", () => {
+    expect(imageCropOf(createNode("image"))).toEqual({ x: 0, y: 0, width: 1, height: 1 });
+  });
+
+  it("2 → 3 迁移补齐原图尺寸与裁切", () => {
+    const state = createEmptyDoc();
+    state.formatVersion = 2;
+    const node = createNode("image", { width: 320, height: 200 });
+    node.image = { assetId: "a2" } as never;
+    state.nodes[node.id] = node;
+    migrateDoc(state, 2);
+    expect(state.formatVersion).toBe(CURRENT_FORMAT_VERSION);
+    expect(node.image).toEqual({
+      assetId: "a2",
+      naturalWidth: 320,
+      naturalHeight: 200,
+      crop: { x: 0, y: 0, width: 320, height: 200 },
+    });
+  });
+
+  it("蒙版标记可随命令更新并撤销", () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = firstPageId(store.doc)!;
+    const shape = createNode("rect", { parentId: pageId, x: 0, y: 0, width: 10, height: 10 });
+    store.apply({ type: "node.create", params: { nodes: [shape], parentId: pageId } });
+    store.apply({ type: "node.update", params: { nodeId: shape.id, patch: { isMask: true } } });
+    expect(store.doc.nodes[shape.id].isMask).toBe(true);
+    store.undo();
+    expect(store.doc.nodes[shape.id].isMask).toBeUndefined();
+  });
+});
+
+describe("蒙版配对（maskPlan）", () => {
+  const maskOf = (ids: string[]) => (id: string) => ids.includes(id);
+
+  it("蒙版遮罩后一位兄弟，自己不单独出现", () => {
+    expect(maskPlan(["a", "b", "c"], maskOf(["a"]))).toEqual([
+      { kind: "masked", maskId: "a", targetId: "b" },
+      { kind: "plain", id: "c" },
+    ]);
+  });
+
+  it("末尾的蒙版没有可遮罩对象，直接忽略", () => {
+    expect(maskPlan(["a", "b"], maskOf(["b"]))).toEqual([{ kind: "plain", id: "a" }]);
+  });
+
+  it("连续两个蒙版：前一个吃掉后一个，后一个不再当蒙版用", () => {
+    expect(maskPlan(["a", "b", "c"], maskOf(["a", "b"]))).toEqual([
+      { kind: "masked", maskId: "a", targetId: "b" },
+      { kind: "plain", id: "c" },
+    ]);
+  });
+
+  it("空列表与无蒙版都原样返回", () => {
+    expect(maskPlan([], maskOf([]))).toEqual([]);
+    expect(maskPlan(["a", "b"], maskOf([]))).toEqual([
+      { kind: "plain", id: "a" },
+      { kind: "plain", id: "b" },
+    ]);
+  });
+});
+
+describe("事务中止", () => {
+  it("abortTransact 回滚到事务前，且不留撤销记录", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = firstPageId(store.doc)!;
+    const rect = createNode("rect", { parentId: pageId, x: 0, y: 0, width: 10, height: 10 });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+    const undoDepth = store.canUndo;
+
+    let finish: (() => void) | null = null;
+    const pending = store.transact("裁切图片", () => new Promise<void>((resolve) => (finish = resolve)));
+    store.apply({ type: "node.update", params: { nodeId: rect.id, patch: { x: 100 } } });
+    expect(store.doc.nodes[rect.id].x).toBe(100);
+
+    store.abortTransact();
+    expect(store.doc.nodes[rect.id].x).toBe(0);
+
+    finish!();
+    await pending;
+    // 只剩创建那条：取消的手势没有往撤销栈里塞空记录
+    store.undo();
+    expect(store.doc.nodes[rect.id]).toBeUndefined();
+    expect(store.canUndo).toBe(!undoDepth);
   });
 });

@@ -24,6 +24,15 @@ export interface Viewport {
 export interface RenderContext {
   doc: DocState;
   resolveColor(tokenOrValue: { token?: string; value?: string } | null | undefined): string | undefined;
+  /** 按 assetId 取已解码的图片；没解码好或缺资源时返回 null（渲染占位） */
+  resolveImage(assetId: string): ResolvedImage | null;
+}
+
+/** 已解码的图片：`source` 可直接交给 drawImage，宽高是原图像素。 */
+export interface ResolvedImage {
+  source: CanvasImageSource;
+  width: number;
+  height: number;
 }
 
 export interface RenderBackend {
@@ -55,6 +64,17 @@ export interface RenderBackend {
   /** 参数化多边形：points 为节点本地坐标，闭合描边 */
   drawPolygon(node: DocNode, points: ReadonlyArray<{ x: number; y: number }>, fill?: string, stroke?: string, strokeWidth?: number): void;
   drawText(node: DocNode, fill?: string, stroke?: string): void;
+  /** 图片：`crop` 是原图像素坐标下的可见区域，绘制到节点框内 */
+  drawImage(node: DocNode, image: ResolvedImage, crop: Rect, radius?: CornerRadius): void;
+  /** 图片缺失占位（资源没随文件带过来时） */
+  drawImagePlaceholder(node: DocNode, radius?: CornerRadius): void;
+  /**
+   * 蒙版层：其后的绘制先进入离屏，`popMaskLayer` 时用回调画出的形状 alpha
+   * 裁掉多余部分再合成回来。push/pop 必须配对。
+   * `alpha` 是蒙版节点自身的不透明度（半透明蒙版 = 半透明的裁切）。
+   */
+  pushMaskLayer(bounds?: Rect): void;
+  popMaskLayer(drawMask: () => void, alpha?: number): void;
   endFrame(): void;
 }
 

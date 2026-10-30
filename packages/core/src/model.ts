@@ -114,6 +114,17 @@ export type ListType = "none" | "bulleted" | "numbered";
  */
 export type NodeOverride = Omit<Partial<DocNode>, "style"> & { style?: Partial<NodeStyle> };
 
+/**
+ * 图片引用：位图字节存在 `.sqraft` 的 `assets/` 里（按内容哈希命名），
+ * 文档只记 id 与原图尺寸；`crop` 是**原图像素坐标**下的可见区域，缺省等于整张图。
+ */
+export interface ImageRef {
+  assetId: string;
+  naturalWidth: number;
+  naturalHeight: number;
+  crop: Rect;
+}
+
 export interface DocNode {
   id: NodeId;
   type: NodeType;
@@ -165,6 +176,10 @@ export interface DocNode {
   mainId?: NodeId;
   /** 插槽：仅实例侧的 slot 使用，表示默认内容已被用户内容替换 */
   slotFilled?: boolean;
+  /** 图片：仅 image 使用 */
+  image?: ImageRef;
+  /** 作为蒙版：遮罩同一父级里它上方相邻的兄弟（Figma 语义） */
+  isMask?: boolean;
   style: NodeStyle;
 }
 
@@ -398,6 +413,64 @@ export function subtreeWorldBounds(state: DocState, id: NodeId): Rect | null {
   });
   if (!Number.isFinite(minX)) return null;
   return { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) };
+}
+
+/** 图片的完整裁切区域（原图像素）。 */
+export function fullImageCrop(ref: Pick<ImageRef, "naturalWidth" | "naturalHeight">): Rect {
+  return {
+    x: 0,
+    y: 0,
+    width: Math.max(1, ref.naturalWidth),
+    height: Math.max(1, ref.naturalHeight),
+  };
+}
+
+/**
+ * 蒙版的绘制计划：`isMask` 的节点不单独出现，它用自己的形状裁掉**后一位**兄弟
+ * （绘制顺序 = 从下往上，所以"后一位"就是视觉上盖在它上面的那一层，Figma 语义）。
+ *
+ * 放在 core 是为了能被测试覆盖：渲染器只按计划派发，不自己推配对规则。
+ * 末尾没有兄弟的蒙版被忽略（与 Figma 一致：没有可遮罩的图层就不显示）。
+ */
+export type MaskPlanEntry =
+  | { kind: "plain"; id: NodeId }
+  | { kind: "masked"; maskId: NodeId; targetId: NodeId };
+
+export function maskPlan(children: readonly NodeId[], isMask: (id: NodeId) => boolean): MaskPlanEntry[] {
+  const out: MaskPlanEntry[] = [];
+  for (let i = 0; i < children.length; i += 1) {
+    const id = children[i];
+    if (isMask(id)) {
+      const targetId = children[i + 1];
+      // 没有兄弟：蒙版本身不画，也不消耗后面的节点
+      if (targetId !== undefined) {
+        out.push({ kind: "masked", maskId: id, targetId });
+        i += 1;
+      }
+      continue;
+    }
+    out.push({ kind: "plain", id });
+  }
+  return out;
+}
+
+/**
+ * 图片节点当前的裁切区域：缺省等于整图，越界/过小时夹回图片范围。
+ * 渲染与命中都用它，避免历史文档里的脏值把图拉到画布外。
+ */
+export function imageCropOf(node: DocNode): Rect {
+  const ref = node.image;
+  if (!ref) return { x: 0, y: 0, width: 1, height: 1 };
+  const full = fullImageCrop(ref);
+  const crop = ref.crop ?? full;
+  const width = Math.max(1, Math.min(crop.width, full.width));
+  const height = Math.max(1, Math.min(crop.height, full.height));
+  return {
+    x: Math.max(0, Math.min(crop.x, full.width - width)),
+    y: Math.max(0, Math.min(crop.y, full.height - height)),
+    width,
+    height,
+  };
 }
 
 /** 四角圆角归一化：缺省视为 0。 */

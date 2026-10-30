@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
+  createNode,
   firstPageId,
+  imageCropOf,
   makeAnchor,
   scaleVector,
   worldRect,
@@ -12,6 +14,9 @@ import {
   type VectorPath,
 } from "@sqraft/core";
 import { Canvas2DBackend, drawDocument, screenToWorld, worldToScreen, type Viewport } from "@sqraft/render";
+import { imageFor, putAsset } from "../assets";
+import { panCrop, scaleCrop, type CropRect } from "../canvas/image-crop";
+import { paintCropOverlay } from "../canvas/crop-overlay";
 import { drawDraftPath, drawPathEditing, drawShapePreview } from "../canvas/vector-overlay";
 import {
   beginDraft,
@@ -106,7 +111,7 @@ const DEV_HUD = import.meta.env.DEV;
 
 let drag: {
   pointerId: number;
-  mode: "pan" | "create" | "move" | "resize" | "pen" | "vector";
+  mode: "pan" | "create" | "move" | "resize" | "pen" | "vector" | "crop";
   startX: number;
   startY: number;
   /** 指针按下时的屏幕坐标（用于 3px 拖拽阈值，双击不会把节点碰偏） */
@@ -147,6 +152,10 @@ let drag: {
   startVector?: VectorPath;
   /** 起笔时的绘图工具：拖动中切工具也不会用新工具提交（避免造出非法节点） */
   tool?: DrawTool;
+  /** 裁切拖拽：节点、起始裁切区域、手柄（null = 框内拖动） */
+  cropId?: NodeId;
+  cropHandle?: ResizeHandle | null;
+  cropStart?: CropRect;
 } | null = null;
 let preview: { x: number; y: number; w: number; h: number; valid: boolean } | null = null;
 
@@ -174,6 +183,10 @@ const hoverHandle = ref<ResizeHandle | null>(null);
 const hoverInactive = ref(false);
 const hoverLabel = ref(false);
 const dragging = ref(false);
+/** 插入图片用的隐藏文件选择器 */
+const imageInput = ref<HTMLInputElement | null>(null);
+/** 裁切拖拽期间挂起的事务：松手才落成一条撤销记录 */
+let cropCommit: (() => void) | null = null;
 
 /* 页面参考线（世界坐标，拖拽中计算，绘制时转屏幕） */
 let guideLines: GuideLine[] = [];
@@ -259,6 +272,7 @@ function draw() {
     vectorPreview: editing ? (vectorPreview ?? undefined) : undefined,
     geometryPreview: insertPreview?.boxes,
     dimPageIds,
+    resolveImage: (assetId) => imageFor(assetId),
   });
   backend.endFrame();
 
@@ -284,6 +298,7 @@ function draw() {
   });
 
   paintPathEditing(ctx);
+  paintCropOverlay(ctx, vp, docStore.doc, ui.cropNodeId);
   drawDraftPath(ctx, vp, pen.draft, pen.penHover);
   paintGuides(ctx, vp, guideLines, gapMarks);
   paintSlots(ctx, vp, ui.activePageId, ui.mode);
@@ -510,6 +525,14 @@ function onDoubleClick(e: MouseEvent) {
     startTextEdit(node);
     return;
   }
+  if (node.type === "image") {
+    // 双击图片进入裁切：框内拖动定位、手柄缩放裁切范围
+    select([node.id]);
+    ui.cropNodeId = node.id;
+    ui.expandedPageId = hit.pageId;
+    markDirty();
+    return;
+  }
   if (node.type === "path" && node.vector) {
     // 双击路径进入锚点编辑：显示锚点、隐藏 8 个缩放手柄
     select([node.id]);
@@ -619,8 +642,24 @@ function onPointerLeave() {
 }
 
 /** 放弃当前手势（Esc）：清掉预览与参考线，不产生任何命令。 */
+/** 窗口失焦时松手事件收不到：把裁切事务收尾，避免事务永久挂起。 */
+function onWindowBlurEndCrop(): void {
+  if (drag?.mode === "crop") {
+    endCropDrag();
+    drag = null;
+    dragging.value = false;
+    markDirty();
+  }
+}
+
 function cancelDrag() {
   if (!drag) return;
+  if (drag.mode === "crop" && drag.cropId) {
+    // 手势取消 = 回到拖拽前，且**不留撤销记录**（以前是再 apply 一条还原命令，
+    // 撤销栈里会多出一条净效果为空的"裁切图片"）
+    docStore.abortTransact();
+    endCropDrag();
+  }
   dragging.value = false;
   drag = null;
   resizePreview = null;
@@ -641,6 +680,162 @@ function clearInsertPreview() {
 }
 
 /** 根据手柄与指针位移计算新矩形（世界坐标；`keepAspect` 对应 Shift）。 */
+
+/* ---------------- 图片：插入 / 粘贴 / 拖入 ---------------- */
+
+/** 视口中心对应的世界坐标（粘贴图片的默认落点）。 */
+function viewportCenterWorld(): { x: number; y: number } {
+  return { x: vp.x + vp.width / (2 * vp.zoom), y: vp.y + vp.height / (2 * vp.zoom) };
+}
+
+/**
+ * 插入一批图片：按原始像素落地，超过页面 80% 时等比缩小，多张横向排开。
+ * 单张失败（格式/体积/解码）汇总成一次错误提示，不打断其它图片。
+ */
+async function insertImages(
+  files: readonly { bytes: Uint8Array; name: string }[],
+  anchor?: { x: number; y: number },
+): Promise<void> {
+  // 落在哪一页：拖放点/视口中心下的页面优先，其次活动页。
+  // 只认 activePageId 的话，拖动模式或视角停在别的页时图片会插到看不见的页里。
+  const under = anchor ? pageAt(anchor.x, anchor.y) : null;
+  const page = (under ? docStore.doc.nodes[under] : null) ?? activePage() ?? pageAtViewportCenter();
+  if (!page || page.type !== "page") {
+    await window.sqraft.dialog.error("当前没有可插入图片的页面");
+    return;
+  }
+  const pageId = page.id;
+
+  const problems: string[] = [];
+  const nodes: DocNode[] = [];
+  // 落点夹在页面内：视口中心可能落在页面外（缩放很小时），不夹会把图插到画板外
+  const local = anchor ? { x: anchor.x - page.x, y: anchor.y - page.y } : { x: 40, y: 40 };
+  let cursorX = Math.round(Math.min(Math.max(0, local.x), Math.max(0, page.width - 40)));
+  let cursorY = Math.round(Math.min(Math.max(0, local.y), Math.max(0, page.height - 40)));
+  const maxSide = Math.max(page.width, page.height) * 0.8;
+
+  for (const file of files) {
+    const asset = await putAsset(file.bytes);
+    if (!asset.ok) {
+      problems.push(`${file.name}：${asset.reason}`);
+      continue;
+    }
+    const scale = Math.min(1, maxSide / Math.max(asset.width, asset.height, 1));
+    const width = Math.max(1, Math.round(asset.width * scale));
+    const height = Math.max(1, Math.round(asset.height * scale));
+    nodes.push(
+      createNode("image", {
+        name: file.name.replace(/\.[^.]+$/, "") || "图片",
+        parentId: pageId,
+        x: cursorX,
+        y: cursorY,
+        width,
+        height,
+        image: {
+          assetId: asset.id,
+          naturalWidth: asset.width,
+          naturalHeight: asset.height,
+          crop: { x: 0, y: 0, width: asset.width, height: asset.height },
+        },
+      }),
+    );
+    cursorX += width + 16;
+  }
+
+  if (nodes.length > 0) {
+    docStore.apply({ type: "node.create", params: { nodes, parentId: pageId } }, "插入图片");
+    // 左栏跟着切到这一页，新图层才看得到
+    if (ui.mode === "edit" && ui.activePageId !== pageId) setActivePage(pageId, false);
+    ui.expandedPageId = pageId;
+    select(nodes.map((node) => node.id));
+  }
+  if (problems.length > 0) await window.sqraft.dialog.error(problems.join("\n"));
+}
+
+/** 从 File 列表读取字节（渲染层能直接读 File，不需要经过主进程）。 */
+async function insertFromFiles(files: FileList | readonly File[], anchor?: { x: number; y: number }): Promise<void> {
+  const payload: { bytes: Uint8Array; name: string }[] = [];
+  for (const file of Array.from(files)) {
+    if (!file.type.startsWith("image/") && !/\.(png|jpe?g|webp|gif|svg)$/i.test(file.name)) continue;
+    payload.push({ bytes: new Uint8Array(await file.arrayBuffer()), name: file.name });
+  }
+  if (payload.length > 0) await insertImages(payload, anchor);
+}
+
+/** 拖入文件：只要不是 .sqraft（那个交给主进程打开），其它图片就地插入。 */
+function onCanvasDrop(e: DragEvent): void {
+  const files = e.dataTransfer?.files;
+  if (!files || files.length === 0) return;
+  if (Array.from(files).some((file) => file.name.toLowerCase().endsWith(".sqraft"))) return;
+  e.preventDefault();
+  const rect = canvasRef.value?.getBoundingClientRect();
+  const anchor = rect ? screenToWorld(vp, e.clientX - rect.left, e.clientY - rect.top) : undefined;
+  void insertFromFiles(files, anchor);
+}
+
+function pickImages(): void {
+  imageInput.value?.click();
+}
+
+function onImagePicked(e: Event): void {
+  const input = e.target as HTMLInputElement;
+  if (input.files && input.files.length > 0) void insertFromFiles(input.files);
+  input.value = "";
+}
+
+/* ---------------- 图片裁切 ---------------- */
+
+/** 进入/退出裁切模式：只改 UI 状态，文档在拖动时才变。 */
+function toggleCrop(nodeId: NodeId | null): void {
+  ui.cropNodeId = ui.cropNodeId === nodeId ? null : nodeId;
+  ui.selection = nodeId ? [nodeId] : ui.selection;
+  markDirty();
+}
+
+function beginCrop(base: NonNullable<typeof drag>, node: DocNode, world: { x: number; y: number }, handle: ResizeHandle | null): void {
+  const ref = node.image;
+  if (!ref) return;
+  drag = {
+    ...base,
+    startX: world.x,
+    startY: world.y,
+    mode: "crop",
+    cropId: node.id,
+    cropHandle: handle,
+    cropStart: imageCropOf(node),
+  };
+  dragging.value = true;
+  // 整个拖拽合并成一条撤销记录：移动中每次都 apply，松手才提交
+  cropCommit = null;
+  void docStore.transact("裁切图片", () => new Promise<void>((resolve) => {
+    cropCommit = resolve;
+  }));
+}
+
+function endCropDrag(): void {
+  cropCommit?.();
+  cropCommit = null;
+}
+
+/** 角/边手柄 → 缩放的锚点方向。 */
+function cropCornerOf(handle: ResizeHandle): "nw" | "ne" | "se" | "sw" {
+  switch (handle) {
+    case "nw":
+    case "ne":
+    case "se":
+    case "sw":
+      return handle;
+    case "n":
+      return "ne";
+    case "s":
+      return "se";
+    case "e":
+      return "se";
+    default:
+      return "sw";
+  }
+}
+
 function onPointerDown(e: PointerEvent) {
   commitEditors();
   clearHover();
@@ -674,6 +869,24 @@ function onPointerDown(e: PointerEvent) {
 
   // 编辑模式：中键不再平移（视图操作属于拖动模式）
   if (e.button === 1) return;
+
+  // 裁切模式：图内拖动 = 移动裁切窗口，抓手柄 = 缩放裁切范围，点图外 = 退出
+  if (ui.cropNodeId) {
+    const cropId = ui.cropNodeId;
+    const node = docStore.doc.nodes[cropId];
+    if (!node?.image) {
+      ui.cropNodeId = null;
+    } else {
+      const hit = hitTest(vp, w.x, w.y);
+      if (hit?.id === cropId) {
+        const handleHit = hitHandle(sx, sy);
+        beginCrop(base, node, w, handleHit?.id === cropId ? handleHit.handle : null);
+        return;
+      }
+      ui.cropNodeId = null;
+      markDirty();
+    }
+  }
 
   // 0) 锚点编辑态：命中手柄/锚点则开始改形；点到别处则退出编辑
   if (pen.pathEdit) {
@@ -1037,6 +1250,36 @@ function onPointerMove(e: PointerEvent) {
       }
     }
     pen.vectorDrag.preview = vec;
+  } else if (drag.mode === "crop" && drag.cropId) {
+    const node = docStore.doc.nodes[drag.cropId];
+    const ref = node?.image;
+    if (node && ref && drag.cropStart) {
+      const world = screenToWorld(vp, sx, sy);
+      const natural = { width: ref.naturalWidth, height: ref.naturalHeight };
+      const box = { width: node.width, height: node.height };
+      const dx = world.x - drag.startX;
+      const dy = world.y - drag.startY;
+      let next: CropRect;
+      if (drag.cropHandle) {
+        const h = drag.cropHandle;
+        const signX = h.includes("e") ? 1 : h.includes("w") ? -1 : 0;
+        const signY = h.includes("s") ? 1 : h.includes("n") ? -1 : 0;
+        next = scaleCrop(
+          drag.cropStart,
+          natural,
+          box,
+          { width: box.width + signX * dx, height: box.height + signY * dy },
+          cropCornerOf(h),
+        );
+      } else {
+        next = panCrop(drag.cropStart, natural, box, dx, dy);
+      }
+      docStore.apply(
+        { type: "node.update", params: { nodeId: node.id, patch: { image: { ...ref, crop: next } } } },
+        "裁切图片",
+      );
+      drag.moved = true;
+    }
   } else if (drag.mode === "move") {
     drag.lastScreen = { x: sx, y: sy };
     drag.lastMods = { alt: e.altKey, meta: e.metaKey, shift: e.shiftKey };
@@ -1266,12 +1509,19 @@ function onPointerUp(e: PointerEvent) {
   clearInsertPreview();
   // 只有编辑模式才提交移动/缩放；模式被切换过就整段丢弃（不产生命令、不留预览）
   if (drag.mode !== "pan" && ui.mode !== "edit") {
+    if (drag.mode === "crop") endCropDrag();
     resizePreview = null;
     vectorPreview = null;
     preview = null;
     drag = null;
     guideLines = [];
     gapMarks = [];
+    markDirty();
+    return;
+  }
+  if (drag.mode === "crop") {
+    endCropDrag();
+    drag = null;
     markDirty();
     return;
   }
@@ -1488,6 +1738,12 @@ function onKey(e: KeyboardEvent) {
 
   if (e.key !== "Escape") return;
 
+  if (ui.cropNodeId) {
+    ui.cropNodeId = null;
+    markDirty();
+    return;
+  }
+
   // 拖动中 Esc：放弃整次手势（不产生命令，几何与父级保持原样）
   if (drag) {
     cancelDrag();
@@ -1578,6 +1834,8 @@ onMounted(() => {
   };
   hooks.focusNode = focusNode;
   hooks.focusPage = focusPage;
+  hooks.fitActivePage = fitActivePage;
+  hooks.insertImageBytes = (bytes, name) => insertImages([{ bytes, name }], viewportCenterWorld());
   hooks.getActivePageId = () => {
     if (ui.mode === "edit") return ensureActivePage()?.id ?? null;
     return pageAtViewportCenter()?.id ?? null;
@@ -1586,6 +1844,7 @@ onMounted(() => {
   hooks.requestRedraw = markDirty;
   unsub = docStore.subscribe(markDirty);
   stopShortcuts = registerShortcuts({
+    "file.insertImage": () => pickImages(),
     "mode.pan": () => {
       switchMode("pan");
       clearHover();
@@ -1650,6 +1909,7 @@ onMounted(() => {
   window.addEventListener("keydown", onKey, true);
   window.addEventListener("pointerdown", draftGuards.onWindowPointerDown, true);
   window.addEventListener("blur", draftGuards.onWindowBlur);
+  window.addEventListener("blur", onWindowBlurEndCrop);
 });
 
 onBeforeUnmount(() => {
@@ -1662,11 +1922,12 @@ onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKey, true);
   window.removeEventListener("pointerdown", draftGuards.onWindowPointerDown, true);
   window.removeEventListener("blur", draftGuards.onWindowBlur);
+  window.removeEventListener("blur", onWindowBlurEndCrop);
 });
 </script>
 
 <template>
-  <div class="viewport">
+  <div class="viewport" @dragover.prevent @drop="onCanvasDrop">
     <canvas ref="gridCanvasRef" class="canvas canvas-grid" aria-hidden="true" />
     <canvas ref="docCanvasRef" class="canvas canvas-doc" aria-hidden="true" />
     <canvas
@@ -1716,6 +1977,15 @@ onBeforeUnmount(() => {
 
     <div v-if="DEV_HUD" class="dev-hud">{{ devHud }}</div>
 
+    <input
+      ref="imageInput"
+      class="image-input"
+      type="file"
+      accept="image/png,image/jpeg,image/webp,image/gif,image/svg+xml"
+      multiple
+      @change="onImagePicked"
+    />
+
     <div class="zoom-bar glass">
       <button v-tip="{ label: '缩小', shortcut: keyOf('view.zoomOut') }" @click="zoomStep(1 / 1.2)">−</button>
       <button class="zoom-pct" v-tip="{ label: '选择缩放比例' }" @click="zoomMenuOpen = !zoomMenuOpen">{{ zoomPct }}%</button>
@@ -1748,6 +2018,10 @@ onBeforeUnmount(() => {
 .viewport {
   position: absolute;
   inset: 0;
+}
+
+.image-input {
+  display: none;
 }
 
 .canvas {

@@ -67,11 +67,13 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 - Electron 二进制在首次 `pnpm dev` 时才下载（`electron` 包没有 postinstall），首次启动会慢
 - 打包时 CLI 必须在 asar 外（`extraResources`），子进程不能从 asar 里执行；未签名构建要用 `CSC_IDENTITY_AUTO_DISCOVERY=false`
 - `electron-builder.yml` 里 `npmRebuild: false` 与 `electronDist: node_modules/electron/dist` 是提速项：项目没有原生模块，且复用已解压的 Electron。加原生依赖时必须去掉 `npmRebuild: false`
-- macOS 用 `hiddenInset` 标题栏：左栏顶部为红绿灯让出 58px，左上 340×46 是拖拽区（`-webkit-app-region: drag`），改布局时别把这块盖住
+- macOS 用 `hiddenInset` 标题栏：左栏顶部为红绿灯让出 58px，左上 340×46 是拖拽区（`-webkit-app-region: drag`），改布局时别把这块盖住（标题栏只留拖拽，不放控件）。当前文件名与「回欢迎页」是工具栏品牌名右侧的两个胶囊（`Toolbar.vue`）
 - MCP 端点：`userData/mcp.sock`（Unix）或 `\\.\pipe\sqraft-mcp`（Windows）；CLI 里有一份等价路径规则，改路径要两边同步
 - 菜单里**别用 `role: "close"`**：它自带 `CmdOrCtrl+W` 并直接注册，会在渲染层之前吃掉 ⌘W，而 ⌘W 是"关闭文档回欢迎页"（渲染层注册表）。关闭窗口用显式的 ⇧⌘W
 - `CloseGuard` 的放行状态必须随窗口重建复位（`attach()`）：macOS 关窗后从 Dock 重开，留着的 `allow` 会让守卫永久失效、静默丢稿
 - 窗口**启动铺满工作区**（`ready-to-show` 里 `setBounds(display.workArea)`）：不是 macOS 全屏模式、也不进系统「最大化」，所以手动缩放的尺寸不跨启动保留；`preferences.json` 里的 `maximized` 字段目前不参与恢复，别以为它还有用
+- dev 热更新会**重新执行渲染层模块**：注册 IPC 监听必须配套 `import.meta.hot?.dispose(...)` 清理（`file-session.ts` 已这么做）。漏了的话，一次关闭会被多个模块实例各弹一次"保存 / 不保存 / 取消"，看起来像 bug
+- 图片资源在 `.sqraft` 的 `assets/` 里按内容哈希命名，`doc.json` 只记 `assetId`；**不要**在保存时按"当前文档引用"清理资源——撤销栈里的节点还引用着它，清掉会让"保存后撤销"变破图（ADR-0022）
 - CLI 改过名（`sqraft-mcp.js` → `sqraft-mcp`）：`setup.ts` 的 `inspectEntry()` 必须把指向本应用 `bin` 下旧文件的软链判成 `stale` 并替换；否则老用户升级后 agent 断链，UI 还会因为"不是本应用创建"拒绝覆盖
 
 ## 验证

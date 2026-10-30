@@ -14,7 +14,7 @@ import {
   type Padding,
 } from "./model";
 
-export const CURRENT_FORMAT_VERSION = 2;
+export const CURRENT_FORMAT_VERSION = 3;
 
 function paddingOf(value: unknown): Padding {
   if (typeof value === "number") {
@@ -83,12 +83,27 @@ function migrateV1to2(state: DocState): void {
   for (const node of Object.values(state.nodes)) migrateNode(node);
 }
 
+/** 2 → 3：图片节点补齐原图尺寸与裁切区域（缺省整图）。 */
+function migrateV2to3(state: DocState): void {
+  for (const node of Object.values(state.nodes)) {
+    if (node.type !== "image" || !node.image) continue;
+    const ref = node.image;
+    ref.naturalWidth = Math.max(1, ref.naturalWidth || node.width || 1);
+    ref.naturalHeight = Math.max(1, ref.naturalHeight || node.height || 1);
+    ref.crop = ref.crop ?? { x: 0, y: 0, width: ref.naturalWidth, height: ref.naturalHeight };
+  }
+}
+
 /** 迁移入口：缺 formatVersion 视为 1；幂等。 */
 export function migrateDoc(state: DocState, fromVersion = state.formatVersion ?? 1): DocState {
   let version = fromVersion || 1;
   if (version < 2) {
     migrateV1to2(state);
     version = 2;
+  }
+  if (version < 3) {
+    migrateV2to3(state);
+    version = 3;
   }
   state.formatVersion = CURRENT_FORMAT_VERSION;
   return state;

@@ -638,3 +638,68 @@ describe("AI 工具：撤销粒度", () => {
     expect(store.doc.nodes[instance.nodeId as string]).toBeUndefined();
   });
 });
+
+describe("图片工具", () => {
+  const PNG_BASE64 = "iVBORw0KGgo=";
+
+  function host(calls: string[]) {
+    return {
+      newDocument: async () => true,
+      openDocument: async () => true,
+      addImage: async (data: string) => {
+        calls.push(data);
+        return { assetId: "asset-1", width: 640, height: 480 };
+      },
+    };
+  }
+
+  it("create_node kind=image 走宿主落资源，尺寸取原图", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const calls: string[] = [];
+    const run = makeExecutor(store, async () => "", undefined, undefined, host(calls));
+    const created = await call(run, "create_node", {
+      kind: "image",
+      image: { data: PNG_BASE64, mimeType: "image/png" },
+    });
+    const node = store.doc.nodes[created.nodeId as string];
+    expect(node.type).toBe("image");
+    expect(node.width).toBe(640);
+    expect(node.height).toBe(480);
+    expect(node.image).toEqual({
+      assetId: "asset-1",
+      naturalWidth: 640,
+      naturalHeight: 480,
+      crop: { x: 0, y: 0, width: 640, height: 480 },
+    });
+    expect(calls).toEqual([PNG_BASE64]);
+  });
+
+  it("超过 5MB 直接拒绝，不调宿主", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const calls: string[] = [];
+    const run = makeExecutor(store, async () => "", undefined, undefined, host(calls));
+    const huge = "A".repeat(Math.ceil((5 * 1024 * 1024 * 4) / 3) + 8);
+    await expect(call(run, "create_node", { kind: "image", image: { data: huge } })).rejects.toThrow(/5MB/);
+    expect(calls).toEqual([]);
+  });
+
+  it("update_node 能改裁切与蒙版标记", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const calls: string[] = [];
+    const run = makeExecutor(store, async () => "", undefined, undefined, host(calls));
+    const created = await call(run, "create_node", { kind: "image", image: { data: PNG_BASE64 } });
+    const nodeId = created.nodeId as string;
+    await call(run, "update_node", { nodeId, crop: { x: 10, y: 20, width: 100, height: 80 } });
+    expect(store.doc.nodes[nodeId].image?.crop).toEqual({ x: 10, y: 20, width: 100, height: 80 });
+
+    await call(run, "update_node", { nodeId, mask: true });
+    expect(store.doc.nodes[nodeId].isMask).toBe(true);
+  });
+
+  it("crop 用在非图片节点上给出可读错误", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const run = makeExecutor(store, async () => "");
+    const rect = await call(run, "create_node", { kind: "rect" });
+    await expect(call(run, "update_node", { nodeId: rect.nodeId, crop: { x: 0, y: 0 } })).rejects.toThrow(/图片节点/);
+  });
+});

@@ -67,6 +67,8 @@ const api: SqraftApi = {
   app: {
     info: () => ipcRenderer.invoke(CHANNELS.appInfo) as Promise<AppInfo>,
     copyText: (text: string) => ipcRenderer.send(CHANNELS.appCopyText, text),
+    readClipboardImage: () => ipcRenderer.invoke(CHANNELS.appClipboardImage) as Promise<Uint8Array | null>,
+    readClipboardText: () => ipcRenderer.invoke(CHANNELS.appClipboardText) as Promise<string>,
     onNewDocumentRequest: (handler: () => void) => {
       const listener = () => handler();
       ipcRenderer.on(CHANNELS.appNewDocument, listener);
@@ -104,6 +106,7 @@ window.addEventListener("DOMContentLoaded", () => {
     if (!file) return;
     event.preventDefault();
     const path = webUtils.getPathForFile(file);
-    if (path) ipcRenderer.send(CHANNELS.fileDropped, path);
+    // 只有 .sqraft 交给主进程打开；图片等其它文件留给渲染层自己处理
+    if (path && path.toLowerCase().endsWith(".sqraft")) ipcRenderer.send(CHANNELS.fileDropped, path);
   });
 });

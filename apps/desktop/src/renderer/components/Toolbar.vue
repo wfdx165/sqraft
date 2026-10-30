@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted } from "vue";
+import { computed, onBeforeUnmount, onMounted } from "vue";
 import { docStore, redo, switchMode, ui, undo, type ToolKind } from "../store";
-import { openDocument, saveDocument, saveDocumentAs } from "../file-session";
+import { closeDocument, fileState, openDocument, saveDocument, saveDocumentAs } from "../file-session";
 import { keyOf, PANEL_BINDING, registerShortcuts, shortcutUi, type ActionId } from "../shortcuts";
 import { vTip } from "../tooltip";
 import Icon from "./Icon.vue";
@@ -32,6 +32,21 @@ async function onSave() {
 async function onSaveAs() {
   await saveDocumentAs();
 }
+/** 关闭文档回欢迎页（有未保存改动时先问，和 ⌘W 同一条路径） */
+async function onClose() {
+  await closeDocument();
+}
+
+// 当前文件：名字 + 未保存标记（isDirty 不在响应式系统里，靠 ui.version 触发重算）
+const docName = computed(() => {
+  void ui.version;
+  return fileState.name;
+});
+const docDirty = computed(() => {
+  void ui.version;
+  return docStore.isDirty;
+});
+const docTip = computed(() => fileState.path ?? "尚未保存到磁盘");
 
 function toggleShortcuts() {
   shortcutUi.open = !shortcutUi.open;
@@ -49,6 +64,29 @@ onBeforeUnmount(() => unregister());
 <template>
   <header class="bar glass">
     <span class="brand"><span class="mark" />Sqraft</span>
+
+    <!-- 当前文件：名字（未保存带 •）+ 回欢迎页 -->
+    <div class="doc-chip">
+      <Icon name="pages" :size="12" class="doc-icon" />
+      <span class="doc-name" :title="docTip">{{ docName }}</span>
+      <span v-if="docDirty" class="doc-dot" aria-hidden="true">•</span>
+      <button
+        class="doc-close"
+        v-tip="{ label: '关闭文档，回到欢迎页', shortcut: keyOf('file.closeDoc') }"
+        @click="onClose"
+      >
+        <Icon name="close" :size="11" />
+      </button>
+    </div>
+    <button
+      class="doc-chip back"
+      v-tip="{ label: '关闭文档，回到欢迎页', shortcut: keyOf('file.closeDoc') }"
+      @click="onClose"
+    >
+      <Icon name="home" :size="12" /><span>欢迎页</span>
+    </button>
+
+    <span class="divider" />
 
     <nav class="group modes">
       <button
@@ -143,6 +181,84 @@ onBeforeUnmount(() => unregister());
   display: flex;
   align-items: center;
   gap: 2px;
+}
+
+/*
+ * 文档胶囊：不用工具区那种灰色分段底（--tint-4），否则和「拖动/编辑」看起来像同一组。
+ * 文件名 = 白底悬浮的"文档标签"；欢迎页 = 幽灵按钮，只在 hover 时浮出底色。
+ */
+.doc-chip {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 26px;
+  padding: 0 4px 0 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-pill);
+  background: var(--surface);
+  box-shadow: 0 1px 2px var(--tint-12);
+  color: var(--text);
+  font-size: 11.5px;
+  font-family: inherit;
+  white-space: nowrap;
+}
+
+.doc-icon {
+  flex: none;
+  color: var(--text-faint);
+}
+
+.doc-chip.back {
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.doc-chip.back:hover {
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.doc-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 140px;
+}
+
+/* 胶囊里的关闭：像标签页的 ×，不占视觉重量，hover 才浮出底色 */
+.doc-close {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 1px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition:
+    background var(--dur-fast) var(--ease),
+    color var(--dur-fast) var(--ease);
+}
+
+.doc-close:hover {
+  background: var(--tint-6);
+  color: var(--text);
+}
+
+/* 未保存标记用强调色，一眼能看出"还没落盘" */
+.doc-dot {
+  flex: none;
+  font-size: 13px;
+  line-height: 1;
+  color: var(--accent);
 }
 
 /* 模式分段：拖动 / 编辑 */

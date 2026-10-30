@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useInspector } from "../inspector/useInspector";
+import ImageSection from "./ImageSection.vue";
 import { EFFECT_TYPES } from "@sqraft/core";
 import { docStore, ui } from "../store";
 
@@ -154,6 +155,8 @@ const {
           </button>
         </div>
       </section>
+
+      <ImageSection v-if="!multi && node.type === 'image'" :node="node" />
 
       <section v-if="readonly" class="block">
         <div class="row">

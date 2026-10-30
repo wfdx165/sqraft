@@ -242,8 +242,10 @@ interface RenderBackend {
 manifest.json      格式版本、生成应用版本
 doc.json           最近一次快照
 ops.ndjson         快照之后的增量命令流
-assets/            图片、嵌入字体
+assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 ```
+
+- 图片节点只记 `assetId` 与原图尺寸，字节在 `assets/`；同一张图多处使用只存一份（ADR-0022）。
 
 - 打开文件 = 载入快照 + 重放增量（确定性命令保证重放安全）；
 - 保存时若增量超过阈值则折叠为新快照；

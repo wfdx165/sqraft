@@ -15,15 +15,18 @@ import { ui } from "./store";
 import { bindingRev, installShortcuts, keyOf, registerShortcuts, runAction, shortcutUi, type ActionId } from "./shortcuts";
 import { closeDocument, installFileSession, newDocument } from "./file-session";
 import { installMcpHost } from "./mcp-host";
+import { pasteFromClipboard } from "./paste";
 
 /** 菜单里出现的动作：键位同步给主进程，点击回送到渲染层同一个执行器。 */
 const MENU_ACTIONS: ActionId[] = [
   "file.new",
   "file.open",
+  "file.insertImage",
   "file.save",
   "file.saveAs",
   "file.closeDoc",
   "edit.undo",
+  "edit.paste",
   "edit.redo",
   "view.zoomIn",
   "view.zoomOut",
@@ -58,6 +61,7 @@ onMounted(() => {
   uninstallDoc = registerShortcuts({
     "file.new": () => void newDocument(),
     "file.closeDoc": () => void closeDocument(),
+    "edit.paste": () => void pasteFromClipboard(),
   });
 });
 onBeforeUnmount(() => {

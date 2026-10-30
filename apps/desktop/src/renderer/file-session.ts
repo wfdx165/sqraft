@@ -6,6 +6,7 @@ import { reactive } from "vue";
 import { createEmptyDoc, firstPageId } from "@sqraft/core";
 import { docStore, ui } from "./store";
 import { parseDoc, serializeDoc } from "./fileio";
+import { allAssets, assetEntryName, loadAssets, resetAssets } from "./assets";
 
 export const fileState = reactive({
   path: null as string | null,
@@ -14,6 +15,32 @@ export const fileState = reactive({
 });
 
 const bridge = window.sqraft;
+
+/** 单文件体积上限：超过就提示而不是让 zip 卡死界面。 */
+const MAX_SAVE_BYTES = 300 * 1024 * 1024;
+
+/** 保存时把仓库里的图片一并写进 zip（不在文档里的孤儿资源也一并带上，避免撤销后丢图）。 */
+function saveEntries(): { name: string; bytes: Uint8Array }[] {
+  return allAssets().map((asset) => ({ name: assetEntryName(asset), bytes: asset.bytes }));
+}
+
+/**
+ * 保存体积预检：**在打包之前**算，否则 zip 已经在内存里建好了，
+ * 上限只能拦住写盘、拦不住内存峰值（文档 + 全部资源 + zip ≈ 两倍）。
+ */
+function estimatedSaveBytes(entries: readonly { bytes: Uint8Array }[]): number {
+  const assets = entries.reduce((sum, entry) => sum + entry.bytes.length, 0);
+  return assets + JSON.stringify(docStore.snapshot()).length;
+}
+
+/** 超限就提示并放弃保存；返回 true 表示可以继续。 */
+async function withinSaveLimit(entries: readonly { bytes: Uint8Array }[]): Promise<boolean> {
+  if (estimatedSaveBytes(entries) <= MAX_SAVE_BYTES) return true;
+  await bridge.dialog.error(
+    `文件超过 ${MAX_SAVE_BYTES / 1024 / 1024}MB，已取消保存。请减少或压缩图片后重试。`,
+  );
+  return false;
+}
 
 function suggestedName(): string {
   return fileState.name === "未命名" ? "untitled.sqraft" : fileState.name;
@@ -39,6 +66,7 @@ async function confirmReplaceCurrent(): Promise<boolean> {
  */
 export async function newDocument(): Promise<boolean> {
   if (!(await confirmReplaceCurrent())) return false;
+  resetAssets();
   docStore.replace(createEmptyDoc());
   fileState.path = null;
   fileState.name = "未命名";
@@ -56,6 +84,8 @@ export async function newDocument(): Promise<boolean> {
 export async function closeDocument(): Promise<void> {
   if (!ui.docOpen) return;
   if (!(await confirmReplaceCurrent())) return;
+  // 资源跟着文档生命周期走：回到欢迎页时位图与 object URL 都该释放
+  resetAssets();
   docStore.replace(createEmptyDoc());
   fileState.path = null;
   fileState.name = "未命名";
@@ -63,6 +93,7 @@ export async function closeDocument(): Promise<void> {
   ui.docOpen = false;
   ui.selection = [];
   ui.instanceContext = [];
+  ui.cropNodeId = null;
   syncTitle();
 }
 
@@ -92,7 +123,10 @@ export async function openDocumentPath(path: string): Promise<boolean> {
 
 async function adoptFile(file: { path: string; name: string; mtimeMs: number; bytes: Uint8Array }): Promise<boolean> {
   try {
-    const state = await parseDoc(file.bytes);
+    const { state, files } = await parseDoc(file.bytes);
+    // 先确认文件能解析，再丢弃当前文档的资源，避免打开失败后连旧图一起没了
+    resetAssets();
+    loadAssets(files);
     docStore.replace(state);
     ui.docOpen = true;
     fileState.path = file.path;
@@ -113,7 +147,13 @@ async function adoptFile(file: { path: string; name: string; mtimeMs: number; by
 /** 保存到当前文件；没有路径时等价于另存为。返回是否真的落盘。 */
 export async function saveDocument(): Promise<boolean> {
   if (!fileState.path) return saveDocumentAs();
-  const bytes = await serializeDoc(docStore.snapshot());
+  const entries = saveEntries();
+  if (!(await withinSaveLimit(entries))) return false;
+  const bytes = await serializeDoc(docStore.snapshot(), entries);
+  if (bytes.length > MAX_SAVE_BYTES) {
+    await bridge.dialog.error(`文件超过 ${MAX_SAVE_BYTES / 1024 / 1024}MB，已取消保存。请减少或压缩图片后重试。`);
+    return false;
+  }
   const result = await bridge.file.save({
     path: fileState.path,
     bytes,
@@ -137,7 +177,13 @@ export async function saveDocument(): Promise<boolean> {
 
 /** 另存为：始终弹系统对话框，成功后切换当前文件。 */
 export async function saveDocumentAs(): Promise<boolean> {
-  const bytes = await serializeDoc(docStore.snapshot());
+  const entries = saveEntries();
+  if (!(await withinSaveLimit(entries))) return false;
+  const bytes = await serializeDoc(docStore.snapshot(), entries);
+  if (bytes.length > MAX_SAVE_BYTES) {
+    await bridge.dialog.error(`文件超过 ${MAX_SAVE_BYTES / 1024 / 1024}MB，已取消保存。请减少或压缩图片后重试。`);
+    return false;
+  }
   const result = await bridge.file.saveAs({ suggestedName: suggestedName(), bytes });
   if (result.status === "canceled") return false;
   if (result.status === "error") {
@@ -170,45 +216,74 @@ export function syncTitle(): void {
 }
 
 let installed = false;
-let handlingClose = false;
+/**
+ * 关闭流程的全局锁：挂在 `globalThis` 上而不是模块变量上。
+ * dev 热更新会重新执行本模块，模块级布尔值各实例各一份，挡不住重复请求。
+ */
+interface CloseState {
+  busy: boolean;
+}
+const closeState: CloseState = ((globalThis as { __sqraftClose?: CloseState }).__sqraftClose ??= {
+  busy: false,
+});
+/** 已注册的监听（含脏状态订阅），HMR 销毁时逐一摘掉 */
+const disposers: (() => void)[] = [];
 
 /** 安装脏状态订阅与关闭拦截；由 App 在挂载时调用一次。 */
 export function installFileSession(): void {
   if (installed) return;
   installed = true;
-  docStore.subscribe(() => syncTitle());
+  disposers.push(docStore.subscribe(() => syncTitle()));
   syncTitle();
 
   bridge.app.signalReady();
-  bridge.app.onNewDocumentRequest(() => {
-    if (!ui.docOpen) void newDocument();
-  });
+  disposers.push(
+    bridge.app.onNewDocumentRequest(() => {
+      if (!ui.docOpen) void newDocument();
+    }),
+  );
 
-  bridge.app.onOpenRequest((path) => {
-    void openDocumentPath(path);
-  });
+  disposers.push(
+    bridge.app.onOpenRequest((path) => {
+      void openDocumentPath(path);
+    }),
+  );
 
-  bridge.app.onCloseRequest(async ({ quit }) => {
-    if (handlingClose) return;
-    handlingClose = true;
-    try {
-      if (!docStore.isDirty) {
-        bridge.app.finishClose(quit);
-        return;
+  disposers.push(
+    bridge.app.onCloseRequest(async ({ quit }) => {
+      if (import.meta.env.DEV) {
+        console.info(`[close] request quit=${quit} dirty=${docStore.isDirty} busy=${closeState.busy}`);
       }
-      const choice = await bridge.dialog.unsaved();
-      if (choice === "cancel") {
-        bridge.app.cancelClose();
-        return;
+      if (closeState.busy) return;
+      closeState.busy = true;
+      try {
+        if (!docStore.isDirty) {
+          bridge.app.finishClose(quit);
+          return;
+        }
+        const choice = await bridge.dialog.unsaved();
+        if (choice === "cancel") {
+          bridge.app.cancelClose();
+          return;
+        }
+        if (choice === "discard") {
+          bridge.app.finishClose(quit);
+          return;
+        }
+        if (await saveDocument()) bridge.app.finishClose(quit);
+        else bridge.app.cancelClose();
+      } finally {
+        closeState.busy = false;
       }
-      if (choice === "discard") {
-        bridge.app.finishClose(quit);
-        return;
-      }
-      if (await saveDocument()) bridge.app.finishClose(quit);
-      else bridge.app.cancelClose();
-    } finally {
-      handlingClose = false;
-    }
-  });
+    }),
+  );
 }
+
+/**
+ * dev 热更新会重新执行本模块：旧监听不清掉的话，一次关闭会被多个实例各处理一遍。
+ * 构建产物里 `import.meta.hot` 为 undefined。
+ */
+import.meta.hot?.dispose(() => {
+  for (const off of disposers.splice(0)) off();
+  installed = false;
+});

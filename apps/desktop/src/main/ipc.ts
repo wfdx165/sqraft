@@ -31,6 +31,9 @@ export function requestNewDocumentOnReady(): void {
   newDocumentOnReady = true;
 }
 
+/** 正在进行中的"未保存"对话框（并发请求共享同一个结果） */
+let unsavedDialog: Promise<UnsavedChoice> | null = null;
+
 export function registerFileChannels(): void {
   ipcMain.handle(CHANNELS.fileOpen, async (event): Promise<OpenFileResult> => {
     const window = windowOf(event.sender);
@@ -109,7 +112,14 @@ export function registerFileChannels(): void {
     }
   });
 
-  ipcMain.handle(CHANNELS.dialogUnsaved, async (event): Promise<UnsavedChoice> => {
+  // 同一时刻只允许一个"未保存"框：渲染层若有多个监听（dev 热更新残留）同时请求，
+  // 复用同一个结果，避免多个 sheet 叠在一起、用户被迫连点几次。
+  ipcMain.handle(CHANNELS.dialogUnsaved, (event): Promise<UnsavedChoice> => {
+    if (unsavedDialog) {
+      if (!app.isPackaged) console.info("[close] 已有保存对话框，复用同一个结果");
+      return unsavedDialog;
+    }
+    if (!app.isPackaged) console.info("[close] 打开保存对话框");
     const window = windowOf(event.sender);
     const options: Electron.MessageBoxOptions = {
       type: "warning",
@@ -119,8 +129,12 @@ export function registerFileChannels(): void {
       message: "当前文档有未保存的改动",
       detail: "关闭前要保存吗？",
     };
-    const result = window ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
-    return (["save", "discard", "cancel"] as const)[result.response] ?? "cancel";
+    unsavedDialog = (window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options))
+      .then((result) => (["save", "discard", "cancel"] as const)[result.response] ?? "cancel")
+      .finally(() => {
+        unsavedDialog = null;
+      });
+    return unsavedDialog;
   });
 
   ipcMain.handle(CHANNELS.dialogOverwrite, async (event): Promise<OverwriteChoice> => {

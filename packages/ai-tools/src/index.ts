@@ -166,15 +166,25 @@ export const tools: ToolDefinition[] = [
   {
     name: "create_node",
     description:
-      "在父节点下创建一个节点。kind 支持 frame/rect/ellipse/polygon/line/path/text/component/slot。component 只能建在页面顶层；slot 必须位于主组件内并提供唯一名字。polygon 是参数化多边形，用 sides 指定边数（3–12，默认 3，3 即三角形），顶点由 width/height 包围盒推导。path 用 points 描述锚点（父容器坐标，手柄为相对锚点的偏移），闭合路径至少 3 个锚点、开放路径至少 2 个。样式颜色必须用 fillToken / strokeToken（Token 名），不允许字面量色值。",
+      "在父节点下创建一个节点。kind 支持 frame/rect/ellipse/polygon/line/path/text/image/component/slot。component 只能建在页面顶层；slot 必须位于主组件内并提供唯一名字。polygon 是参数化多边形，用 sides 指定边数（3–12，默认 3，3 即三角形），顶点由 width/height 包围盒推导。path 用 points 描述锚点（父容器坐标，手柄为相对锚点的偏移），闭合路径至少 3 个锚点、开放路径至少 2 个。image 用 image.data 传 base64（上限 5MB），不接受文件路径。样式颜色必须用 fillToken / strokeToken（Token 名），不允许字面量色值。",
     input_schema: {
       type: "object",
       properties: {
         parentId: { type: "string", description: "父节点 id；省略则建到当前页面" },
-        kind: { type: "string", enum: ["frame", "rect", "ellipse", "polygon", "line", "path", "text", "component", "slot"] },
+        kind: { type: "string", enum: ["frame", "rect", "ellipse", "polygon", "line", "path", "text", "image", "component", "slot"] },
         name: { type: "string", description: "slot 必填且组件内唯一" },
         sides: { type: "number", description: "kind=polygon 的边数，3–12，默认 3" },
         text: { type: "string", description: "kind=text 时的文案" },
+        image: {
+          type: "object",
+          description: "kind=image 时的位图：base64（不含 data: 前缀）+ MIME；上限 5MB",
+          properties: {
+            data: { type: "string" },
+            mimeType: { type: "string" },
+          },
+          required: ["data"],
+          additionalProperties: false,
+        },
         closed: { type: "boolean", description: "kind=path 时是否闭合，默认 false" },
         points: {
           type: "array",
@@ -287,7 +297,7 @@ export const tools: ToolDefinition[] = [
   {
     name: "update_node",
     description:
-      "更新节点属性。fill 仅接受 Token 引用（fillToken）。polygon 可用 sides 改边数（3–12）。path 可用 points（父容器坐标）整体替换锚点、用 closed 切换闭合；只改 width/height 时锚点会按比例缩放。",
+      "更新节点属性。fill 仅接受 Token 引用（fillToken）。polygon 可用 sides 改边数（3–12）。path 可用 points（父容器坐标）整体替换锚点、用 closed 切换闭合；只改 width/height 时锚点会按比例缩放。图片节点可用 crop 改可见区域（原图像素坐标）、用 mask 标记为蒙版（遮罩同父级上方相邻兄弟）。",
     input_schema: {
       type: "object",
       properties: {
@@ -295,6 +305,18 @@ export const tools: ToolDefinition[] = [
         text: { type: "string" },
         sides: { type: "number", description: "polygon 的边数，3–12" },
         closed: { type: "boolean" },
+        crop: {
+          type: "object",
+          description: "图片的可见区域（原图像素坐标）；省略的字段保持原值",
+          properties: {
+            x: { type: "number" },
+            y: { type: "number" },
+            width: { type: "number" },
+            height: { type: "number" },
+          },
+          additionalProperties: false,
+        },
+        mask: { type: "boolean", description: "true = 作为蒙版，遮罩同父级上方相邻兄弟" },
         points: {
           type: "array",
           minItems: 2,
@@ -380,6 +402,11 @@ export interface ScreenshotRegion {
 export interface DocumentHost {
   /** 返回是否真的新建了；用户在"保存 / 不保存 / 取消"里选取消时返回 false。 */
   newDocument(): Promise<boolean>;
+  /**
+   * 把 base64 位图落进资源仓库，返回 assetId 与原图尺寸。
+   * 只收数据、不收路径——工具层不允许读任意文件。
+   */
+  addImage?(data: string, mimeType: string): Promise<{ assetId: string; width: number; height: number }>;
   /** 返回是否真的打开了文件；用户取消返回 false。 */
   openDocument(): Promise<boolean>;
 }
@@ -612,7 +639,9 @@ export function makeExecutor(
       }
       case "create_node": {
         const kind = String(args.kind) as
-          | "frame" | "rect" | "ellipse" | "polygon" | "line" | "path" | "text" | "component" | "slot";
+          | "frame" | "rect" | "ellipse" | "polygon" | "line" | "path" | "text" | "image"
+          | "component" | "slot";
+        const isImage = kind === "image";
         const isPath = kind === "path";
         const isPolygon = kind === "polygon";
         const isComponent = kind === "component";
@@ -677,16 +706,36 @@ export function makeExecutor(
         // 画板与 GUI 工具一致：默认白底
         if (kind === "frame" && !style.fill && !style.stroke) style.fill = { token: "color/surface" };
 
+        let imageRef: DocNode["image"];
+        if (isImage) {
+          if (!documentHost?.addImage) throw new Error("当前宿主不支持插入图片");
+          const spec = args.image as { data?: unknown; mimeType?: unknown } | undefined;
+          const data = typeof spec?.data === "string" ? spec.data : "";
+          if (!data) throw new Error("kind=image 必须提供 image.data（base64）");
+          // base64 长度换算出字节数：5MB 上限，避免把一条 JSON-RPC 撑爆
+          if (Math.ceil((data.length * 3) / 4) > 5 * 1024 * 1024) {
+            throw new Error("图片超过 5MB 上限（GUI 拖入可到 20MB）");
+          }
+          const asset = await documentHost.addImage(data, String(spec?.mimeType ?? "image/png"));
+          imageRef = {
+            assetId: asset.assetId,
+            naturalWidth: asset.width,
+            naturalHeight: asset.height,
+            crop: { x: 0, y: 0, width: asset.width, height: asset.height },
+          };
+        }
+
         const node = createNode(kind, {
           name: name ?? (isPolygon ? (clampSides(args.sides as number) === 3 ? "三角形" : "多边形") : kind),
           // 路径的 points 是父容器坐标：先放在 0,0，由 store 归一化并推导节点框
           x: isPath ? 0 : ((args.x as number) ?? 0),
           y: isPath ? 0 : ((args.y as number) ?? 0),
-          width: isPath ? 1 : ((args.width as number) ?? 100),
-          height: isPath ? 1 : ((args.height as number) ?? 100),
+          width: isPath ? 1 : ((args.width as number) ?? imageRef?.naturalWidth ?? 100),
+          height: isPath ? 1 : ((args.height as number) ?? imageRef?.naturalHeight ?? 100),
           text: args.text as string | undefined,
           vector: isPath ? { closed, anchors: points! } : undefined,
           sides: isPolygon ? clampSides(args.sides as number) : undefined,
+          image: imageRef,
           style,
           ...applyNodeArgs(args),
         });
@@ -794,6 +843,22 @@ export function makeExecutor(
 
         const style = applyStyleArgs(node.style, args);
         if (JSON.stringify(style) !== JSON.stringify(node.style)) patch.style = style;
+
+        if (args.mask !== undefined) patch.isMask = Boolean(args.mask);
+        if (args.crop !== undefined) {
+          if (node.type !== "image" || !node.image) throw new Error("crop 仅适用于图片节点");
+          const raw = args.crop as { x?: unknown; y?: unknown; width?: unknown; height?: unknown };
+          const current = node.image.crop;
+          patch.image = {
+            ...node.image,
+            crop: {
+              x: Number(raw.x ?? current.x),
+              y: Number(raw.y ?? current.y),
+              width: Number(raw.width ?? current.width),
+              height: Number(raw.height ?? current.height),
+            },
+          };
+        }
 
         const points = readPoints(args.points);
         const closedArg = args.closed !== undefined ? Boolean(args.closed) : undefined;

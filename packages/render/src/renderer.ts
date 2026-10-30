@@ -5,8 +5,8 @@
  */
 
 import type { DocNode, DocState, Effect, NodeId, Rect, VectorPath } from "@sqraft/core";
-import { cornerRadiusOf, resolvePaint, polygonPoints, subtreeWorldBounds } from "@sqraft/core";
-import type { RenderBackend, RenderContext, RenderEffect, Viewport } from "./backend";
+import { cornerRadiusOf, imageCropOf, maskPlan, resolvePaint, polygonPoints, subtreeWorldBounds } from "@sqraft/core";
+import type { RenderBackend, RenderContext, RenderEffect, ResolvedImage, Viewport } from "./backend";
 
 const CONTAINER_TYPES = new Set(["page", "frame", "group"]);
 
@@ -15,9 +15,11 @@ function drawSelf(
   ctx: RenderContext,
   node: DocNode,
   vectorOverride?: VectorPath,
+  options?: { mask?: boolean },
 ): void {
   const fill = resolvePaint(ctx.doc, node.style.fill);
-  const stroke = resolvePaint(ctx.doc, node.style.stroke);
+  // 蒙版只取形状的填充：描边会让"裁出来的边"多出一圈，和 Figma 不一致
+  const stroke = options?.mask ? undefined : resolvePaint(ctx.doc, node.style.stroke);
   switch (node.type) {
     // 画板、矩形、组件、实例、插槽共用同一套样式规则：有填充才画底色
     case "frame":
@@ -45,6 +47,16 @@ function drawSelf(
     case "polygon":
       backend.drawPolygon(node, polygonPoints(node.sides, node.width, node.height), fill, stroke, node.style.strokeWidth ?? 1);
       break;
+    case "image": {
+      const resolved = node.image ? ctx.resolveImage(node.image.assetId) : null;
+      if (resolved && node.image) {
+        backend.drawImage(node, resolved, imageCropOf(node), cornerRadiusOf(node.style));
+      } else {
+        // 资源没带过来或还没解码完：画占位，别让画布出现"什么都没有"的空洞
+        backend.drawImagePlaceholder(node, cornerRadiusOf(node.style));
+      }
+      break;
+    }
     default:
       if (!CONTAINER_TYPES.has(node.type)) {
         backend.drawRect(node, fill, stroke, node.style.strokeWidth, cornerRadiusOf(node.style));
@@ -109,6 +121,35 @@ function opacityLayerBounds(
   };
 }
 
+/**
+ * 绘制一组兄弟节点。`isMask` 的节点不单独出现：它用自己的形状（填充 alpha）
+ * 裁掉后一位兄弟，被遮罩的节点整体进离屏再合成。配对规则在 core 的 `maskPlan`。
+ */
+function drawChildren(
+  backend: RenderBackend,
+  ctx: RenderContext,
+  children: readonly NodeId[],
+  options: DrawOptions,
+): void {
+  for (const entry of maskPlan(children, (id) => ctx.doc.nodes[id]?.isMask === true)) {
+    if (entry.kind === "plain") {
+      const node = ctx.doc.nodes[entry.id];
+      if (node) drawNode(backend, ctx, node, options);
+      continue;
+    }
+    const mask = ctx.doc.nodes[entry.maskId];
+    const target = ctx.doc.nodes[entry.targetId];
+    // 蒙版或目标缺失/隐藏：整对跳过（蒙版本身不单独出现，与 Figma 一致）
+    if (!mask || !target || !mask.visible || !target.visible) continue;
+    backend.pushMaskLayer(subtreeWorldBounds(ctx.doc, target.id) ?? undefined);
+    drawNode(backend, ctx, target, options);
+    backend.popMaskLayer(
+      () => drawSelf(backend, ctx, mask, undefined, { mask: true }),
+      mask.opacity ?? 1,
+    );
+  }
+}
+
 function drawNode(
   backend: RenderBackend,
   ctx: RenderContext,
@@ -135,10 +176,7 @@ function drawNode(
     backend.pushTransform(geo.x, geo.y, node.rotation, geo.width, geo.height);
     const clipped = node.clip && (node.type === "frame" || node.type === "component" || node.type === "instance");
     if (clipped) backend.pushClip(0, 0, geo.width, geo.height, cornerRadiusOf(node.style));
-    for (const childId of node.children) {
-      const child = ctx.doc.nodes[childId];
-      if (child) drawNode(backend, ctx, child, options);
-    }
+    drawChildren(backend, ctx, node.children, options);
     if (clipped) backend.popClip();
     backend.popTransform();
   }
@@ -161,6 +199,8 @@ export interface DrawOptions {
   geometryPreview?: ReadonlyMap<NodeId, { x: number; y: number; width: number; height: number }>;
   /** 需要淡化的页面（编辑模式下的非活动页）。 */
   dimPageIds?: readonly NodeId[];
+  /** 图片解码缓存入口（渲染层注入；缺省视为全部缺失） */
+  resolveImage?: (assetId: string) => ResolvedImage | null;
 }
 
 /** 绘制所有页面与内容（不含帧生命周期，便于宿主插入背景网格）。 */
@@ -168,6 +208,7 @@ export function drawDocument(backend: RenderBackend, doc: DocState, options: Dra
   const ctx: RenderContext = {
     doc,
     resolveColor: (p) => resolvePaint(doc, p),
+    resolveImage: options.resolveImage ?? (() => null),
   };
   for (const pageId of doc.rootIds) {
     const page = doc.nodes[pageId];
@@ -188,10 +229,7 @@ export function drawDocument(backend: RenderBackend, doc: DocState, options: Dra
       true,
     );
     backend.pushTransform(geo.x, geo.y);
-    for (const childId of page.children) {
-      const child = doc.nodes[childId];
-      if (child) drawNode(backend, ctx, child, options);
-    }
+    drawChildren(backend, ctx, page.children, options);
     backend.popTransform();
     if (dimmed) backend.popOpacity();
   }

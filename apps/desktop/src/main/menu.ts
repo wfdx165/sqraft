@@ -118,6 +118,7 @@ export function buildTemplate(platform: NodeJS.Platform = process.platform): Men
     submenu: [
       actionItem("file.new", "新建", mac),
       actionItem("file.open", "打开…", mac),
+      actionItem("file.insertImage", "插入图片…", mac),
       actionItem("file.save", "保存", mac),
       actionItem("file.saveAs", "另存为…", mac),
       { type: "separator" },
@@ -150,7 +151,7 @@ export function buildTemplate(platform: NodeJS.Platform = process.platform): Men
       { type: "separator" },
       { role: "cut", label: "剪切" },
       { role: "copy", label: "复制" },
-      { role: "paste", label: "粘贴" },
+      actionItem("edit.paste", "粘贴", mac),
       { role: "selectAll", label: "全选" },
     ],
   });
