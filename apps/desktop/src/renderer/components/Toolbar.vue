@@ -4,6 +4,7 @@ import { docStore, redo, switchMode, ui, undo, type ToolKind } from "../store";
 import { closeDocument, fileState, openDocument, saveDocument, saveDocumentAs } from "../file-session";
 import { keyOf, PANEL_BINDING, registerShortcuts, shortcutUi, type ActionId } from "../shortcuts";
 import { vTip } from "../tooltip";
+import appIcon from "../brand/app-icon.png";
 import Icon from "./Icon.vue";
 
 const tools: { kind: ToolKind; action: ActionId; label: string; icon: string }[] = [
@@ -63,7 +64,7 @@ onBeforeUnmount(() => unregister());
 
 <template>
   <header class="bar glass">
-    <span class="brand"><span class="mark" />Sqraft</span>
+    <span class="brand"><img class="mark" :src="appIcon" alt="" />Sqraft</span>
 
     <!-- 当前文件：名字（未保存带 •）+ 回欢迎页 -->
     <div class="doc-chip">
@@ -169,12 +170,16 @@ onBeforeUnmount(() => unregister());
   color: var(--text);
 }
 
+/* 应用图标（打包用的是 1024px 原图，这里放 64px 版本，16px 下 4 倍图足够清晰） */
 .mark {
-  width: 14px;
-  height: 14px;
-  border-radius: 4px;
-  background: linear-gradient(135deg, #8b8df5, #5b5fe8);
-  box-shadow: 0 0 14px rgba(124, 127, 242, 0.5);
+  display: block;
+  flex: none;
+  width: 16px;
+  height: 16px;
+  /* 图标自带圆角与透明外边，不要再裁一次，也不要让它参与图片拖拽 */
+  -webkit-user-drag: none;
+  user-select: none;
+  filter: drop-shadow(0 1px 2px rgba(91, 95, 232, 0.35));
 }
 
 .group {
