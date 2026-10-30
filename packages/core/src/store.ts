@@ -54,8 +54,11 @@ export type Command =
   | { type: "node.rotate"; params: RotateParams }
   /** 把选区转为主组件：单容器原地转换/提升，多选自动包一层 */
   | { type: "component.create"; params: { nodeIds: NodeId[]; componentId?: NodeId; name?: string } }
-  /** 窄重父级：保持调用方给定的局部坐标；用于组件包裹、顶层提升与插槽填充 */
-  | { type: "node.reparent"; params: { nodeId: NodeId; parentId: NodeId; index?: number; x?: number; y?: number } }
+  /**
+   * 窄重父级：保持调用方给定的局部坐标；用于组件包裹、顶层提升与插槽填充。
+   * `parentId: null` = 提到文档根节点（只允许主组件，见 ADR-0025）。
+   */
+  | { type: "node.reparent"; params: { nodeId: NodeId; parentId: NodeId | null; index?: number; x?: number; y?: number } }
   /** 插入实例并物化整棵子树；nodeId 由调用方在命令创建前生成 */
   | { type: "instance.create"; params: { componentId: NodeId; parentId: NodeId; nodeId: NodeId; x: number; y: number; name?: string } }
   /** 重置实例覆盖：不传 mainId 表示全部；fields 支持顶层字段与 style.<子字段> */
@@ -693,20 +696,16 @@ export class DocStore {
     if (top.some((id) => this.pageOf(id)?.id !== page.id)) throw new Error("选区必须位于同一页面");
     const name = nameFor(cmd.params.name);
 
-    // 单个画板/分组：原地转换；嵌套时提升到页面顶层，保持世界坐标
+    // 单个画板/分组：原地转换，但主组件属于文档根（ADR-0025）。
+    // 提到根时坐标换成世界坐标，画面位置不变。
     if (top.length === 1) {
       const node = this.state.nodes[top[0]];
       if (node.type === "frame" || node.type === "group") {
-        const out: Command[] = [];
-        if (node.parentId !== page.id) {
-          const r = worldRect(this.state, node.id)!;
-          out.push({
-            type: "node.reparent",
-            params: { nodeId: node.id, parentId: page.id, x: r.x - page.x, y: r.y - page.y },
-          });
-        }
-        out.push({ type: "node.update", params: { nodeId: node.id, patch: { type: "component", name } } });
-        return out;
+        const r = worldRect(this.state, node.id)!;
+        return [
+          { type: "node.reparent", params: { nodeId: node.id, parentId: null, x: r.x, y: r.y } },
+          { type: "node.update", params: { nodeId: node.id, patch: { type: "component", name } } },
+        ];
       }
     }
 
@@ -722,14 +721,14 @@ export class DocStore {
     const component = createNode("component", {
       id: componentId,
       name,
-      parentId: page.id,
-      x: left - page.x,
-      y: topY - page.y,
+      parentId: null,
+      x: left,
+      y: topY,
       width: Math.max(1, right - left),
       height: Math.max(1, bottom - topY),
       style: {},
     });
-    const out: Command[] = [{ type: "node.create", params: { nodes: [component], parentId: page.id } }];
+    const out: Command[] = [{ type: "node.create", params: { nodes: [component], parentId: null } }];
     for (const id of top) {
       const r = worldRect(this.state, id)!;
       out.push({
@@ -972,7 +971,7 @@ export class DocStore {
         case "node.reparent": {
           const { nodeId, parentId } = cmd.params;
           if (this.isLockedChain(nodeId)) throw new Error("不能移动已锁定节点");
-          if (this.isLockedChain(parentId)) throw new Error("不能修改已锁定节点的内容");
+          if (parentId && this.isLockedChain(parentId)) throw new Error("不能修改已锁定节点的内容");
           break;
         }
         case "instance.create": {
@@ -1017,11 +1016,26 @@ export class DocStore {
    * 批命令前置校验：applyOne 内会抛错的规则全部前移。
    * 保证「要么全成、要么全不成」——中途抛错不会留下已生效但没进撤销栈的改动。
    */
-  private validateOne(cmd: Command, pending: Set<NodeId> = new Set()): void {
+  private validateOne(cmd: Command, pending: Set<NodeId> = new Set(), pendingTypes: Map<NodeId, DocNode["type"]> = new Map()): void {
     switch (cmd.type) {
-      case "node.create":
+      case "node.create": {
         for (const n of cmd.params.nodes) if (n.vector) validateVector(n.vector);
+        const rootNode = cmd.params.nodes[0];
+        const components = cmd.params.nodes.filter((n) => n.type === "component");
+        // 主组件是单独的根节点：一批里最多一个，且必须在首位、父级为根
+        if (components.length > 0 && (components.length > 1 || rootNode?.type !== "component")) {
+          throw new Error("主组件必须是单独的根节点");
+        }
+        // 根节点只有页面与主组件（ADR-0025）；主组件反过来也只能放在根上
+        if (cmd.params.parentId === null) {
+          if (rootNode && rootNode.type !== "page" && rootNode.type !== "component") {
+            throw new Error("文档根节点只放页面与主组件");
+          }
+        } else if (components.length > 0) {
+          throw new Error("主组件必须放在文档根节点");
+        }
         break;
+      }
       case "node.update":
         if (cmd.params.patch.vector) validateVector(cmd.params.patch.vector as VectorPath);
         {
@@ -1054,6 +1068,14 @@ export class DocStore {
           break; // 同一批里刚创建，交给执行期
         }
         if (node.type === "page") throw new Error("页面不能重定父级");
+        if (parentId === null) {
+          // 提到/移回文档根：只允许主组件（转组件时同批里会先把类型改成 component），
+          // 已在根上的主组件可以借此按 index 调整绘制顺序
+          const targetType = pendingTypes.get(nodeId) ?? node.type;
+          if (targetType !== "component") throw new Error("文档根节点只放页面与主组件");
+          break;
+        }
+        if (node.type === "component") throw new Error("主组件固定在文档根节点，不能移进其它节点");
         if (!node.parentId || !this.state.nodes[node.parentId]) throw new Error("根节点不能重定父级");
         const parent = this.state.nodes[parentId];
         if (!parent) {
@@ -1064,9 +1086,6 @@ export class DocStore {
         while (cur) {
           if (cur.id === nodeId) throw new Error("不能把节点移到自己的后代里");
           cur = cur.parentId ? this.state.nodes[cur.parentId] : undefined;
-        }
-        if (node.type === "component" && parent.type !== "page") {
-          throw new Error("主组件必须位于页面顶层");
         }
         break;
       }
@@ -1096,8 +1115,15 @@ export class DocStore {
     const affected = new Set<NodeId>();
     for (const cmd of list) this.collectAffected(cmd, affected);
     const pending = new Set<NodeId>();
+    // 同一批里"先 reparent 到根、再改成 component"是转组件的固定写法：
+    // 校验看批处理后的类型，而不是当前类型
+    const pendingTypes = new Map<NodeId, DocNode["type"]>();
     for (const cmd of list) {
-      this.validateOne(cmd, pending);
+      if (cmd.type === "node.create") for (const n of cmd.params.nodes) pendingTypes.set(n.id, n.type);
+      else if (cmd.type === "node.update" && cmd.params.patch.type) pendingTypes.set(cmd.params.nodeId, cmd.params.patch.type);
+    }
+    for (const cmd of list) {
+      this.validateOne(cmd, pending, pendingTypes);
       if (cmd.type === "node.create") for (const n of cmd.params.nodes) pending.add(n.id);
     }
     const inverses: Inverse[] = [];
@@ -1377,27 +1403,42 @@ export class DocStore {
       case "node.reparent": {
         const { nodeId, parentId, index, x, y } = cmd.params;
         const node = this.state.nodes[nodeId];
-        const oldParent = node?.parentId ? this.state.nodes[node.parentId] : null;
-        if (!node || !oldParent) throw new Error(`节点 ${nodeId} 不存在或没有父级`);
-        const oldIndex = oldParent.children.indexOf(nodeId);
+        if (!node) throw new Error(`节点 ${nodeId} 不存在`);
+        const oldParent = node.parentId ? this.state.nodes[node.parentId] : null;
+        if (node.parentId && !oldParent) throw new Error(`节点 ${nodeId} 的父级不存在`);
+        const oldIndex = oldParent ? oldParent.children.indexOf(nodeId) : this.state.rootIds.indexOf(nodeId);
         if (oldIndex < 0) throw new Error(`节点 ${nodeId} 的父子关系不一致`);
-        const parent = this.state.nodes[parentId];
-        if (!parent) throw new Error(`父节点 ${parentId} 不存在`);
         const oldX = node.x;
         const oldY = node.y;
-        oldParent.children.splice(oldIndex, 1);
-        const at = index ?? parent.children.length;
-        parent.children.splice(at, 0, nodeId);
-        node.parentId = parentId;
+        const parent = parentId ? this.state.nodes[parentId] : null;
+        if (parentId !== null && !parent) throw new Error(`父节点 ${parentId} 不存在`);
+        if (oldParent) oldParent.children.splice(oldIndex, 1);
+        else this.state.rootIds.splice(oldIndex, 1);
+        if (parent) {
+          const at = index ?? parent.children.length;
+          parent.children.splice(at, 0, nodeId);
+          node.parentId = parentId;
+        } else {
+          // 提到文档根：主组件不挂在任何页面下；index 指根列表里的位置
+          const at = index === undefined ? this.state.rootIds.length : Math.max(0, Math.min(index, this.state.rootIds.length));
+          this.state.rootIds.splice(at, 0, nodeId);
+          node.parentId = null;
+        }
         if (x !== undefined) node.x = x;
         if (y !== undefined) node.y = y;
         changed.add(nodeId);
-        changed.add(oldParent.id);
-        changed.add(parent.id);
+        if (oldParent) changed.add(oldParent.id);
+        if (parent) changed.add(parent.id);
         return {
           cmd: {
             type: "node.reparent",
-            params: { nodeId, parentId: oldParent.id, index: oldIndex, x: oldX, y: oldY },
+            params: {
+              nodeId,
+              parentId: oldParent ? oldParent.id : null,
+              index: oldIndex,
+              x: oldX,
+              y: oldY,
+            },
           },
         };
       }

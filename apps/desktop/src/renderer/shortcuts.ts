@@ -100,7 +100,7 @@ export const ACTIONS: ShortcutAction[] = [
   { id: "view.zoomOut", group: "视图", label: "缩小", default: "⌘−" },
   { id: "view.zoomReset", group: "视图", label: "缩放回到 100%", default: "⌘0" },
   { id: "view.fit", group: "视图", label: "适配页面", default: "⇧1" },
-  { id: "view.fitAll", group: "视图", label: "查看全部页面", default: "⇧2" },
+  { id: "view.fitAll", group: "视图", label: "查看全部", default: "⇧2" },
   { id: "view.toggleGrid", group: "视图", label: "显示网格", default: "⌘'" },
   { id: "view.toggleSnap", group: "视图", label: "启用吸附", default: "⌘⌥'" },
   { id: "view.toggleGuides", group: "视图", label: "显示参考线", default: "⌘;" },

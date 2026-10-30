@@ -25,7 +25,7 @@ export function drawPageLabels(g: CanvasRenderingContext2D, vp: Viewport, opts: 
   g.textBaseline = "alphabetic";
   for (const pageId of docStore.doc.rootIds) {
     const page = docStore.doc.nodes[pageId];
-    if (!page) continue;
+    if (!page || page.type !== "page") continue;
     if (opts.pageRenameId === page.id) continue;
     const moving = opts.drag && opts.drag.mode === "move" && opts.drag.moved && opts.selection.includes(page.id);
     const rp = opts.resizePreview && opts.resizePreview.id === page.id ? opts.resizePreview : null;
@@ -81,7 +81,7 @@ export function labelAt(
 ): DocNode | null {
   for (const pageId of docStore.doc.rootIds) {
     const page = docStore.doc.nodes[pageId];
-    if (!page) continue;
+    if (!page || page.type !== "page") continue;
     const r = pageLabelRect(page, vp, ctx);
     if (sx >= r.x && sx <= r.x + r.width && sy >= r.y && sy <= r.y + r.height) return page;
   }

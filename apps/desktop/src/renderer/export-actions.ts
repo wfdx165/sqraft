@@ -10,7 +10,7 @@ import { pngFileName } from "./export-name";
  * 打开导出对话框：`nodeIds` 有值时导出这些子树（透明底），否则导出整页（带背景）。
  * 名字只是系统保存框的建议值，用户可以改。
  */
-export function openExportFor(target: { pageId: NodeId; nodeIds?: NodeId[]; name: string }): void {
+export function openExportFor(target: { pageId?: NodeId; nodeIds?: NodeId[]; name: string }): void {
   exportUi.target = { pageId: target.pageId, nodeIds: target.nodeIds };
   exportUi.suggestedName = pngFileName(fileState.name, target.name);
   exportUi.open = true;

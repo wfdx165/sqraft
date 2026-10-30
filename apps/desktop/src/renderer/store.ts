@@ -105,7 +105,7 @@ export function select(ids: NodeId[]): void {
 export const exportUi = reactive({
   open: false,
   scale: 2,
-  target: null as { pageId: NodeId; nodeIds?: NodeId[] } | null,
+  target: null as { pageId?: NodeId; nodeIds?: NodeId[] } | null,
   /** 系统保存框里的建议文件名（右键导出按对象命名） */
   suggestedName: "",
 });

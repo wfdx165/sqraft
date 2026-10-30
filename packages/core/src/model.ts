@@ -314,12 +314,39 @@ export function walkSubtree(state: DocState, id: NodeId, visit: (n: DocNode) => 
 }
 
 export function firstPageId(state: DocState): NodeId | null {
-  return state.rootIds[0] ?? null;
+  return state.rootIds.find((id) => state.nodes[id]?.type === "page") ?? null;
 }
 
-/** 文档全部页面（rootIds 即页面）。 */
+/**
+ * 文档全部页面。
+ *
+ * `rootIds` 是"根节点列表"：页面与主组件都放在根上（主组件不属于任何页面，
+ * 见 ADR-0025），所以这里必须按类型过滤。
+ */
 export function getPages(state: DocState): DocNode[] {
-  return state.rootIds.map((id) => state.nodes[id]).filter(Boolean);
+  return state.rootIds.map((id) => state.nodes[id]).filter((n) => n?.type === "page");
+}
+
+/** 文档全部主组件（根级节点）。 */
+export function getRootComponents(state: DocState): DocNode[] {
+  return state.rootIds.map((id) => state.nodes[id]).filter((n) => n?.type === "component");
+}
+
+/** 组件区的左上角：页面整体包围盒下方 + 间距；没有页面时退回原点。 */
+export function componentAreaOrigin(state: DocState): { x: number; y: number } {
+  const pages = getPages(state);
+  if (pages.length === 0) return { x: 0, y: 0 };
+  const left = Math.min(...pages.map((p) => p.x));
+  const bottom = Math.max(...pages.map((p) => p.y + p.height));
+  return { x: left, y: bottom + PAGE_GAP };
+}
+
+/** 新建主组件的落点：组件区单行横排，排到已有母版最右侧之后再留一个间距。 */
+export function nextComponentPosition(state: DocState): { x: number; y: number } {
+  const origin = componentAreaOrigin(state);
+  const components = getRootComponents(state);
+  if (components.length === 0) return origin;
+  return { x: Math.max(...components.map((c) => c.x + c.width)) + PAGE_GAP, y: origin.y };
 }
 
 /** 生成不重复的页面默认名："页面 N"。 */

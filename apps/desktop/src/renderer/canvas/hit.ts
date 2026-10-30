@@ -94,6 +94,18 @@ export interface Hit {
 
 export function hitTest(vp: Viewport, wx: number, wy: number): Hit | null {
   const editing = ui.mode === "edit";
+  const roots = docStore.doc.rootIds;
+  // 主组件是文档根节点，画在页面之上：命中也要先于页面（最上层的先命中）
+  for (let i = roots.length - 1; i >= 0; i--) {
+    const node = docStore.doc.nodes[roots[i]];
+    if (!node || node.type !== "component") continue;
+    // 与页面一致：先按子节点真实几何命中（可越出母版边界），
+    // 退回到母版本体时才要求指针在母版矩形里
+    const deep = hitIn(vp, node.id, wx - node.x, wy - node.y);
+    if (deep) return { id: deep, pageId: ui.activePageId ?? node.id, inactive: false };
+    const inside = wx >= node.x && wy >= node.y && wx <= node.x + node.width && wy <= node.y + node.height;
+    if (inside) return { id: node.id, pageId: ui.activePageId ?? node.id, inactive: false };
+  }
   if (editing && ui.activePageId) {
     const page = docStore.doc.nodes[ui.activePageId];
     if (page) {
@@ -101,9 +113,9 @@ export function hitTest(vp: Viewport, wx: number, wy: number): Hit | null {
       if (deep) return { id: deep, pageId: page.id, inactive: false };
     }
   }
-  for (const pageId of docStore.doc.rootIds) {
+  for (const pageId of roots) {
     const page = docStore.doc.nodes[pageId];
-    if (!page) continue;
+    if (!page || page.type !== "page") continue;
     if (wx < page.x || wy < page.y || wx > page.x + page.width || wy > page.y + page.height) continue;
     if (editing && pageId !== ui.activePageId) return { id: pageId, pageId, inactive: true };
     return { id: pageId, pageId, inactive: false };
@@ -114,7 +126,8 @@ export function hitTest(vp: Viewport, wx: number, wy: number): Hit | null {
 export function pageAt(wx: number, wy: number): NodeId | null {
   for (const pageId of docStore.doc.rootIds) {
     const page = docStore.doc.nodes[pageId];
-    if (page && wx >= page.x && wx <= page.x + page.width && wy >= page.y && wy <= page.y + page.height) return pageId;
+    if (!page || page.type !== "page") continue;
+    if (wx >= page.x && wx <= page.x + page.width && wy >= page.y && wy <= page.y + page.height) return pageId;
   }
   return null;
 }

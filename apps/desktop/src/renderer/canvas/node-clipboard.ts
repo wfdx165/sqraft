@@ -150,15 +150,17 @@ export async function pasteNodesFromClipboard(deps: PasteDeps): Promise<boolean>
 
   const anchor = deps.pointerWorld();
   const pageId = (anchor ? deps.pageAt(anchor.x, anchor.y) : null) ?? deps.activePageId();
-  if (!pageId) return false;
+  const sourceById = new Map(safe.nodes.map((node) => [node.id, node]));
+  // 复制来的主组件要落回文档根，没有页面也照样能粘
+  const hasComponentRoot = safe.rootIds.some((id) => sourceById.get(id)?.type === "component");
+  if (!pageId && !hasComponentRoot) return false;
   const container = anchor ? deps.containerAt(anchor.x, anchor.y) : null;
   // 锁定的容器不能接收内容：回落到页面根
-  const parentId = container && container.id !== pageId && !container.locked ? container.id : pageId;
-  const parentWorld = worldRect(docStore.doc, parentId) ?? { x: 0, y: 0, width: 0, height: 0 };
+  const parentId = pageId && (!container || container.id === pageId || container.locked) ? pageId : container?.id ?? null;
+  const parentWorld = parentId ? (worldRect(docStore.doc, parentId) ?? { x: 0, y: 0, width: 0, height: 0 }) : { x: 0, y: 0, width: 0, height: 0 };
 
   const idMap: Record<NodeId, NodeId> = {};
   for (const node of safe.nodes) idMap[node.id] = newId();
-  const sourceById = new Map(safe.nodes.map((node) => [node.id, node]));
   const cloneById = new Map(safe.nodes.map((node) => [idMap[node.id], remapNode(node, idMap)]));
 
   detachOrphans(cloneById);
@@ -174,8 +176,17 @@ export async function pasteNodesFromClipboard(deps: PasteDeps): Promise<boolean>
     const source = sourceById.get(rootId);
     const clone = cloneById.get(idMap[rootId]);
     if (!source || !clone) continue;
-    clone.parentId = parentId;
-    if (anchor) {
+    // 主组件是文档根节点（ADR-0025）：粘贴出来仍然是根级母版，落不进页面/容器
+    const toRoot = clone.type === "component";
+    const targetParent = toRoot ? null : parentId;
+    // 没有页面可落的文档：只有母版能粘到根上，其余根节点跳过（别让整次粘贴抛错）
+    if (!targetParent && !toRoot) continue;
+    clone.parentId = targetParent;
+    if (toRoot) {
+      // 根节点坐标就是世界坐标：粘在原件旁边，不跟着指针走
+      clone.x = source.x + (anchor ? 20 : 10);
+      clone.y = source.y + (anchor ? 20 : 10);
+    } else if (anchor) {
       // 指针处：根的本地坐标 = 世界坐标 - 新父级的世界原点
       clone.x = anchor.x - parentWorld.x;
       clone.y = anchor.y - parentWorld.y;
@@ -191,13 +202,13 @@ export async function pasteNodesFromClipboard(deps: PasteDeps): Promise<boolean>
       for (const child of node.children) visit(child);
     };
     visit(clone.id);
-    commands.push({ type: "node.create", params: { nodes: subtree, parentId } });
+    commands.push({ type: "node.create", params: { nodes: subtree, parentId: targetParent } });
     newRoots.push(clone.id);
   }
   if (commands.length === 0) return false;
 
   docStore.apply(commands, "粘贴");
-  ui.expandedPageId = pageId;
+  if (pageId) ui.expandedPageId = pageId;
   select(newRoots);
   return true;
 }

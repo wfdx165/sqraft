@@ -135,15 +135,15 @@ export function createViewportNav(deps: ViewportNavDeps) {
     markDirty();
   }
 
-  /** 适配全部页面（拖动模式 / 初始视图）。 */
+  /** 适配全部根节点（拖动模式 / 初始视图）：页面 + 组件区，否则母版会看不见。 */
   function fitAll(padding = 80): void {
     deps.commitEditors();
-    const pages = docStore.doc.rootIds.map((id) => docStore.doc.nodes[id]).filter(Boolean);
-    if (pages.length === 0) return;
-    const minX = Math.min(...pages.map((p) => p.x));
-    const minY = Math.min(...pages.map((p) => p.y));
-    const maxX = Math.max(...pages.map((p) => p.x + p.width));
-    const maxY = Math.max(...pages.map((p) => p.y + p.height));
+    const roots = docStore.doc.rootIds.map((id) => docStore.doc.nodes[id]).filter(Boolean);
+    if (roots.length === 0) return;
+    const minX = Math.min(...roots.map((p) => p.x));
+    const minY = Math.min(...roots.map((p) => p.y));
+    const maxX = Math.max(...roots.map((p) => p.x + p.width));
+    const maxY = Math.max(...roots.map((p) => p.y + p.height));
     const target = pageFitViewport(
       { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) },
       vp,

@@ -5,6 +5,10 @@ import {
   resolvePaint,
   worldRect,
   unionRects,
+  getPages,
+  getRootComponents,
+  componentAreaOrigin,
+  nextComponentPosition,
   defaultLayoutFor,
   nextPagePosition,
   worldQuad,
@@ -608,12 +612,16 @@ describe("组件：创建与实例物化", () => {
     store.apply({ type: "component.create", params: { nodeIds: [frame.id] } });
     expect(store.doc.nodes[frame.id].type).toBe("component");
     expect(store.doc.nodes[frame.id].name).toBe("组件 1");
+    // 主组件是文档根节点，不属于任何页面（ADR-0025）
+    expect(store.doc.nodes[frame.id].parentId).toBeNull();
+    expect(store.doc.rootIds).toContain(frame.id);
     store.undo();
     expect(store.doc.nodes[frame.id].type).toBe("frame");
     expect(store.doc.nodes[frame.id].name).toBe("卡片");
+    expect(store.doc.rootIds).not.toContain(frame.id);
   });
 
-  it("嵌套画板转组件时提升到页面顶层，世界坐标不变", () => {
+  it("嵌套画板转组件时提升到文档根节点，世界坐标不变", () => {
     const { store, pageId, frame } = setup();
     const nested = createNode("frame", { name: "内层画板", x: 15, y: 20, width: 60, height: 40 });
     store.apply({ type: "node.create", params: { nodes: [nested], parentId: frame.id } });
@@ -622,7 +630,8 @@ describe("组件：创建与实例物化", () => {
     store.apply({ type: "component.create", params: { nodeIds: [nested.id] } });
     const made = store.doc.nodes[nested.id];
     expect(made.type).toBe("component");
-    expect(made.parentId).toBe(pageId);
+    expect(made.parentId).toBeNull();
+    expect(store.doc.nodes[pageId].children).not.toContain(nested.id);
     const after = worldRect(store.doc, nested.id)!;
     expect(after).toEqual(before);
 
@@ -909,7 +918,9 @@ describe("组件：任意选区创建", () => {
 
     const comp = store.doc.nodes[componentId];
     expect(comp.type).toBe("component");
-    expect(comp.parentId).toBe(pageId);
+    // 包出来的母版也挂在文档根：坐标是世界坐标
+    expect(comp.parentId).toBeNull();
+    expect(store.doc.rootIds).toContain(componentId);
     expect(comp.x).toBe(100);
     expect(comp.y).toBe(100);
     expect(comp.width).toBe(210);
@@ -1645,7 +1656,7 @@ describe("组件：替换、脱离与删除", () => {
     expect(store.doc.nodes[emptyClone]).toBeTruthy();
   });
 
-  it("删除主组件时实例自动脱离；删除含组件的页面同理", () => {
+  it("删除主组件时实例自动脱离；删除页面不牵连根级母版", () => {
     const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const master = createNode("frame", { name: "A", width: 100, height: 60 });
@@ -1667,12 +1678,13 @@ describe("组件：替换、脱离与删除", () => {
     expect(store.doc.nodes[instanceId].type).toBe("instance");
     expect(store.doc.nodes[instanceId].componentId).toBe(master.id);
 
-    // 页面删除：组件在页面 2，实例在页面 1
+    // 页面删除：母版在文档根（画板原来在页面 2），实例在页面 1
     const page2 = createNode("page", { name: "页面 2", x: 3000, width: 800, height: 600 });
     store.apply({ type: "node.create", params: { nodes: [page2], parentId: null } });
     const master2 = createNode("frame", { name: "B", width: 100, height: 60 });
     store.apply({ type: "node.create", params: { nodes: [master2], parentId: page2.id } });
     store.apply({ type: "component.create", params: { nodeIds: [master2.id] } });
+    expect(store.doc.nodes[master2.id].parentId).toBeNull();
     const instance2 = createNode("instance").id;
     store.apply({
       type: "instance.create",
@@ -1681,7 +1693,9 @@ describe("组件：替换、脱离与删除", () => {
 
     store.apply({ type: "node.delete", params: { nodeId: page2.id } });
     expect(store.doc.nodes[page2.id]).toBeUndefined();
-    expect(store.doc.nodes[instance2].type).toBe("frame");
+    // 母版不在页面里，删页面不会动它，实例也仍然是实例
+    expect(store.doc.nodes[master2.id].parentId).toBeNull();
+    expect(store.doc.nodes[instance2].type).toBe("instance");
 
     store.undo();
     expect(store.doc.nodes[page2.id]).toBeTruthy();
@@ -3208,5 +3222,104 @@ describe("分组跨页", () => {
     expect(() => store.apply({ type: "node.group", params: { nodeIds: [a.id, b.id], groupId: "g1" } })).toThrow(
       /同一页面/,
     );
+  });
+});
+
+describe("主组件是文档根节点（ADR-0025）", () => {
+  function withComponent() {
+    const store = new DocStore(createDocWithPage());
+    const pageId = store.doc.rootIds[0];
+    const frame = createNode("frame", { name: "卡片", x: 40, y: 60, width: 100, height: 80 });
+    store.apply({ type: "node.create", params: { nodes: [frame], parentId: pageId } });
+    store.apply({ type: "component.create", params: { nodeIds: [frame.id] } });
+    return { store, pageId, master: store.doc.nodes[frame.id] };
+  }
+
+  it("getPages / getRootComponents 按类型分开根节点", () => {
+    const { store, master, pageId } = withComponent();
+    expect(getPages(store.doc).map((p) => p.id)).toEqual([pageId]);
+    expect(getRootComponents(store.doc).map((c) => c.id)).toEqual([master.id]);
+    expect(firstPageId(store.doc)).toBe(pageId);
+  });
+
+  it("主组件不能建在页面里，普通节点不能建在根上", () => {
+    const store = new DocStore(createDocWithPage());
+    const pageId = store.doc.rootIds[0];
+    const inPage = createNode("component", { name: "C" });
+    expect(() => store.apply({ type: "node.create", params: { nodes: [inPage], parentId: pageId } })).toThrow(
+      "主组件必须放在文档根节点",
+    );
+    const looseFrame = createNode("frame", { name: "F" });
+    expect(() => store.apply({ type: "node.create", params: { nodes: [looseFrame], parentId: null } })).toThrow(
+      "文档根节点只放页面与主组件",
+    );
+  });
+
+  it("主组件不能被移进其它节点", () => {
+    const { store, master, pageId } = withComponent();
+    expect(() =>
+      store.apply({ type: "node.reparent", params: { nodeId: master.id, parentId: pageId } }),
+    ).toThrow("主组件固定在文档根节点");
+  });
+
+  it("组件区在页面下方，新建母版横排到已有母版右侧", () => {
+    const store = new DocStore(createDocWithPage());
+    const page = getPages(store.doc)[0];
+    expect(componentAreaOrigin(store.doc)).toEqual({ x: page.x, y: page.y + page.height + PAGE_GAP });
+    expect(nextComponentPosition(store.doc)).toEqual(componentAreaOrigin(store.doc));
+
+    const first = createNode("component", { name: "A", ...nextComponentPosition(store.doc), width: 120, height: 60 });
+    store.apply({ type: "node.create", params: { nodes: [first], parentId: null } });
+    const second = nextComponentPosition(store.doc);
+    expect(second.y).toBe(componentAreaOrigin(store.doc).y);
+    expect(second.x).toBe(first.x + first.width + PAGE_GAP);
+  });
+
+  it("主组件在根列表里可以按 index 调整位置，撤销回到原位置", () => {
+    const store = new DocStore(createDocWithPage());
+    const pageId = getPages(store.doc)[0].id;
+    const a = createNode("component", { name: "A", x: 0, y: 800 });
+    const b = createNode("component", { name: "B", x: 300, y: 800 });
+    store.apply({ type: "node.create", params: { nodes: [a], parentId: null } });
+    store.apply({ type: "node.create", params: { nodes: [b], parentId: null } });
+    expect(store.doc.rootIds).toEqual([pageId, a.id, b.id]);
+
+    store.apply({ type: "node.reparent", params: { nodeId: b.id, parentId: null, index: 1 } });
+    expect(store.doc.rootIds).toEqual([pageId, b.id, a.id]);
+    expect(store.doc.nodes[b.id].parentId).toBeNull();
+
+    store.undo();
+    expect(store.doc.rootIds).toEqual([pageId, a.id, b.id]);
+  });
+
+  it("一批节点里主组件必须在首位且只能有一个", () => {
+    const store = new DocStore(createDocWithPage());
+    const rect = createNode("rect", { name: "R" });
+    const component = createNode("component", { name: "C" });
+    const another = createNode("component", { name: "C2" });
+    expect(() =>
+      store.apply({ type: "node.create", params: { nodes: [rect, component], parentId: null } }),
+    ).toThrow("主组件必须是单独的根节点");
+    expect(() =>
+      store.apply({ type: "node.create", params: { nodes: [component, another], parentId: null } }),
+    ).toThrow("主组件必须是单独的根节点");
+  });
+
+  it("转组件后原地不动，撤销回到原父级", () => {
+    const store = new DocStore(createDocWithPage());
+    const pageId = store.doc.rootIds[0];
+    const outer = createNode("frame", { name: "外层", x: 30, y: 40 });
+    store.apply({ type: "node.create", params: { nodes: [outer], parentId: pageId } });
+    const inner = createNode("frame", { name: "内层", x: 10, y: 20 });
+    store.apply({ type: "node.create", params: { nodes: [inner], parentId: outer.id } });
+    const before = worldRect(store.doc, inner.id)!;
+
+    store.apply({ type: "component.create", params: { nodeIds: [inner.id] } });
+    expect(store.doc.nodes[inner.id].parentId).toBeNull();
+    expect(worldRect(store.doc, inner.id)).toEqual(before);
+
+    store.undo();
+    expect(store.doc.nodes[inner.id].parentId).toBe(outer.id);
+    expect(worldRect(store.doc, inner.id)).toEqual(before);
   });
 });

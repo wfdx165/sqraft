@@ -93,9 +93,8 @@ export function dropTargetAt(wx: number, wy: number, dragged: readonly NodeId[])
 
 /**
  * 单个节点能否落到目标里：
- * - 页面、根节点不换父级；
+ * - 页面、根节点不换父级（主组件是文档根节点，永远走这一条）；
  * - 实例子树内部的节点一律不换父级（只能改覆盖字段 / 填插槽）；
- * - 主组件必须留在页面顶层；
  * - 组件的子节点只能在组件子树内移动，外部节点也不能拖进组件；
  * - 目标不能是节点自身或后代（遍历已过滤，这里再兜一层）。
  */
@@ -109,10 +108,6 @@ export function dropAllowed(nodeId: NodeId, target: DropTarget): boolean {
   const owner = componentOwnerOf(nodeId);
   const targetOwner = componentOwnerOf(target.id);
 
-  if (node.type === "component") {
-    // 主组件只能待在页面顶层（core 同样强制）
-    return target.kind === "page";
-  }
   if (owner) {
     // 组件子节点：只能在同一个组件子树内换父级
     return targetOwner === owner;

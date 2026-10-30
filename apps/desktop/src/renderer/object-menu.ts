@@ -74,8 +74,8 @@ export function openNodeMenu(nodeId: NodeId, position: { x: number; y: number })
     {
       label: "导出 PNG…",
       hint: keyOf("file.exportPng"),
-      disabled: !pageId,
-      run: () => pageId && openExportFor({ pageId, nodeIds: targets, name }),
+      // 主组件是文档根节点，没有所属页面：照样按选区导出（透明底）
+      run: () => openExportFor({ pageId: pageId ?? undefined, nodeIds: targets, name }),
     },
     {
       label: "重命名",

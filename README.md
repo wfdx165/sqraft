@@ -93,7 +93,7 @@ pnpm dist:mac    # 也可显式指定；交叉打包需要 wine / docker
 
 图片：`create_node` 的 `kind` 支持 `image`，用 base64 传位图（上限 5MB）；`update_node` 可改 `crop` 与 `mask`。
 
-工具：读 `read_document` / `get_tokens` / `inspect_layout` / `screenshot` / `export_png`；写 `define_token` / `rename_token` / `create_page` / `create_node` / `update_node` / `delete_node` / 组件与布局相关工具 / `import_font` / `document.*`。完整清单与参数以 `packages/ai-tools/src/index.ts` 的 `tools`（`toMCPManifest()`）为准，欢迎页显示实时数量。
+工具：读 `read_document` / `get_tokens` / `inspect_layout` / `screenshot` / `export_png`；写 `define_token` / `rename_token` / `create_page` / `create_node` / `update_node` / `move_node` / `delete_node` / 组件与布局相关工具 / `import_font` / `document.*`。主组件是文档根节点（不属于任何页面），`read_document` 的 `components` 给摘要、`includeComponentTrees=true` 才带母版内部节点树。完整清单与参数以 `packages/ai-tools/src/index.ts` 的 `tools`（`toMCPManifest()`）为准，欢迎页显示实时数量。
 
 ## 文件格式
 

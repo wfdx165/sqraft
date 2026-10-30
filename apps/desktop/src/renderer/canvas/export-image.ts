@@ -9,8 +9,8 @@ import { Canvas2DBackend, drawDocument, type ResolvedImage, type Viewport } from
 import { imageAssetIds } from "./image-assets";
 
 export interface ExportRequest {
-  /** 要导出的页面（选区导出时仍用它取坐标基准） */
-  pageId: NodeId;
+  /** 要导出的页面；只导出主组件（根节点）时省略 */
+  pageId?: NodeId;
   /** 有值时导出这些子树（透明背景），否则导出整页 */
   nodeIds?: readonly NodeId[];
   /** 倍率：1 / 2 / 3 */
@@ -27,11 +27,12 @@ export interface ExportRequest {
  * 图被裁角/裁阴影；页面导出仍取页面矩形（页面外的内容按设计裁掉）。
  */
 export function exportBounds(doc: DocState, request: Pick<ExportRequest, "pageId" | "nodeIds">): Rect | null {
+  const pageBox = request.pageId ? worldRect(doc, request.pageId) : null;
   const boxes = request.nodeIds?.length
     ? request.nodeIds
         .map((id) => subtreeWorldBounds(doc, id))
         .filter((box): box is Rect => Boolean(box))
-    : [worldRect(doc, request.pageId)].filter((box): box is Rect => Boolean(box));
+    : [pageBox].filter((box): box is Rect => Boolean(box));
   if (boxes.length === 0) return null;
   const left = Math.min(...boxes.map((b) => b.x));
   const top = Math.min(...boxes.map((b) => b.y));
@@ -74,8 +75,9 @@ export function renderPng(doc: DocState, request: ExportRequest): string {
   backend.beginFrame(viewport);
   drawDocument(backend, doc, {
     resolveImage: request.resolveImage,
-    // 选区导出：只画子树（透明底）；页面导出：正常画，视口会裁掉页面外的内容
+    // 选区导出：只画子树（透明底）；页面导出：只画这一页，且不带根级母版
     onlyRootIds: request.nodeIds?.length ? request.nodeIds : undefined,
+    onlyPageIds: request.nodeIds?.length ? undefined : request.pageId ? [request.pageId] : undefined,
   });
   backend.endFrame();
   return canvas.toDataURL("image/png");

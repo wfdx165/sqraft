@@ -42,7 +42,7 @@ export function expandGroup(doc: DocState, params: GroupParams): Command[] {
   // 目标父级：第一个节点的父级（跨父级选区会被提升到它下面，世界坐标不变）
   const first = doc.nodes[ids[0]];
   const parent = first.parentId ? doc.nodes[first.parentId] : null;
-  if (!parent) throw new Error("页面不能分组");
+  if (!parent) throw new Error("页面与主组件都是根节点，不能分组");
   const parentWorld = worldRect(doc, parent.id);
   if (!parentWorld) throw new Error(`父节点 ${parent.id} 不存在`);
 

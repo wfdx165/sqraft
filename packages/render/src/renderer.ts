@@ -213,6 +213,35 @@ export interface DrawOptions {
    * 与 `dimPageIds` 互斥——导出时不需要页面淡化。
    */
   onlyRootIds?: readonly NodeId[];
+  /**
+   * 只画这些页面，并跳过所有根级主组件（页面导出用）。
+   * 与 `onlyRootIds` 互斥：选区导出走 `onlyRootIds`。
+   */
+  onlyPageIds?: readonly NodeId[];
+}
+
+/**
+ * 根节点的绘制清单：页面与主组件分开排。
+ *
+ * `onlyPageIds` 有值时只取这些页面、且不画母版——页面导出不该把画在页面上的母版
+ * 一起带进 PNG（ADR-0025）。
+ */
+export function rootDrawPlan(
+  doc: DocState,
+  onlyPageIds?: readonly NodeId[],
+): { pages: DocNode[]; components: DocNode[] } {
+  const pages: DocNode[] = [];
+  const components: DocNode[] = [];
+  for (const id of doc.rootIds) {
+    const node = doc.nodes[id];
+    if (!node) continue;
+    if (node.type === "page") {
+      if (!onlyPageIds || onlyPageIds.includes(id)) pages.push(node);
+    } else if (node.type === "component" && !onlyPageIds) {
+      components.push(node);
+    }
+  }
+  return { pages, components };
 }
 
 /** 绘制所有页面与内容（不含帧生命周期，便于宿主插入背景网格）。 */
@@ -243,9 +272,9 @@ export function drawDocument(backend: RenderBackend, doc: DocState, options: Dra
     return;
   }
 
-  for (const pageId of doc.rootIds) {
-    const page = doc.nodes[pageId];
-    if (!page) continue;
+  const plan = rootDrawPlan(doc, options.onlyPageIds);
+  for (const page of plan.pages) {
+    const pageId = page.id;
     const dimmed = Boolean(options.dimPageIds?.includes(pageId));
     // 页面淡化的包围盒交给后端退化为视口：整页子树遍历太贵，而层本身会被视口裁住
     if (dimmed) backend.pushOpacity(0.35);
@@ -278,6 +307,10 @@ export function drawDocument(backend: RenderBackend, doc: DocState, options: Dra
     backend.popTransform();
     if (dimmed) backend.popOpacity();
   }
+
+  // 主组件是文档根节点，不属于任何页面：页面全部画完之后再画，永远浮在页面之上
+  // （ADR-0025）。母版只是普通容器，没有页面底色与投影。
+  for (const node of plan.components) drawNode(backend, ctx, node, options);
 }
 
 export function renderDocument(backend: RenderBackend, doc: DocState, vp: Viewport): void {

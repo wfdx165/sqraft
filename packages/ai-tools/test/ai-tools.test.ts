@@ -211,6 +211,98 @@ describe("AI 工具：样式纪律", () => {
   });
 });
 
+describe("AI 工具：主组件在文档根节点", () => {
+  it("create_node 省略坐标时把母版排到组件区", async () => {
+    const { store, run } = setup();
+    const first = await call(run, "create_node", { kind: "component", width: 200, height: 100 });
+    const page = store.doc.nodes[firstPageId(store.doc)!];
+    expect(store.doc.nodes[first.nodeId as string].parentId).toBeNull();
+    expect(store.doc.nodes[first.nodeId as string].y).toBe(page.y + page.height + 160);
+
+    const second = await call(run, "create_node", { kind: "component", width: 120, height: 80 });
+    const a = store.doc.nodes[first.nodeId as string];
+    const b = store.doc.nodes[second.nodeId as string];
+    expect(b.y).toBe(a.y);
+    expect(b.x).toBe(a.x + a.width + 160);
+  });
+
+  it("空文档里建母版不再顺手建页面", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const run = makeExecutor(store, async () => "", () => null);
+    const comp = await call(run, "create_node", { kind: "component" });
+    expect(store.doc.nodes[comp.nodeId as string].parentId).toBeNull();
+    expect(store.doc.rootIds).toEqual([comp.nodeId]);
+    expect(store.doc.nodes[comp.nodeId as string]).toMatchObject({ x: 0, y: 0 });
+  });
+
+  it("显式 parentId: null 也按根节点处理", async () => {
+    const { store, run } = setup();
+    const comp = await call(run, "create_node", { kind: "component", parentId: null });
+    const node = store.doc.nodes[comp.nodeId as string];
+    expect(node.parentId).toBeNull();
+    expect(store.doc.rootIds).toContain(node.id);
+  });
+
+  it("显式给 x/y 时按给定位置放", async () => {
+    const { store, run } = setup();
+    const res = await call(run, "create_node", { kind: "component", x: 900, y: 1200 });
+    expect(store.doc.nodes[res.nodeId as string]).toMatchObject({ x: 900, y: 1200, parentId: null });
+  });
+
+  it("read_document 默认给摘要，按需附母版子树", async () => {
+    const { run } = setup();
+    const comp = await call(run, "create_node", { kind: "component" });
+    await call(run, "create_node", { kind: "rect", parentId: comp.nodeId as string });
+
+    const lean = await call(run, "read_document");
+    const summary = (lean.components as Array<Record<string, unknown>>)[0];
+    expect(summary.componentId).toBe(comp.nodeId);
+    expect(summary.subtree).toBeUndefined();
+
+    const full = await call(run, "read_document", { includeComponentTrees: true });
+    const withTree = (full.components as Array<{ subtree: string }>)[0];
+    expect(JSON.parse(withTree.subtree)).toHaveLength(2);
+  });
+
+  it("move_node 是一次撤销（父级与 layoutAbsolute 一起回退）", async () => {
+    const { store, run, pageId } = setup();
+    const frame = await call(run, "create_node", { kind: "frame", x: 0, y: 600, width: 200, height: 200 });
+    const rect = await call(run, "create_node", { kind: "rect", x: 10, y: 10, width: 20, height: 20 });
+    expect(store.doc.nodes[rect.nodeId as string].parentId).toBe(pageId);
+
+    // 画板带自动布局：absolute=true 会同时改父级与 layoutAbsolute（两条命令）
+    await call(run, "move_node", { nodeId: rect.nodeId, parentId: frame.nodeId, absolute: true });
+    expect(store.doc.nodes[rect.nodeId as string]).toMatchObject({
+      parentId: frame.nodeId,
+      layoutAbsolute: true,
+    });
+
+    // 一次撤销必须把两处都还原：没有被 transact 合并时会剩一半
+    expect(store.undo()).toBe(true);
+    expect(store.doc.nodes[rect.nodeId as string].parentId).toBe(pageId);
+    expect(store.doc.nodes[rect.nodeId as string].layoutAbsolute).toBeFalsy();
+  });
+
+  it("move_node 换父级保持世界坐标，主组件与页面被拒绝", async () => {
+    const { store, run, pageId } = setup();
+    const frame = await call(run, "create_node", { kind: "frame", x: 40, y: 60, width: 300, height: 200 });
+    const rect = await call(run, "create_node", { kind: "rect", x: 100, y: 120, width: 40, height: 20 });
+    expect(store.doc.nodes[rect.nodeId as string].parentId).toBe(pageId);
+
+    // 画板默认带自动布局：absolute=true 落成绝对定位，世界坐标不变
+    await call(run, "move_node", { nodeId: rect.nodeId, parentId: frame.nodeId, absolute: true });
+    const moved = store.doc.nodes[rect.nodeId as string];
+    expect(moved.parentId).toBe(frame.nodeId);
+    expect(moved.x).toBe(60);
+    expect(moved.y).toBe(60);
+    expect(moved.layoutAbsolute).toBe(true);
+
+    const comp = await call(run, "create_node", { kind: "component" });
+    await expect(run("move_node", { nodeId: comp.nodeId, parentId: pageId })).rejects.toThrow(/根节点/);
+    await expect(run("move_node", { nodeId: pageId, parentId: frame.nodeId })).rejects.toThrow(/页面/);
+  });
+});
+
 describe("AI 工具：组件 / 插槽 / 实例", () => {
   it("create_node 支持 component/slot，create_instance 物化整棵子树", async () => {
     const { store, run, pageId } = setup();
@@ -232,10 +324,15 @@ describe("AI 工具：组件 / 插槽 / 实例", () => {
     expect(instNode.componentId).toBe(compId);
     expect(instNode.children).toHaveLength(2);
 
-    const doc = await call(run, "read_document");
+    const doc = await call(run, "read_document", { includeComponentTrees: true });
+    // 母版是文档根节点：不在页面树里，走 components 摘要 + 可选子树
+    const components = doc.components as Array<{ componentId: string; subtree?: string }>;
+    const master = components.find((c) => c.componentId === compId)!;
+    const masterTree = JSON.parse(master.subtree!) as Array<Record<string, unknown>>;
+    expect(masterTree.find((n) => n.id === compId)?.type).toBe("component");
+    expect(masterTree.find((n) => n.id === slotId)?.type).toBe("slot");
     const flat = JSON.parse((doc.pages as Array<{ subtree: string }>)[0].subtree) as Array<Record<string, unknown>>;
-    expect(flat.find((n) => n.id === compId)?.type).toBe("component");
-    expect(flat.find((n) => n.id === slotId)?.type).toBe("slot");
+    expect(flat.find((n) => n.id === compId)).toBeUndefined();
     expect(flat.find((n) => n.id === instId)?.componentId).toBe(compId);
     expect(flat.find((n) => n.id === instId)?.children).toHaveLength(2);
   });
@@ -267,9 +364,11 @@ describe("AI 工具：组件 / 插槽 / 实例", () => {
     store.apply({ type: "slot.fill", params: { slotId: slotClone, nodeIds: [user.id] } });
 
     const doc = await call(run, "read_document");
+    const compNode = (doc.components as Array<{ componentId: string; propertyDefs?: Array<{ id: string }> }>).find(
+      (c) => c.componentId === compId,
+    )!;
+    expect(compNode.propertyDefs![0].id).toBe("p1");
     const flat = JSON.parse((doc.pages as Array<{ subtree: string }>)[0].subtree) as Array<Record<string, unknown>>;
-    const compNode = flat.find((n) => n.id === compId)!;
-    expect((compNode.propertyDefs as Array<{ id: string }>)[0].id).toBe("p1");
     const instance = flat.find((n) => n.id === instId)!;
     expect(instance.propValues).toMatchObject({ p1: "AI 标题" });
     expect(instance.overrides).toBeTruthy();
@@ -297,7 +396,7 @@ describe("AI 工具：组件 / 插槽 / 实例", () => {
     const frame = await call(run, "create_node", { kind: "frame" });
     await expect(
       run("create_node", { kind: "component", parentId: frame.nodeId }),
-    ).rejects.toThrow(/页面顶层/);
+    ).rejects.toThrow(/根节点/);
 
     const comp = await call(run, "create_node", { kind: "component" });
     await expect(run("create_node", { kind: "slot", parentId: pageId, name: "body" })).rejects.toThrow(

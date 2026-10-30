@@ -1,67 +1,33 @@
 <script setup lang="ts">
 /**
- * 组件面板：按页面分组列出全文档主组件。
- * 单击在活动页视口中心插入实例；双击跳转到主组件。
+ * 组件面板：平铺列出全文档主组件（母版是文档根节点，不属于任何页面，ADR-0025）。
+ * 单击 = 选中母版并飞行定位（只看不动文档）；双击 = 插入实例；行尾「+」也插入。
  */
-import { computed, onBeforeUnmount } from "vue";
-import type { NodeId } from "@sqraft/core";
-import { docStore, hooks, ui } from "../store";
+import { computed } from "vue";
+import { getRootComponents, type NodeId } from "@sqraft/core";
+import { docStore, hooks, select, switchMode, ui } from "../store";
 import Icon from "./Icon.vue";
 
-interface Group {
-  pageId: NodeId;
-  pageName: string;
-  components: Array<{ id: NodeId; name: string }>;
-}
-
-const groups = computed<Group[]>(() => {
+const masters = computed<Array<{ id: NodeId; name: string }>>(() => {
   void ui.version;
-  const out: Group[] = [];
-  for (const pid of docStore.doc.rootIds) {
-    const page = docStore.doc.nodes[pid];
-    if (!page) continue;
-    const components = page.children
-      .map((id) => docStore.doc.nodes[id])
-      .filter((n) => n?.type === "component")
-      .map((n) => ({ id: n!.id, name: n!.name }));
-    if (components.length) out.push({ pageId: pid, pageName: page.name, components });
-  }
-  return out;
+  return getRootComponents(docStore.doc).map((n) => ({ id: n.id, name: n.name }));
 });
 
-const total = computed(() => {
-  void ui.version;
-  return Object.values(docStore.doc.nodes).filter((n) => n.type === "component").length;
-});
+const total = computed(() => masters.value.length);
 
 function insert(id: NodeId): void {
   hooks.insertInstance(id);
 }
 
-/** 双击跳主组件：先把活动页切到主组件所在页，再飞行定位。 */
+/**
+ * 单击：选中母版并飞行定位。母版不在页面里，所以只切编辑模式、不改活动页；
+ * 选中框要画在画布上，pan 模式下先切回 edit。
+ */
 function goto(masterId: NodeId): void {
-  let cur = docStore.doc.nodes[masterId];
-  while (cur && cur.type !== "page") {
-    cur = cur.parentId ? docStore.doc.nodes[cur.parentId] : undefined;
-  }
-  if (cur) {
-    ui.activePageId = cur.id;
-    ui.expandedPageId = cur.id;
-  }
+  switchMode("edit");
+  select([masterId]);
   hooks.focusNode(masterId);
 }
-
-/** 单击插入、双击跳转：用计时器区分，避免双击时插入两个实例。 */
-let clickTimer = 0;
-function onClick(id: NodeId): void {
-  window.clearTimeout(clickTimer);
-  clickTimer = window.setTimeout(() => insert(id), 220);
-}
-function onDblClick(id: NodeId): void {
-  window.clearTimeout(clickTimer);
-  goto(id);
-}
-onBeforeUnmount(() => window.clearTimeout(clickTimer));
 </script>
 
 <template>
@@ -73,21 +39,21 @@ onBeforeUnmount(() => window.clearTimeout(clickTimer));
 
     <div v-if="!total" class="empty">
       <p>还没有主组件</p>
-      <span>选中页面顶层的画板或分组，按 ⌥⌘K 创建</span>
+      <span>选中画板或分组，按 ⌥⌘K 创建</span>
     </div>
 
-    <div v-for="g in groups" :key="g.pageId" class="group">
-      <div class="group-label">{{ g.pageName }}</div>
+    <div v-for="c in masters" :key="c.id" class="item">
       <button
-        v-for="c in g.components"
-        :key="c.id"
-        class="item"
-        :title="`单击插入实例，双击跳转主组件`"
-        @click="onClick(c.id)"
-        @dblclick="onDblClick(c.id)"
+        class="row-main"
+        :title="`单击定位母版，双击插入实例`"
+        @click="goto(c.id)"
+        @dblclick="insert(c.id)"
       >
         <Icon name="component" :size="14" />
         <span class="name">{{ c.name }}</span>
+      </button>
+      <button class="insert" title="插入实例" @click="insert(c.id)">
+        <Icon name="plus" :size="12" />
       </button>
     </div>
   </div>
@@ -134,24 +100,29 @@ header {
   line-height: 1.5;
 }
 
-.group {
-  margin-top: 6px;
-}
-
-.group-label {
-  padding: 4px 4px 3px;
-  font-size: 10.5px;
-  color: var(--text-faint);
-}
-
 .item {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 2px;
   width: 100%;
-  padding: 6px 8px;
   border: 1px solid transparent;
   border-radius: var(--radius-sm);
+}
+
+.item:hover {
+  background: var(--glass-strong);
+  border-color: var(--hairline);
+}
+
+/* 行主体仍是按钮：键盘 Tab 得到焦点、Enter 触发 */
+.row-main {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 4px 6px 8px;
+  border: 0;
   background: transparent;
   color: var(--text);
   font-family: inherit;
@@ -160,19 +131,45 @@ header {
   cursor: pointer;
 }
 
-.item:hover {
-  background: var(--glass-strong);
-  border-color: var(--hairline);
-}
-
-.item :deep(svg) {
+.row-main :deep(svg) {
   color: var(--accent);
   flex: none;
 }
 
 .name {
+  flex: 1;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* 行尾插入：默认极淡，悬停整行才显出来，避免和"单击定位"抢注意力 */
+.insert {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 20px;
+  height: 20px;
+  margin-right: 6px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-dim);
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+
+.item:hover .insert,
+.insert:focus-visible {
+  opacity: 1;
+}
+
+.insert:hover {
+  background: var(--glass-strong);
+  border-color: var(--hairline);
+  color: var(--accent);
 }
 </style>

@@ -9,7 +9,28 @@ export interface ComponentActionDeps {
   markDirty: () => void;
 }
 
-/** 在活动页视口中心插入组件实例（组件面板与快捷键共用）。 */
+/**
+ * 把插入点夹回页面矩形。母版比页面还宽/高时上下界会反过来，
+ * 这时直接取页面中心，别让实例跑到页面外。
+ */
+export function clampInstanceCenter(
+  value: number,
+  origin: number,
+  side: number,
+  size: number,
+): number {
+  const half = size / 2;
+  const lo = origin + half;
+  const hi = origin + side - half;
+  if (lo > hi) return origin + side / 2;
+  return Math.min(Math.max(value, lo), hi);
+}
+
+/**
+ * 在活动页视口中心插入组件实例（组件面板与快捷键共用）。
+ * 视口中心不落在活动页上时（比如刚飞到组件区看母版），夹回页面内，
+ * 否则实例会建在页面外面，看起来像"消失了"。
+ */
 export function insertInstance(deps: ComponentActionDeps, componentId: NodeId): void {
   const master = docStore.doc.nodes[componentId];
   if (!master || master.type !== "component") return;
@@ -17,6 +38,10 @@ export function insertInstance(deps: ComponentActionDeps, componentId: NodeId): 
   const page = deps.ensureActivePage();
   if (!page) return;
   const w = screenToWorld(deps.vp, deps.vp.width / 2, deps.vp.height / 2);
+  const halfW = master.width / 2;
+  const halfH = master.height / 2;
+  const cx = clampInstanceCenter(w.x, page.x, page.width, master.width);
+  const cy = clampInstanceCenter(w.y, page.y, page.height, master.height);
   const id = createNode("instance").id;
   dispatch(
     {
@@ -25,8 +50,8 @@ export function insertInstance(deps: ComponentActionDeps, componentId: NodeId): 
         componentId,
         parentId: page.id,
         nodeId: id,
-        x: w.x - page.x - master.width / 2,
-        y: w.y - page.y - master.height / 2,
+        x: cx - page.x - halfW,
+        y: cy - page.y - halfH,
       },
     },
     "insert-instance",

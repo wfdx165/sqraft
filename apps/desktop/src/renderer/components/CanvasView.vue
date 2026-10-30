@@ -125,6 +125,8 @@ const pageRename = ref<{ id: NodeId; value: string; left: number; top: number; w
 const renameEl = ref<HTMLInputElement | null>(null);
 /** 悬停的文本节点（仅用于画淡虚线边界，不进文档） */
 const hoverTextId = ref<NodeId | null>(null);
+/** 悬停的库对象（实例 / 主组件）：紫色虚线框，仅 UI 状态 */
+const hoverLibraryId = ref<NodeId | null>(null);
 /** 悬停的容器（画出其一级子元素边界，纯 UI 状态） */
 const hoverContainerId = ref<NodeId | null>(null);
 
@@ -378,8 +380,10 @@ function draw() {
         }
       : undefined;
 
-  // 非活动页淡化（编辑模式）
-  const dimPageIds = editing ? docStore.doc.rootIds.filter((id) => id !== ui.activePageId) : undefined;
+  // 非活动页淡化（编辑模式）；主组件是根节点、不属于任何页面，不参与淡化
+  const dimPageIds = editing
+    ? docStore.doc.rootIds.filter((id) => id !== ui.activePageId && docStore.doc.nodes[id]?.type === "page")
+    : undefined;
 
   // 网格层：视口辅助物，独立画布，永远在文档之下
   if (gridCtx) {
@@ -430,6 +434,7 @@ function draw() {
     textEditId: textEdit.value?.id ?? null,
     pathEditId: pen.pathEdit?.id ?? null,
     hoverTextId: hoverTextId.value,
+    hoverLibraryId: hoverLibraryId.value,
   });
 
   const activePageNode = ui.activePageId ? docStore.doc.nodes[ui.activePageId] : null;
@@ -927,8 +932,15 @@ function setHoverText(id: NodeId | null) {
   markDirty();
 }
 
+function setHoverLibrary(id: NodeId | null) {
+  if (hoverLibraryId.value === id) return;
+  hoverLibraryId.value = id;
+  markDirty();
+}
+
 function clearHover() {
   setHoverText(null);
+  setHoverLibrary(null);
   if (hoverContainerId.value) {
     hoverContainerId.value = null;
     markDirty();
@@ -974,6 +986,8 @@ function updateHover(e: PointerEvent) {
   const hit = hitTest(vp, w.x, w.y);
   const node = hit && !hit.inactive ? docStore.doc.nodes[hit.id] : null;
   setHoverText(node?.type === "text" ? node.id : null);
+  // 库对象（实例 / 主组件）单独一套悬停框；进入实例后命中的是子节点，自然跟着走
+  setHoverLibrary(node && (node.type === "instance" || node.type === "component") ? node.id : null);
   // 悬停容器的子元素边界（只读信息层）
   const containerId = hit && !hit.inactive ? hoverContainerAt(w.x, w.y) : null;
   if (hoverContainerId.value !== containerId) {
@@ -2233,15 +2247,16 @@ onMounted(() => {
   hooks.pasteNodes = () => pasteNodesFromClipboard(pasteDeps);
   hooks.selectAllLayers = selectAllInPage;
   hooks.renderExport = async (request) => {
+    // 纯组件稿（没有页面）也要能导出选区：pageId 只用来取基准，可缺省
     const pageId = request.pageId ?? ensureActivePage()?.id ?? null;
-    if (!pageId) return "";
     const selected = ui.selection.filter((id) => {
       const node = docStore.doc.nodes[id];
       return !!node && node.type !== "page";
     });
     const nodeIds = request.nodeIds ?? (selected.length > 0 ? selected : undefined);
+    if (!pageId && !nodeIds?.length) return "";
     return renderPngAsync(docStore.doc, {
-      pageId,
+      pageId: pageId ?? undefined,
       nodeIds,
       scale: request.scale,
       resolveImage: (assetId) => imageFor(assetId),
@@ -2443,7 +2458,7 @@ onBeforeUnmount(() => {
       <button class="z-fit" v-tip="{ label: ui.mode === 'edit' ? '适配活动页' : '适配全部', shortcut: keyOf('view.fit') }" @click="fitView()">
         <Icon name="fit" :size="13" />
       </button>
-      <button class="z-fit" v-tip="{ label: '查看全部页面', shortcut: keyOf('view.fitAll') }" @click="fitAll()">
+      <button class="z-fit" v-tip="{ label: '查看全部', shortcut: keyOf('view.fitAll') }" @click="fitAll()">
         <Icon name="pages" :size="13" />
       </button>
     </div>

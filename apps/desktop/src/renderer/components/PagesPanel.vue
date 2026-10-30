@@ -91,7 +91,8 @@ onBeforeUnmount(() => stopSearchShortcut());
 const rows = computed<Row[]>(() => {
   void ui.version;
   const pageId = ui.expandedPageId;
-  if (!pageId || !docStore.doc.nodes[pageId]) return [];
+  // 只认页面：无页面文档里 expandedPageId 可能被写成母版 id
+  if (!pageId || docStore.doc.nodes[pageId]?.type !== "page") return [];
   const out: Row[] = [];
   const visit = (id: NodeId, depth: number) => {
     const node = docStore.doc.nodes[id];

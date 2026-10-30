@@ -2,7 +2,7 @@
  * 选中框、缩放手柄、尺寸徽标与悬停文本边界。
  * 屏幕空间叠加层；不参与文档渲染。
  */
-import { worldRect, type NodeId } from "@sqraft/core";
+import { worldRect, type DocNode, type NodeId } from "@sqraft/core";
 import { worldToScreen, type Viewport } from "@sqraft/render";
 import { docStore } from "../store";
 import { handlePointsOfQuad, selectionQuad, selectionScreenRect, type MovePreview, type ResizePreview } from "./selection";
@@ -15,6 +15,21 @@ export interface SelectionOverlayOptions {
   textEditId: NodeId | null;
   pathEditId: NodeId | null;
   hoverTextId: NodeId | null;
+  /** 悬停的库对象（实例 / 主组件），单独一套虚线框 */
+  hoverLibraryId: NodeId | null;
+}
+
+/** 普通图层选中色。 */
+export const SELECT_ACCENT = "#4f46e5";
+/** 库对象（实例 / 主组件）的强调色：和普通图层区分开。 */
+export const LIBRARY_ACCENT = "#8b5cf6";
+
+/**
+ * 库对象用紫色，普通图层用 indigo。
+ * 实例与主组件在画布上属于"库的一部分"，选中/悬停都和普通图层不同色。
+ */
+export function accentOf(node: Pick<DocNode, "type"> | null | undefined): string {
+  return node && (node.type === "instance" || node.type === "component") ? LIBRARY_ACCENT : SELECT_ACCENT;
 }
 
 export function drawPulse(
@@ -54,7 +69,8 @@ export function drawSelectionOverlay(
     if (!rect || !quad) continue;
     const { x, y, width } = rect;
 
-    g.strokeStyle = "#4f46e5";
+    const accent = accentOf(n);
+    g.strokeStyle = accent;
     g.lineWidth = 1.5;
     g.beginPath();
     g.moveTo(quad[0].x, quad[0].y);
@@ -68,7 +84,7 @@ export function drawSelectionOverlay(
         g.rect(hx - 3, hy - 3, 6, 6);
         g.fillStyle = "#ffffff";
         g.fill();
-        g.strokeStyle = "#4f46e5";
+        g.strokeStyle = accent;
         g.lineWidth = 1.25;
         g.stroke();
       }
@@ -93,7 +109,7 @@ export function drawSelectionOverlay(
         bh,
         5,
       );
-      g.fillStyle = "#4f46e5";
+      g.fillStyle = accent;
       g.fill();
       g.fillStyle = "#ffffff";
       g.textAlign = "center";
@@ -101,6 +117,24 @@ export function drawSelectionOverlay(
       g.fillText(label, bx + bw / 2, by + bh / 2 + 0.5);
       g.textAlign = "left";
       g.textBaseline = "alphabetic";
+    }
+  }
+
+  // 悬停库对象（实例 / 主组件）：紫色虚线，不画手柄与徽标；选中时由实线框接管
+  if (opts.editing && opts.hoverLibraryId && !opts.selection.includes(opts.hoverLibraryId)) {
+    // 和选中框同一套四边形：旋转过的实例/母版悬停框也要跟着转
+    const quad = selectionQuad(vp, opts.hoverLibraryId, null, null);
+    if (quad) {
+      g.save();
+      g.strokeStyle = LIBRARY_ACCENT;
+      g.lineWidth = 1;
+      g.setLineDash([4, 3]);
+      g.beginPath();
+      g.moveTo(quad[0].x, quad[0].y);
+      for (let i = 1; i < quad.length; i++) g.lineTo(quad[i].x, quad[i].y);
+      g.closePath();
+      g.stroke();
+      g.restore();
     }
   }
 

@@ -32,6 +32,14 @@ describe("PNG 导出区域", () => {
     });
   });
 
+  it("只给 nodeIds（无页面）也能取包围盒：纯组件稿导出母版", () => {
+    const { doc } = setup();
+    const master = createNode("component", { name: "母版", x: 900, y: 1100, width: 120, height: 80 });
+    doc.nodes[master.id] = master;
+    doc.rootIds.push(master.id);
+    expect(exportBounds(doc, { nodeIds: [master.id] })).toEqual({ x: 900, y: 1100, width: 120, height: 80 });
+  });
+
   it("节点不存在时退回 null", () => {
     const { doc, pageId } = setup();
     expect(exportBounds(doc, { pageId, nodeIds: ["missing"] })).toBeNull();

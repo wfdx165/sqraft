@@ -196,7 +196,7 @@ export function buildTemplate(
       actionItem("view.zoomReset", "实际大小", mac),
       { type: "separator" },
       actionItem("view.fit", "适配页面", mac),
-      actionItem("view.fitAll", "查看全部页面", mac),
+      actionItem("view.fitAll", "查看全部", mac),
       { type: "separator" },
       actionItem("view.toggleGrid", "显示网格", mac),
       actionItem("view.toggleSnap", "启用吸附", mac),

@@ -14,6 +14,9 @@ import {
   firstPageId,
   makeAnchor,
   newId,
+  getPages,
+  getRootComponents,
+  nextComponentPosition,
   nextPageName,
   nextPagePosition,
   planDuplicate,
@@ -167,9 +170,18 @@ export const tools: ToolDefinition[] = [
   {
     name: "read_document",
     description:
-      "读取当前文档的页面与节点树紧凑摘要。组件节点带 propertyDefs，实例带 componentId / propValues / overrides，插槽带 slotFilled。返回 JSON 字符串。",
+      "读取当前文档的页面与节点树紧凑摘要。组件节点带 propertyDefs，实例带 componentId / propValues / overrides，插槽带 slotFilled。主组件是文档根节点，不在页面树里：`components` 给摘要（含 propertyDefs），要改母版内部结构时传 includeComponentTrees=true 连内部节点树一起返回。返回 JSON 字符串。",
     readonly: true,
-    input_schema: { type: "object", properties: {}, additionalProperties: false },
+    input_schema: {
+      type: "object",
+      properties: {
+        includeComponentTrees: {
+          type: "boolean",
+          description: "true = components 里附上母版的完整节点树（subtree），默认只给摘要",
+        },
+      },
+      additionalProperties: false,
+    },
   },
   {
     name: "get_tokens",
@@ -226,7 +238,7 @@ export const tools: ToolDefinition[] = [
   {
     name: "create_node",
     description:
-      "在父节点下创建一个节点。kind 支持 frame/rect/ellipse/polygon/line/path/text/image/component/slot。component 只能建在页面顶层；slot 必须位于主组件内并提供唯一名字。polygon 是参数化多边形，用 sides 指定边数（3–12，默认 3，3 即三角形），顶点由 width/height 包围盒推导。path 用 points 描述锚点（父容器坐标，手柄为相对锚点的偏移），闭合路径至少 3 个锚点、开放路径至少 2 个。image 用 image.data 传 base64（上限 5MB），不接受文件路径。颜色可引用 fillToken / strokeToken，也可直接给 fill / stroke 字面量（Token 优先）。",
+      "在父节点下创建一个节点。kind 支持 frame/rect/ellipse/polygon/line/path/text/image/component/slot。component 是文档根节点（不接受 parentId；x/y 省略时自动排到画布上的组件区）；slot 必须位于主组件内并提供唯一名字。polygon 是参数化多边形，用 sides 指定边数（3–12，默认 3，3 即三角形），顶点由 width/height 包围盒推导。path 用 points 描述锚点（父容器坐标，手柄为相对锚点的偏移），闭合路径至少 3 个锚点、开放路径至少 2 个。image 用 image.data 传 base64（上限 5MB），不接受文件路径。颜色可引用 fillToken / strokeToken，也可直接给 fill / stroke 字面量（Token 优先）。",
     input_schema: {
       type: "object",
       properties: {
@@ -411,6 +423,22 @@ export const tools: ToolDefinition[] = [
         ...STYLE_SCHEMA,
       },
       required: ["nodeId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "move_node",
+    description:
+      "把节点换父级（等价画布上的拖动），世界坐标保持不变。目标是自动布局容器时默认进流（追加到末尾，可用 index 指定插入位），absolute=true 则落成绝对定位子项。主组件是文档根节点，不能移动父级；页面、实例子树内部同样拒绝。",
+    input_schema: {
+      type: "object",
+      properties: {
+        nodeId: { type: "string" },
+        parentId: { type: "string", description: "新的父节点（画板 / 分组 / 组件 / 实例 / 页面）" },
+        index: { type: "number", description: "在 flow 里的插入位置；省略为末尾" },
+        absolute: { type: "boolean", description: "true = 绝对定位（不进流）" },
+      },
+      required: ["nodeId", "parentId"],
       additionalProperties: false,
     },
   },
@@ -794,6 +822,7 @@ const MUTATING_TOOLS = new Set([
   "swap_instance",
   "detach_instance",
   "update_node",
+  "move_node",
   "delete_node",
   "group_nodes",
   "arrange_nodes",
@@ -837,8 +866,26 @@ export function makeExecutor(
         return JSON.stringify(opened ? { ok: true } : { ok: false, canceled: true });
       }
       case "read_document": {
-        const pages = store.doc.rootIds.map((pid) => ({ pageId: pid, name: store.doc.nodes[pid]?.name, subtree: serializeSubtree(store, pid) }));
-        return JSON.stringify({ pages });
+        const pages = getPages(store.doc).map((page) => ({
+          pageId: page.id,
+          name: page.name,
+          subtree: serializeSubtree(store, page.id),
+        }));
+        // 主组件是文档根节点，不在任何页面的 subtree 里：单独给一份摘要方便定位
+        const withTrees = args.includeComponentTrees === true;
+        const components = getRootComponents(store.doc).map((c) => ({
+          componentId: c.id,
+          name: c.name,
+          x: c.x,
+          y: c.y,
+          w: c.width,
+          h: c.height,
+          ...(c.propertyDefs?.length
+            ? { propertyDefs: c.propertyDefs.map((d) => ({ id: d.id, type: d.type, name: d.name })) }
+            : {}),
+          ...(withTrees ? { subtree: serializeSubtree(store, c.id) } : {}),
+        }));
+        return JSON.stringify({ pages, components });
       }
       case "get_tokens": {
         const tokens = store.doc.tokens;
@@ -919,23 +966,29 @@ export function makeExecutor(
         assertToken(store, args.fillToken as string | undefined, "fillToken");
         assertToken(store, args.strokeToken as string | undefined, "strokeToken");
         if (Array.isArray(args.effects)) assertEffectTokens(store, effectsFrom(args.effects));
+        // 主组件是文档根节点（ADR-0025）：挂在哪个页面下都是错的，直接拒绝
+        if (isComponent && args.parentId !== undefined && args.parentId !== null) {
+          throw new Error("主组件是文档根节点，不接受 parentId");
+        }
         // 空文档没有页面：先建一页再画（与人工"新建页面"同一套命令，仍是一次撤销）
-        let parentId = (args.parentId as NodeId | undefined) ?? getActivePageId?.() ?? firstPageId(store.doc);
-        if (!parentId && args.parentId === undefined) parentId = ensurePage(store);
-        if (!parentId || !store.doc.nodes[parentId]) throw new Error("parentId 不存在");
+        let parentId: NodeId | null = isComponent
+          ? null
+          : ((args.parentId as NodeId | undefined) ?? getActivePageId?.() ?? firstPageId(store.doc));
+        if (!isComponent) {
+          if (!parentId && args.parentId === undefined) parentId = ensurePage(store);
+          if (!parentId || !store.doc.nodes[parentId]) throw new Error("parentId 不存在");
+        }
 
         let name = args.name as string | undefined;
-        if (isComponent) {
-          const parent = store.doc.nodes[parentId];
-          if (!parent || parent.type !== "page") throw new Error("主组件必须位于页面顶层");
-          name = name ?? nextComponentName(store.doc);
-        }
+        if (isComponent) name = name ?? nextComponentName(store.doc);
+        // 省略坐标时：主组件排到组件区末尾，其余落在父容器左上角
+        const defaultPosition = isComponent ? nextComponentPosition(store.doc) : { x: 0, y: 0 };
         if (isSlot) {
           const trimmed = String(name ?? "").trim();
           if (!trimmed) throw new Error("kind=slot 必须提供唯一的 name");
           name = trimmed;
           let componentId: NodeId | null = null;
-          let cur: DocNode | undefined = store.doc.nodes[parentId];
+          let cur: DocNode | undefined = parentId ? store.doc.nodes[parentId] : undefined;
           while (cur) {
             if (cur.type === "instance" || cur.type === "slot") break;
             if (cur.type === "component") {
@@ -1000,8 +1053,8 @@ export function makeExecutor(
         const node = createNode(kind, {
           name: name ?? (isPolygon ? (clampSides(args.sides as number) === 3 ? "三角形" : "多边形") : kind),
           // 路径的 points 是父容器坐标：先放在 0,0，由 store 归一化并推导节点框
-          x: isPath ? 0 : ((args.x as number) ?? 0),
-          y: isPath ? 0 : ((args.y as number) ?? 0),
+          x: isPath ? 0 : ((args.x as number) ?? defaultPosition.x),
+          y: isPath ? 0 : ((args.y as number) ?? defaultPosition.y),
           width: isPath ? 1 : ((args.width as number) ?? imageRef?.naturalWidth ?? 100),
           height: isPath ? 1 : ((args.height as number) ?? imageRef?.naturalHeight ?? 100),
           text: args.text as string | undefined,
@@ -1195,6 +1248,40 @@ export function makeExecutor(
         }
         store.apply({ type: "node.update", params: { nodeId, patch } }, "ai:update");
         return JSON.stringify({ ok: true });
+      }
+      case "move_node": {
+        const nodeId = String(args.nodeId);
+        const parentId = String(args.parentId);
+        const node = store.doc.nodes[nodeId];
+        if (!node) throw new Error(`节点 ${nodeId} 不存在`);
+        const parent = store.doc.nodes[parentId];
+        if (!parent) throw new Error(`父节点 ${parentId} 不存在`);
+        if (node.type === "component") throw new Error("主组件固定在文档根节点，不能移动父级");
+        const world = worldRect(store.doc, nodeId);
+        const parentWorld = worldRect(store.doc, parentId);
+        if (!world || !parentWorld) throw new Error("节点或父节点没有几何信息");
+        // 进流与否跟画布拖动一致：自动布局容器默认进流，absolute 保留绝对定位
+        const inFlow = Boolean(parent.layout) && args.absolute !== true;
+        const commands: Command[] = [
+          {
+            type: "node.reparent",
+            params: {
+              nodeId,
+              parentId,
+              x: world.x - parentWorld.x,
+              y: world.y - parentWorld.y,
+              ...(inFlow ? { index: typeof args.index === "number" ? args.index : parent.children.length } : {}),
+            },
+          },
+        ];
+        if (parent.layout) {
+          const wantAbsolute = !inFlow;
+          if (Boolean(node.layoutAbsolute) !== wantAbsolute) {
+            commands.push({ type: "node.update", params: { nodeId, patch: { layoutAbsolute: wantAbsolute } } });
+          }
+        }
+        store.apply(commands, "ai:move");
+        return JSON.stringify({ ok: true, nodeId, parentId, inFlow });
       }
       case "delete_node": {
         const nodeId = args.nodeId as NodeId;

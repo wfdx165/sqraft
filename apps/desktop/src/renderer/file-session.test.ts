@@ -48,6 +48,9 @@ const { docStore, ui } = await import("./store");
 function makeDirtyDocument(): string {
   docStore.replace(createEmptyDoc());
   ui.docOpen = true;
+  // 空稿没有页面：先建一页（根节点只放页面与主组件）
+  const page = createNode("page", { name: "页面 1", width: 200, height: 200 });
+  docStore.apply({ type: "node.create", params: { nodes: [page], parentId: null } });
   const pageId = firstPageId(docStore.doc)!;
   const rect = createNode("rect", { parentId: pageId, x: 0, y: 0, width: 10, height: 10 });
   docStore.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
