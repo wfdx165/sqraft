@@ -22,9 +22,14 @@ import {
   type Padding,
   type ShadowEffect,
   type TextAutoResize,
+  type AlignEdge,
+  type DistributeAxis,
+  scaleFactorsTo,
+  type Rect,
 } from "@sqraft/core";
 import { textSizeOf } from "../text-metrics";
 import { dispatch, docStore, hooks, ui } from "../store";
+import { selectionBounds as boundsOf } from "../canvas/selection-bounds";
 
 /**
  * 检查器的状态与动作：模板只负责排版，逻辑集中在这里。
@@ -45,8 +50,9 @@ const node = computed<DocNode | null>(() => nodes.value[0] ?? null);
 const multi = computed(() => nodes.value.length > 1);
 const allText = computed(() => nodes.value.length > 0 && nodes.value.every((n) => n.type === "text"));
 const hasType = (...types: string[]) => nodes.value.length > 0 && nodes.value.every((n) => types.includes(n.type));
+// 页面也接受填充：那是"页面背景色"（缺省白）
 const supportsFill = computed(() =>
-  hasType("frame", "rect", "ellipse", "polygon", "path", "text", "component", "instance", "slot"),
+  hasType("page", "frame", "rect", "ellipse", "polygon", "path", "text", "component", "instance", "slot"),
 );
 const supportsStroke = computed(() =>
   hasType("frame", "rect", "ellipse", "polygon", "path", "line", "text", "component", "instance", "slot"),
@@ -91,6 +97,76 @@ function applyNodes(fn: (n: DocNode) => Partial<DocNode> | null, label = "inspec
 
 function applyStyle(fn: (style: NodeStyle, n: DocNode) => NodeStyle, label = "inspect"): void {
   applyNodes((n) => ({ style: fn({ ...n.style }, n) }), label);
+}
+
+/* ---------- 多选包围盒 ---------- */
+
+/** 多选的选区包围盒（世界坐标）：X/Y 平移整体，W/H 等比缩放整体 */
+const selectionBounds = computed<Rect | null>(() => {
+  void ui.version;
+  return boundsOf(docStore.doc, nodes.value.map((n) => n.id));
+});
+
+function setBoundsNumber(key: "x" | "y" | "w" | "h", event: Event): void {
+  const input = event.target as HTMLInputElement;
+  const value = Number(input.value);
+  const box = selectionBounds.value;
+  if (!Number.isFinite(value) || !box) return;
+  const ids = targets().map((n) => n.id);
+  if (ids.length === 0) return;
+  if (key === "x" || key === "y") {
+    const dx = key === "x" ? value - box.x : 0;
+    const dy = key === "y" ? value - box.y : 0;
+    dispatch(
+      ids.map((id) => {
+        const node = docStore.doc.nodes[id];
+        return { type: "node.update" as const, params: { nodeId: id, patch: { x: node.x + dx, y: node.y + dy } } };
+      }),
+      "移动",
+    );
+    return;
+  }
+  const factors = scaleFactorsTo(
+    docStore.doc,
+    ids,
+    key === "w" ? Math.max(1, value) : box.width,
+    key === "h" ? Math.max(1, value) : box.height,
+  );
+  if (!factors) return;
+  dispatch({ type: "node.scale", params: { nodeIds: ids, ...factors } }, "缩放");
+}
+
+/* ---------- 对齐与分布 ---------- */
+
+/** 自动布局子项的位置由布局求解器决定，手改坐标会被立刻覆盖 */
+const layoutBound = computed(() =>
+  nodes.value.some((n) => {
+    const parent = n.parentId ? docStore.doc.nodes[n.parentId] : null;
+    return Boolean(parent?.layout) && !n.layoutAbsolute;
+  }),
+);
+// 页面没有父级可对齐：整组不显示
+const showAlign = computed(() => nodes.value.length > 0 && !nodes.value.some((n) => n.type === "page"));
+// 锁定节点不参与排列：整组置灰，解锁后再排（避免"只动一部分"的意外结果）
+const canAlign = computed(() => showAlign.value && !layoutBound.value && !readonly.value);
+const canDistribute = computed(
+  () => nodes.value.length >= 3 && !layoutBound.value && !readonly.value,
+);
+
+function align(edge: AlignEdge): void {
+  if (!canAlign.value) return;
+  dispatch(
+    { type: "node.align", params: { nodeIds: targets().map((n) => n.id), align: edge } },
+    "对齐",
+  );
+}
+
+function distribute(axis: DistributeAxis): void {
+  if (!canDistribute.value) return;
+  dispatch(
+    { type: "node.distribute", params: { nodeIds: targets().map((n) => n.id), axis } },
+    "分布",
+  );
 }
 
 /* ---------- 共享值 ---------- */
@@ -961,6 +1037,14 @@ function resetOuterField(field: string): void {
     setEffectNumber,
     setEffectColorToken,
     setEffectColorValue,
+    selectionBounds,
+    setBoundsNumber,
+    showAlign,
+    canAlign,
+    canDistribute,
+    layoutBound,
+    align,
+    distribute,
     radiusOf,
     uniform,
     radiusUnified,

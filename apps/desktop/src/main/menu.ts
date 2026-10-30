@@ -28,6 +28,8 @@ const DEFAULT_BINDINGS: Record<string, string> = {
   "file.open": "⌘O",
   "file.save": "⌘S",
   "file.saveAs": "⇧⌘S",
+  "edit.copy": "⌘C",
+  "edit.cut": "⌘X",
   "edit.undo": "⌘Z",
   "edit.redo": "⌘⇧Z",
   "view.zoomIn": "⌘+",
@@ -35,6 +37,9 @@ const DEFAULT_BINDINGS: Record<string, string> = {
   "view.zoomReset": "⌘0",
   "view.fit": "⇧1",
   "view.fitAll": "⇧2",
+  "view.toggleGrid": "⌘'",
+  "view.toggleSnap": "⌘⌥'",
+  "view.toggleGuides": "⌘;",
 };
 
 /** `⌘⇧Z` → Electron accelerator（只用于 macOS 的展示）。 */
@@ -149,10 +154,10 @@ export function buildTemplate(platform: NodeJS.Platform = process.platform): Men
       actionItem("edit.undo", "撤销", mac),
       actionItem("edit.redo", "重做", mac),
       { type: "separator" },
-      { role: "cut", label: "剪切" },
-      { role: "copy", label: "复制" },
+      actionItem("edit.cut", "剪切", mac),
+      actionItem("edit.copy", "复制", mac),
       actionItem("edit.paste", "粘贴", mac),
-      { role: "selectAll", label: "全选" },
+      actionItem("edit.selectAll", "全选", mac),
     ],
   });
 
@@ -165,6 +170,10 @@ export function buildTemplate(platform: NodeJS.Platform = process.platform): Men
       { type: "separator" },
       actionItem("view.fit", "适配页面", mac),
       actionItem("view.fitAll", "查看全部页面", mac),
+      { type: "separator" },
+      actionItem("view.toggleGrid", "显示网格", mac),
+      actionItem("view.toggleSnap", "启用吸附", mac),
+      actionItem("view.toggleGuides", "显示参考线", mac),
       { type: "separator" },
       { role: "togglefullscreen", label: "进入全屏幕" },
     ],

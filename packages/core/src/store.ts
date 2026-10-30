@@ -25,11 +25,32 @@ import {
 } from "./component";
 import { normalizeVector, scaleVector, validateVector, vectorBounds, type VectorPath } from "./vector";
 import { collectLayoutContainers, solveContainer } from "./layout-pass";
+import { expandDuplicate, type DuplicateParams } from "./duplicate";
+import { expandAlign, expandDistribute, expandReorder, type AlignParams, type DistributeParams, type ReorderParams } from "./arrange";
+import { expandGroup, expandUngroup, type GroupParams } from "./group";
+import { expandScale, type ScaleParams } from "./scale";
+import { expandRotate, type RotateParams } from "./rotate";
 
 export type Command =
   | { type: "node.create"; params: { nodes: DocNode[]; parentId: NodeId | null; index?: number } }
   | { type: "node.delete"; params: { nodeId: NodeId } }
   | { type: "node.update"; params: { nodeId: NodeId; patch: Partial<DocNode> } }
+  /** 复制子树：新 id 由 `planDuplicate` 在命令创建前分配，展开成 node.create */
+  | { type: "node.duplicate"; params: DuplicateParams }
+  /** 层级顺序：只改同一父级内的 children 顺序，展开成 node.reparent */
+  | { type: "node.reorder"; params: ReorderParams }
+  /** 对齐：单选对父内容区、多选对选区包围盒，展开成 node.update */
+  | { type: "node.align"; params: AlignParams }
+  /** 分布：至少 3 个节点等间距，两端不动 */
+  | { type: "node.distribute"; params: DistributeParams }
+  /** 分组：包一层轻量容器（不填充、不裁剪、尺寸跟随子节点并集） */
+  | { type: "node.group"; params: GroupParams }
+  /** 解组：子节点提升到组的父级，保持世界坐标 */
+  | { type: "node.ungroup"; params: { nodeId: NodeId } }
+  /** 等比缩放：几何/圆角/字号/描边/效果/裁切一起按比例 */
+  | { type: "node.scale"; params: ScaleParams }
+  /** 旋转：绕世界坐标中心转，单选中心=自身中心 */
+  | { type: "node.rotate"; params: RotateParams }
   /** 把选区转为主组件：单容器原地转换/提升，多选自动包一层 */
   | { type: "component.create"; params: { nodeIds: NodeId[]; componentId?: NodeId; name?: string } }
   /** 窄重父级：保持调用方给定的局部坐标；用于组件包裹、顶层提升与插槽填充 */
@@ -56,6 +77,8 @@ export type Command =
   /** 实例脱离为普通画板；嵌套实例与插槽内容保留 */
   | { type: "component.detach"; params: { instanceId: NodeId } }
   | { type: "token.define"; params: { path: string; tokenType: "color" | "number"; value: string | number } }
+  /** 删除 Token（新建的 Token 撤销时用它回滚，避免留下孤儿条目） */
+  | { type: "token.delete"; params: { path: string } }
   /** 改名是原子操作：token 条目与所有节点引用一起改，只占一步撤销 */
   | { type: "token.rename"; params: { from: string; to: string } };
 
@@ -565,6 +588,14 @@ export class DocStore {
     const out: Command[] = [];
     for (const cmd of list) {
       if (cmd.type === "component.create") out.push(...this.expandComponentCreate(cmd, nameFor));
+      else if (cmd.type === "node.duplicate") out.push(...expandDuplicate(this.state, cmd.params));
+      else if (cmd.type === "node.reorder") out.push(...expandReorder(this.state, cmd.params));
+      else if (cmd.type === "node.align") out.push(...expandAlign(this.state, cmd.params));
+      else if (cmd.type === "node.distribute") out.push(...expandDistribute(this.state, cmd.params));
+      else if (cmd.type === "node.group") out.push(...expandGroup(this.state, cmd.params));
+      else if (cmd.type === "node.ungroup") out.push(...expandUngroup(this.state, cmd.params));
+      else if (cmd.type === "node.scale") out.push(...expandScale(this.state, cmd.params));
+      else if (cmd.type === "node.rotate") out.push(...expandRotate(this.state, cmd.params));
       else if (cmd.type === "instance.resetOverride") {
         const plan = planOverrideReset(
           this.state,
@@ -1317,6 +1348,17 @@ export class DocStore {
       }
       case "component.create":
         throw new Error("component.create 必须先展开");
+      case "node.duplicate":
+        throw new Error("node.duplicate 必须先展开");
+      case "node.reorder":
+        throw new Error("node.reorder 必须先展开");
+      case "node.align":
+      case "node.distribute":
+      case "node.group":
+      case "node.ungroup":
+      case "node.scale":
+      case "node.rotate":
+        throw new Error("排列/分组/缩放命令必须先展开");
       case "instance.resetOverride":
         throw new Error("instance.resetOverride 必须先展开");
       case "slot.create":
@@ -1378,8 +1420,16 @@ export class DocStore {
             cmd: { type: "token.define", params: { path, tokenType: prevToken.type, value: prevToken.value } },
           };
         }
-        // 新建 token 的逆：无原生命令表达"删除"，用同名空实现占位（骨架级）
-        return { cmd: { type: "token.define", params: { path, tokenType, value } } };
+        // 新建 token 的逆是删除：撤销"粘贴带过来的 Token"要能真的清掉
+        return { cmd: { type: "token.delete", params: { path } } };
+      }
+      case "token.delete": {
+        const { path } = cmd.params;
+        const prev = this.state.tokens[path];
+        if (!prev) return { cmd: { type: "token.delete", params: { path } } };
+        delete this.state.tokens[path];
+        changed.add("__doc__" as NodeId);
+        return { cmd: { type: "token.define", params: { path, tokenType: prev.type, value: prev.value } } };
       }
       case "token.rename": {
         const { from, to } = cmd.params;

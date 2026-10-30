@@ -20,7 +20,18 @@ export type ActionId =
   | "tool.text"
   | "edit.undo"
   | "edit.redo"
+  | "edit.copy"
+  | "edit.cut"
+  | "edit.selectAll"
+  | "edit.rename"
+  | "edit.group"
+  | "edit.ungroup"
   | "edit.delete"
+  | "edit.duplicate"
+  | "edit.moveForward"
+  | "edit.moveBackward"
+  | "edit.moveToFront"
+  | "edit.moveToBack"
   | "edit.paste"
   | "component.create"
   | "component.detach"
@@ -29,6 +40,9 @@ export type ActionId =
   | "view.zoomReset"
   | "view.fit"
   | "view.fitAll"
+  | "view.toggleGrid"
+  | "view.toggleSnap"
+  | "view.toggleGuides"
   | "focus.pageSearch"
   | "file.new"
   | "file.open"
@@ -62,9 +76,20 @@ export const ACTIONS: ShortcutAction[] = [
   { id: "tool.line", group: "工具", label: "直线", default: "L" },
   { id: "tool.path", group: "工具", label: "钢笔", default: "P" },
   { id: "tool.text", group: "工具", label: "文本", default: "T" },
+  { id: "edit.copy", group: "编辑", label: "复制", default: "⌘C" },
+  { id: "edit.selectAll", group: "编辑", label: "全选当前页", default: "⌘A" },
+  { id: "edit.rename", group: "编辑", label: "重命名图层", default: "F2" },
+  { id: "edit.group", group: "编辑", label: "分组", default: "⌘G" },
+  { id: "edit.ungroup", group: "编辑", label: "解组", default: "⌘⇧G" },
+  { id: "edit.cut", group: "编辑", label: "剪切", default: "⌘X" },
   { id: "edit.undo", group: "编辑", label: "撤销", default: "⌘Z" },
   { id: "edit.redo", group: "编辑", label: "重做", default: "⌘⇧Z" },
   { id: "edit.delete", group: "编辑", label: "删除选中", default: "Delete" },
+  { id: "edit.duplicate", group: "编辑", label: "原地复制", default: "⌘D" },
+  { id: "edit.moveForward", group: "编辑", label: "上移一层", default: "⌘]" },
+  { id: "edit.moveBackward", group: "编辑", label: "下移一层", default: "⌘[" },
+  { id: "edit.moveToFront", group: "编辑", label: "置顶", default: "⌘⌥]" },
+  { id: "edit.moveToBack", group: "编辑", label: "置底", default: "⌘⌥[" },
   { id: "edit.paste", group: "编辑", label: "粘贴", default: "⌘V" },
   { id: "component.create", group: "组件", label: "创建组件", default: "⌘⌥K" },
   { id: "component.detach", group: "组件", label: "脱离实例", default: "⌘⌥B" },
@@ -73,6 +98,9 @@ export const ACTIONS: ShortcutAction[] = [
   { id: "view.zoomReset", group: "视图", label: "缩放回到 100%", default: "⌘0" },
   { id: "view.fit", group: "视图", label: "适配页面", default: "⇧1" },
   { id: "view.fitAll", group: "视图", label: "查看全部页面", default: "⇧2" },
+  { id: "view.toggleGrid", group: "视图", label: "显示网格", default: "⌘'" },
+  { id: "view.toggleSnap", group: "视图", label: "启用吸附", default: "⌘⌥'" },
+  { id: "view.toggleGuides", group: "视图", label: "显示参考线", default: "⌘;" },
   { id: "focus.pageSearch", group: "其它", label: "聚焦页面搜索", default: "⌘F" },
   { id: "file.new", group: "其它", label: "新建文档", default: "⌘N" },
   { id: "file.open", group: "其它", label: "打开文件", default: "⌘O" },

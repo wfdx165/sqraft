@@ -68,6 +68,9 @@ const api: SqraftApi = {
     info: () => ipcRenderer.invoke(CHANNELS.appInfo) as Promise<AppInfo>,
     copyText: (text: string) => ipcRenderer.send(CHANNELS.appCopyText, text),
     readClipboardImage: () => ipcRenderer.invoke(CHANNELS.appClipboardImage) as Promise<Uint8Array | null>,
+    writeClipboardNodes: (json: string) =>
+      ipcRenderer.invoke(CHANNELS.appClipboardNodesWrite, json) as Promise<void>,
+    readClipboardNodes: () => ipcRenderer.invoke(CHANNELS.appClipboardNodesRead) as Promise<string | null>,
     readClipboardText: () => ipcRenderer.invoke(CHANNELS.appClipboardText) as Promise<string>,
     onNewDocumentRequest: (handler: () => void) => {
       const listener = () => handler();

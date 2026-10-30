@@ -2,7 +2,7 @@
  * MCP 主进程侧：把协议层（server.ts）与渲染层桥接起来。
  * 工具清单与执行器都在渲染层（@sqraft/ai-tools 的真源），这里只转发。
  */
-import { app, BrowserWindow, clipboard, ipcMain } from "electron";
+import { app, BrowserWindow, ClipboardItem, clipboard, ipcMain } from "electron";
 import { readFile, stat } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import {
@@ -21,6 +21,9 @@ let sequence = 0;
 
 /** 与渲染层 `MAX_ASSET_BYTES` 对齐的读盘上限（主进程拿不到渲染层常量）。 */
 const MAX_CLIPBOARD_BYTES = 20 * 1024 * 1024;
+
+/** 节点剪贴板的自定义 MIME：只有 Sqraft 认这个类型，别的应用看到的是普通剪贴板内容。 */
+const NODES_MIME = "application/x-sqraft+nodes";
 
 interface PendingCall {
   resolve: (value: string) => void;
@@ -72,6 +75,22 @@ export function registerMcpChannels(): void {
   });
 
   ipcMain.handle(CHANNELS.appClipboardText, () => clipboard.readText());
+
+  ipcMain.handle(CHANNELS.appClipboardNodesWrite, async (_event, json: string) => {
+    // 一次 write 原子提交：载荷是 JSON 字符串，图片已经内联成 base64
+    const blob = new Blob([String(json)], { type: NODES_MIME });
+    await clipboard.write([new ClipboardItem({ [NODES_MIME]: blob })]);
+  });
+
+  ipcMain.handle(CHANNELS.appClipboardNodesRead, async () => {
+    if (!(await clipboard.has(NODES_MIME))) return null;
+    for (const item of await clipboard.read()) {
+      if (!item.types.includes(NODES_MIME)) continue;
+      const value = await item.getType(NODES_MIME);
+      return typeof value === "string" ? value : await (value as Blob).text();
+    }
+    return null;
+  });
 
   ipcMain.handle(CHANNELS.appClipboardImage, async () => {
     // Electron 45 的剪贴板是 W3C 风格：has/read/getType，不再有 readImage。

@@ -14,8 +14,17 @@ import {
   type VectorPath,
 } from "@sqraft/core";
 import { Canvas2DBackend, drawDocument, screenToWorld, worldToScreen, type Viewport } from "@sqraft/render";
-import { imageFor, putAsset } from "../assets";
-import { panCrop, scaleCrop, type CropRect } from "../canvas/image-crop";
+import { imageFor } from "../assets";
+import {
+  dropImages,
+  insertImages,
+  pickImages as openImagePicker,
+  readPickedFiles,
+  viewportCenterWorld,
+  type ImageInsertDeps,
+} from "../canvas/image-actions";
+import { abortCropDrag, applyCropDrag, beginCropDrag, endCropDrag } from "../canvas/crop-drag";
+import { pasteNodesFromClipboard, type PasteDeps } from "../canvas/node-clipboard";
 import { paintCropOverlay } from "../canvas/crop-overlay";
 import { drawDraftPath, drawPathEditing, drawShapePreview } from "../canvas/vector-overlay";
 import {
@@ -40,6 +49,21 @@ import {
 } from "../canvas/layout-preview";
 import { buildCreatedNode } from "../canvas/create-drag";
 import { deleteSelection as deleteSelectionAction } from "../canvas/delete-selection";
+import { duplicateSelection } from "../canvas/duplicate-selection";
+import { reorderSelection } from "../canvas/reorder-selection";
+import { flushNudge, nudgeSelection } from "../canvas/nudge";
+import { marqueeHits } from "../canvas/marquee";
+import { boundsHandlePoints, selectionBounds as boundsOfSelection } from "../canvas/selection-bounds";
+import { RULER_SIZE, drawGuidesOverlay, drawRulers, guideAt } from "../canvas/rulers";
+import {
+  abortMultiScale,
+  applyMultiScale,
+  beginMultiScale,
+  endMultiScale,
+  type MultiScaleState,
+} from "../canvas/multi-scale";
+import { abortRotate, applyRotate, beginRotate, endRotate, type RotateState } from "../canvas/rotate-drag";
+import { groupSelection, ungroupSelection } from "../canvas/group-actions";
 import { createDraftGuards } from "../canvas/draft-guard";
 import { paintDropSlot as paintDrop, paintSlotPlaceholders as paintSlots } from "../canvas/slot-overlay";
 import { drawPageLabels, labelAt, pageLabelRect } from "../canvas/labels";
@@ -111,7 +135,7 @@ const DEV_HUD = import.meta.env.DEV;
 
 let drag: {
   pointerId: number;
-  mode: "pan" | "create" | "move" | "resize" | "pen" | "vector" | "crop";
+  mode: "pan" | "create" | "move" | "resize" | "multi-resize" | "rotate" | "pen" | "vector" | "crop";
   startX: number;
   startY: number;
   /** 指针按下时的屏幕坐标（用于 3px 拖拽阈值，双击不会把节点碰偏） */
@@ -158,6 +182,23 @@ let drag: {
   cropStart?: CropRect;
 } | null = null;
 let preview: { x: number; y: number; w: number; h: number; valid: boolean } | null = null;
+/** 多选缩放：拖拽中累积的比例（每次只下发增量） */
+let multiScale: MultiScaleState | null = null;
+/** 从标尺拖出参考线：axis = x 是竖线，y 是横线；world 是指针的世界坐标 */
+let guideDrag: { axis: "x" | "y"; world: { x: number; y: number } } | null = null;
+/** 视图开关（UI 偏好，跨文件跨启动保留） */
+const guidesVisible = ref(localStorage.getItem("sqraft.guides.v1") !== "0");
+const gridVisible = ref(localStorage.getItem("sqraft.grid.v1") !== "0");
+const snapEnabled = ref(localStorage.getItem("sqraft.snap.v1") !== "0");
+
+function toggleView(key: "guides" | "grid" | "snap"): void {
+  const target = key === "guides" ? guidesVisible : key === "grid" ? gridVisible : snapEnabled;
+  target.value = !target.value;
+  localStorage.setItem(`sqraft.${key}.v1`, target.value ? "1" : "0");
+  markDirty();
+}
+/** 旋转拖拽：中心与起始极角 */
+let rotateState: RotateState | null = null;
 
 /** 钢笔 / 锚点编辑的会话状态（纯 UI 状态）。 */
 const pen = createPenState();
@@ -176,6 +217,20 @@ const HANDLE_HIT_PX = 7;
 const EDGE_SCROLL_ZONE = 40;
 const EDGE_SCROLL_MAX = 960;
 
+/** 指针在画布内的最后位置（屏幕坐标）：粘贴节点的落点用它 */
+let lastPointer: { x: number; y: number } | null = null;
+
+/** 框选：屏幕坐标下的选框；超过 3px 才 active（否则松手 = 点击清空） */
+let marquee: {
+  startX: number;
+  startY: number;
+  x: number;
+  y: number;
+  active: boolean;
+  additive: boolean;
+  base: NodeId[];
+} | null = null;
+
 /** 缩放中的实时预览（不改文档） */
 let resizePreview: { id: NodeId; x: number; y: number; width: number; height: number } | null = null;
 let vectorPreview: { id: NodeId; vector: VectorPath } | null = null;
@@ -186,7 +241,6 @@ const dragging = ref(false);
 /** 插入图片用的隐藏文件选择器 */
 const imageInput = ref<HTMLInputElement | null>(null);
 /** 裁切拖拽期间挂起的事务：松手才落成一条撤销记录 */
-let cropCommit: (() => void) | null = null;
 
 /* 页面参考线（世界坐标，拖拽中计算，绘制时转屏幕） */
 let guideLines: GuideLine[] = [];
@@ -260,7 +314,7 @@ function draw() {
   if (gridCtx) {
     syncLayerSize(gridCtx.canvas);
     clearLayer(gridCtx);
-    drawGrid(gridCtx, vp);
+    if (gridVisible.value) drawGrid(gridCtx, vp);
   }
 
   backend.beginFrame(vp);
@@ -296,6 +350,51 @@ function draw() {
     pathEditId: pen.pathEdit?.id ?? null,
     hoverTextId: hoverTextId.value,
   });
+
+  if (editing && ui.selection.length > 1 && !drag) {
+    const bounds = selectionWorldBounds();
+    if (bounds) {
+      const tl = worldToScreen(vp, bounds.x, bounds.y);
+      const br = worldToScreen(vp, bounds.x + bounds.width, bounds.y + bounds.height);
+      ctx.save();
+      ctx.strokeStyle = "rgba(79, 70, 229, 0.7)";
+      ctx.lineWidth = 1;
+      ctx.setLineDash([4, 3]);
+      ctx.strokeRect(tl.x + 0.5, tl.y + 0.5, Math.max(0, br.x - tl.x), Math.max(0, br.y - tl.y));
+      ctx.setLineDash([]);
+      ctx.fillStyle = "#ffffff";
+      for (const [, hx, hy] of boundsHandlePoints(tl, br)) {
+        ctx.beginPath();
+        ctx.rect(hx - 3.5, hy - 3.5, 7, 7);
+        ctx.fill();
+        ctx.stroke();
+      }
+      ctx.restore();
+    }
+  }
+
+  const activePageNode = ui.activePageId ? docStore.doc.nodes[ui.activePageId] : null;
+  if (editing) {
+    drawRulers(ctx, vp, activePageNode ?? null, selectionWorldBounds());
+    if (guidesVisible.value) {
+      const preview = guideDrag
+        ? { axis: guideDrag.axis, world: guideDrag.axis === "x" ? guideDrag.world.x : guideDrag.world.y }
+        : null;
+      drawGuidesOverlay(ctx, vp, activePageNode ?? null, preview);
+    }
+  }
+
+  if (marquee?.active) {
+    const x = Math.min(marquee.startX, marquee.x);
+    const y = Math.min(marquee.startY, marquee.y);
+    const w = Math.abs(marquee.x - marquee.startX);
+    const h = Math.abs(marquee.y - marquee.startY);
+    ctx.fillStyle = "rgba(79, 70, 229, 0.08)";
+    ctx.strokeStyle = "rgba(79, 70, 229, 0.55)";
+    ctx.lineWidth = 1;
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeRect(x + 0.5, y + 0.5, Math.max(0, w - 1), Math.max(0, h - 1));
+  }
 
   paintPathEditing(ctx);
   paintCropOverlay(ctx, vp, docStore.doc, ui.cropNodeId);
@@ -388,9 +487,27 @@ function autoScrollStep(dt: number): boolean {
 
 const resize = () => viewportNav.resize(canvasRef.value);
 
+/** 选区包围盒（世界坐标，忽略旋转）：多选手柄与检查器共用同一份实现 */
+function selectionWorldBounds(): Rect | null {
+  return boundsOfSelection(docStore.doc, ui.selection);
+}
+
 function hitHandle(sx: number, sy: number): { handle: ResizeHandle; id: NodeId } | null {
   if (pen.pathEdit) return null;
-  if (ui.mode !== "edit" || ui.tool !== "select" || ui.selection.length !== 1) return null;
+  if (ui.mode !== "edit" || ui.tool !== "select" || ui.selection.length === 0) return null;
+  // 多选：手柄围绕选区包围盒；id 为空串表示"整组缩放"
+  if (ui.selection.length > 1) {
+    // 选区里有锁定节点：不出手柄（core 会跳过它们，但手柄会把整组当成可缩放）
+    if (ui.selection.some((id) => isLocked(id))) return null;
+    const bounds = selectionWorldBounds();
+    if (!bounds) return null;
+    const tl = worldToScreen(vp, bounds.x, bounds.y);
+    const br = worldToScreen(vp, bounds.x + bounds.width, bounds.y + bounds.height);
+    for (const [handle, hx, hy] of boundsHandlePoints(tl, br)) {
+      if (Math.abs(sx - hx) <= HANDLE_HIT_PX && Math.abs(sy - hy) <= HANDLE_HIT_PX) return { handle, id: "" };
+    }
+    return null;
+  }
   const id = ui.selection[0];
   const node = docStore.doc.nodes[id];
   if (!node || node.type === "text" || isLocked(id)) return null;
@@ -434,6 +551,86 @@ function startPageRename(page: DocNode) {
   });
 }
 
+/** 参考线写进页面（页面本地坐标；1px 内视为同一条） */
+function commitGuide(axis: "x" | "y", world: { x: number; y: number }): void {
+  // 指针在哪个页面就落到哪个页面，取不到才回落活动页
+  const pageId = pageAt(world.x, world.y) ?? ui.activePageId;
+  const page = pageId ? docStore.doc.nodes[pageId] : null;
+  if (!page || page.type !== "page") return;
+  const current = page.guides ?? { x: [], y: [] };
+  const local = axis === "x" ? world.x - page.x : world.y - page.y;
+  const list = axis === "x" ? [...current.x] : [...current.y];
+  if (list.some((value) => Math.abs(value - local) <= 1)) return;
+  list.push(Math.round(local * 10) / 10);
+  dispatch(
+    {
+      type: "node.update",
+      params: { nodeId: page.id, patch: { guides: axis === "x" ? { ...current, x: list } : { ...current, y: list } } },
+    },
+    "参考线",
+  );
+}
+
+function removeGuide(axis: "x" | "y", index: number): void {
+  const page = ui.activePageId ? docStore.doc.nodes[ui.activePageId] : null;
+  if (!page?.guides) return;
+  const next = {
+    x: axis === "x" ? page.guides.x.filter((_, i) => i !== index) : [...page.guides.x],
+    y: axis === "y" ? page.guides.y.filter((_, i) => i !== index) : [...page.guides.y],
+  };
+  dispatch({ type: "node.update", params: { nodeId: page.id, patch: { guides: next } } }, "删除参考线");
+}
+
+/** 框选命中：当前层级、可见、未锁定，包围盒相交即选 */
+function updateMarqueeSelection(): void {
+  if (!marquee) return;
+  const a = screenToWorld(vp, marquee.startX, marquee.startY);
+  const b = screenToWorld(vp, marquee.x, marquee.y);
+  const rect = {
+    x: Math.min(a.x, b.x),
+    y: Math.min(a.y, b.y),
+    width: Math.abs(b.x - a.x),
+    height: Math.abs(b.y - a.y),
+  };
+  const levelId = ui.instanceContext.length ? ui.instanceContext.at(-1)! : ui.activePageId;
+  const hits = marqueeHits(docStore.doc, levelId, rect);
+  select(marquee.additive ? [...new Set([...marquee.base, ...hits])] : hits);
+}
+
+/** F2：重命名选中图层（输入框浮在图层左上角，和页面改名同一套提交逻辑） */
+function startRenameForSelection(): void {
+  const id = ui.selection[0];
+  const node = id ? docStore.doc.nodes[id] : null;
+  if (!node || node.type === "page") return;
+  const rect = worldRect(docStore.doc, node.id);
+  if (!rect) return;
+  const screen = worldToScreen(vp, rect.x, rect.y);
+  pageRename.value = {
+    id: node.id,
+    value: node.name,
+    left: screen.x,
+    top: Math.max(0, screen.y - 26),
+    width: Math.max(120, rect.width * vp.zoom),
+  };
+  markDirty();
+  void nextTick(() => {
+    renameEl.value?.focus();
+    renameEl.value?.select();
+  });
+}
+
+/** ⌘A：全选当前层级的可见未锁定图层（实例上下文内只选当前层） */
+function selectAllInPage(): void {
+  const level = ui.instanceContext.length ? ui.instanceContext.at(-1)! : ensureActivePage()?.id;
+  const container = level ? docStore.doc.nodes[level] : null;
+  if (!container) return;
+  select(container.children.filter((id) => {
+    const node = docStore.doc.nodes[id];
+    return !!node && node.visible && !isLocked(id);
+  }));
+  markDirty();
+}
+
 function commitPageRename() {
   const ed = pageRename.value;
   pageRename.value = null;
@@ -463,6 +660,15 @@ function onRenameKey(e: KeyboardEvent) {
 }
 
 function onDoubleClick(e: MouseEvent) {
+  const guideRect = canvasRef.value?.getBoundingClientRect();
+  if (guideRect && guidesVisible.value) {
+    const pageNode = ui.activePageId ? docStore.doc.nodes[ui.activePageId] ?? null : null;
+    const hit = guideAt(vp, pageNode, e.clientX - guideRect.left, e.clientY - guideRect.top);
+    if (hit) {
+      removeGuide(hit.axis, hit.index);
+      return;
+    }
+  }
   // 拖动模式只浏览：单击/双击都不改选区、不进编辑
   if (ui.mode === "pan") return;
   const rect = canvasRef.value!.getBoundingClientRect();
@@ -503,7 +709,8 @@ function onDoubleClick(e: MouseEvent) {
   const w = screenToWorld(vp, sx, sy);
   const hit = hitTest(vp, w.x, w.y);
   if (!hit) {
-    select([]);
+    marquee = { startX: sx, startY: sy, x: sx, y: sy, active: false, additive: e.shiftKey, base: [...ui.selection] };
+    dragging.value = true;
     return;
   }
   if (hit.inactive) {
@@ -634,6 +841,7 @@ function updateHover(e: PointerEvent) {
 const draftGuards = createDraftGuards(pen, () => canvasRef.value, () => finishDraft(pen, penDeps, false));
 
 function onPointerLeave() {
+  lastPointer = null;
   if (pen.draft) {
     pen.penHover = null;
     markDirty();
@@ -642,23 +850,45 @@ function onPointerLeave() {
 }
 
 /** 放弃当前手势（Esc）：清掉预览与参考线，不产生任何命令。 */
-/** 窗口失焦时松手事件收不到：把裁切事务收尾，避免事务永久挂起。 */
-function onWindowBlurEndCrop(): void {
-  if (drag?.mode === "crop") {
-    endCropDrag();
-    drag = null;
+/**
+ * 窗口失焦时松手事件收不到：把所有"开了事务的手势"收尾，避免事务永久挂起
+ * （挂起的事务会让之后每次编辑都并进去，撤销栈不再增长）。
+ * 失焦按"结束手势"处理（提交），取消由 Esc 负责。
+ */
+function onWindowBlurEndGesture(): void {
+  marquee = null;
+  if (!drag) {
     dragging.value = false;
-    markDirty();
+    return;
   }
+  if (drag.mode === "crop") endCropDrag();
+  if (drag.mode === "rotate") {
+    endRotate();
+    rotateState = null;
+  }
+  if (drag.mode === "multi-resize") {
+    endMultiScale();
+    multiScale = null;
+  }
+  drag = null;
+  dragging.value = false;
+  markDirty();
 }
 
 function cancelDrag() {
   if (!drag) return;
-  if (drag.mode === "crop" && drag.cropId) {
-    // 手势取消 = 回到拖拽前，且**不留撤销记录**（以前是再 apply 一条还原命令，
-    // 撤销栈里会多出一条净效果为空的"裁切图片"）
-    docStore.abortTransact();
-    endCropDrag();
+  if (drag.mode === "crop") {
+    // 手势取消 = 回到拖拽前，且**不留撤销记录**
+    abortCropDrag();
+  }
+  if (drag.mode === "rotate") {
+    // 取消 = 回到拖拽前，且不留撤销记录（与裁切取消同一套）
+    abortRotate();
+    rotateState = null;
+  }
+  if (drag.mode === "multi-resize") {
+    abortMultiScale();
+    multiScale = null;
   }
   dragging.value = false;
   drag = null;
@@ -683,105 +913,32 @@ function clearInsertPreview() {
 
 /* ---------------- 图片：插入 / 粘贴 / 拖入 ---------------- */
 
-/** 视口中心对应的世界坐标（粘贴图片的默认落点）。 */
-function viewportCenterWorld(): { x: number; y: number } {
-  return { x: vp.x + vp.width / (2 * vp.zoom), y: vp.y + vp.height / (2 * vp.zoom) };
-}
-
 /**
- * 插入一批图片：按原始像素落地，超过页面 80% 时等比缩小，多张横向排开。
- * 单张失败（格式/体积/解码）汇总成一次错误提示，不打断其它图片。
+ * 图片插入需要的画布能力：取页面、坐标换算、切活动页。
+ * 具体流程在 `canvas/image-actions.ts`，画布只负责接线。
  */
-async function insertImages(
-  files: readonly { bytes: Uint8Array; name: string }[],
-  anchor?: { x: number; y: number },
-): Promise<void> {
-  // 落在哪一页：拖放点/视口中心下的页面优先，其次活动页。
-  // 只认 activePageId 的话，拖动模式或视角停在别的页时图片会插到看不见的页里。
-  const under = anchor ? pageAt(anchor.x, anchor.y) : null;
-  const page = (under ? docStore.doc.nodes[under] : null) ?? activePage() ?? pageAtViewportCenter();
-  if (!page || page.type !== "page") {
-    await window.sqraft.dialog.error("当前没有可插入图片的页面");
-    return;
-  }
-  const pageId = page.id;
-
-  const problems: string[] = [];
-  const nodes: DocNode[] = [];
-  // 落点夹在页面内：视口中心可能落在页面外（缩放很小时），不夹会把图插到画板外
-  const local = anchor ? { x: anchor.x - page.x, y: anchor.y - page.y } : { x: 40, y: 40 };
-  let cursorX = Math.round(Math.min(Math.max(0, local.x), Math.max(0, page.width - 40)));
-  let cursorY = Math.round(Math.min(Math.max(0, local.y), Math.max(0, page.height - 40)));
-  const maxSide = Math.max(page.width, page.height) * 0.8;
-
-  for (const file of files) {
-    const asset = await putAsset(file.bytes);
-    if (!asset.ok) {
-      problems.push(`${file.name}：${asset.reason}`);
-      continue;
-    }
-    const scale = Math.min(1, maxSide / Math.max(asset.width, asset.height, 1));
-    const width = Math.max(1, Math.round(asset.width * scale));
-    const height = Math.max(1, Math.round(asset.height * scale));
-    nodes.push(
-      createNode("image", {
-        name: file.name.replace(/\.[^.]+$/, "") || "图片",
-        parentId: pageId,
-        x: cursorX,
-        y: cursorY,
-        width,
-        height,
-        image: {
-          assetId: asset.id,
-          naturalWidth: asset.width,
-          naturalHeight: asset.height,
-          crop: { x: 0, y: 0, width: asset.width, height: asset.height },
-        },
-      }),
-    );
-    cursorX += width + 16;
-  }
-
-  if (nodes.length > 0) {
-    docStore.apply({ type: "node.create", params: { nodes, parentId: pageId } }, "插入图片");
-    // 左栏跟着切到这一页，新图层才看得到
+const imageDeps: ImageInsertDeps = {
+  viewport: () => vp,
+  screenToWorld: (x, y) => screenToWorld(vp, x, y),
+  activePage,
+  pageAtViewportCenter,
+  pageAt,
+  focusPage: (pageId) => {
     if (ui.mode === "edit" && ui.activePageId !== pageId) setActivePage(pageId, false);
     ui.expandedPageId = pageId;
-    select(nodes.map((node) => node.id));
-  }
-  if (problems.length > 0) await window.sqraft.dialog.error(problems.join("\n"));
-}
+  },
+};
 
-/** 从 File 列表读取字节（渲染层能直接读 File，不需要经过主进程）。 */
-async function insertFromFiles(files: FileList | readonly File[], anchor?: { x: number; y: number }): Promise<void> {
-  const payload: { bytes: Uint8Array; name: string }[] = [];
-  for (const file of Array.from(files)) {
-    if (!file.type.startsWith("image/") && !/\.(png|jpe?g|webp|gif|svg)$/i.test(file.name)) continue;
-    payload.push({ bytes: new Uint8Array(await file.arrayBuffer()), name: file.name });
-  }
-  if (payload.length > 0) await insertImages(payload, anchor);
-}
+/** 粘贴落点：指针在画布上就粘到指针处，父级取指针下的容器 */
+const pasteDeps: PasteDeps = {
+  pointerWorld: () => (lastPointer ? screenToWorld(vp, lastPointer.x, lastPointer.y) : null),
+  activePageId: () => activePage()?.id ?? null,
+  pageAt,
+  containerAt: (x, y) => containerAt(x, y),
+};
 
-/** 拖入文件：只要不是 .sqraft（那个交给主进程打开），其它图片就地插入。 */
-function onCanvasDrop(e: DragEvent): void {
-  const files = e.dataTransfer?.files;
-  if (!files || files.length === 0) return;
-  if (Array.from(files).some((file) => file.name.toLowerCase().endsWith(".sqraft"))) return;
-  e.preventDefault();
-  const rect = canvasRef.value?.getBoundingClientRect();
-  const anchor = rect ? screenToWorld(vp, e.clientX - rect.left, e.clientY - rect.top) : undefined;
-  void insertFromFiles(files, anchor);
-}
-
-function pickImages(): void {
-  imageInput.value?.click();
-}
-
-function onImagePicked(e: Event): void {
-  const input = e.target as HTMLInputElement;
-  if (input.files && input.files.length > 0) void insertFromFiles(input.files);
-  input.value = "";
-}
+const onCanvasDrop = (e: DragEvent) => dropImages(e, imageDeps, canvasRef.value);
+const onImagePicked = (e: Event) => readPickedFiles(e, imageDeps);
 
 /* ---------------- 图片裁切 ---------------- */
 
@@ -792,51 +949,10 @@ function toggleCrop(nodeId: NodeId | null): void {
   markDirty();
 }
 
-function beginCrop(base: NonNullable<typeof drag>, node: DocNode, world: { x: number; y: number }, handle: ResizeHandle | null): void {
-  const ref = node.image;
-  if (!ref) return;
-  drag = {
-    ...base,
-    startX: world.x,
-    startY: world.y,
-    mode: "crop",
-    cropId: node.id,
-    cropHandle: handle,
-    cropStart: imageCropOf(node),
-  };
-  dragging.value = true;
-  // 整个拖拽合并成一条撤销记录：移动中每次都 apply，松手才提交
-  cropCommit = null;
-  void docStore.transact("裁切图片", () => new Promise<void>((resolve) => {
-    cropCommit = resolve;
-  }));
-}
-
-function endCropDrag(): void {
-  cropCommit?.();
-  cropCommit = null;
-}
-
-/** 角/边手柄 → 缩放的锚点方向。 */
-function cropCornerOf(handle: ResizeHandle): "nw" | "ne" | "se" | "sw" {
-  switch (handle) {
-    case "nw":
-    case "ne":
-    case "se":
-    case "sw":
-      return handle;
-    case "n":
-      return "ne";
-    case "s":
-      return "se";
-    case "e":
-      return "se";
-    default:
-      return "sw";
-  }
-}
 
 function onPointerDown(e: PointerEvent) {
+  // 先收掉微移会话，避免这次点击的命令被并进"微移"那条撤销
+  flushNudge();
   commitEditors();
   clearHover();
   clearInsertPreview();
@@ -859,6 +975,14 @@ function onPointerDown(e: PointerEvent) {
     offsetY: 0,
   };
 
+  // 标尺区按下：拖出参考线（横线来自顶部标尺，竖线来自左侧标尺）
+  if (e.button === 0 && ui.mode === "edit" && (sx < RULER_SIZE || sy < RULER_SIZE)) {
+    guideDrag = { axis: sy < RULER_SIZE ? "y" : "x", world: { x: w.x, y: w.y } };
+    dragging.value = true;
+    markDirty();
+    return;
+  }
+
   // 拖动模式：任意处拖动都是平移（包括页面与图层上方）
   if (ui.mode === "pan") {
     if (e.button !== 0 && e.button !== 1) return;
@@ -880,7 +1004,7 @@ function onPointerDown(e: PointerEvent) {
       const hit = hitTest(vp, w.x, w.y);
       if (hit?.id === cropId) {
         const handleHit = hitHandle(sx, sy);
-        beginCrop(base, node, w, handleHit?.id === cropId ? handleHit.handle : null);
+        drag = { ...base, ...beginCropDrag(node, w, handleHit?.id === cropId ? handleHit.handle : null) };
         return;
       }
       ui.cropNodeId = null;
@@ -921,7 +1045,26 @@ function onPointerDown(e: PointerEvent) {
   }
 
   // 1) 缩放手柄（仅单选、非文本）
+  if (hitRotateZone(sx, sy)) {
+    const bounds = selectionWorldBounds();
+    if (bounds) {
+      rotateState = beginRotate({ x: bounds.x + bounds.width / 2, y: bounds.y + bounds.height / 2 }, w);
+      drag = { ...base, startX: w.x, startY: w.y, mode: "rotate" };
+      dragging.value = true;
+      return;
+    }
+  }
+
   const handleHit = hitHandle(sx, sy);
+  if (handleHit && !handleHit.id) {
+    const bounds = selectionWorldBounds();
+    if (bounds) {
+      multiScale = beginMultiScale(bounds, handleHit.handle);
+      drag = { ...base, startX: w.x, startY: w.y, mode: "multi-resize", handle: handleHit.handle, startRect: bounds };
+      dragging.value = true;
+      return;
+    }
+  }
   if (handleHit) {
     const node = docStore.doc.nodes[handleHit.id];
     if (node) {
@@ -1022,7 +1165,8 @@ function onPointerDown(e: PointerEvent) {
   // 4) 选择
   const hit = hitTest(vp, w.x, w.y);
   if (!hit) {
-    select([]);
+    marquee = { startX: sx, startY: sy, x: sx, y: sy, active: false, additive: e.shiftKey, base: [...ui.selection] };
+    dragging.value = true;
     return;
   }
   if (hit.inactive) {
@@ -1144,7 +1288,7 @@ function updateMoveDrag() {
     // 进流位置由求解器决定：只画插入线，不做吸附
     guideLines = reorderGuide(target.id, w.x, w.y);
     gapMarks = [];
-  } else if (!alt && d.guide && d.snapRects?.length) {
+  } else if (snapEnabled.value && !alt && d.guide && d.snapRects?.length) {
     const guides = computeGuides(d.snapRects, d.guide.targets, { dx: d.offsetX, dy: d.offsetY }, vp.zoom);
     d.offsetX = guides.dx;
     d.offsetY = guides.dy;
@@ -1158,6 +1302,24 @@ function updateMoveDrag() {
 }
 
 function onPointerMove(e: PointerEvent) {
+  const pointerRect = canvasRef.value?.getBoundingClientRect();
+  if (pointerRect) lastPointer = { x: e.clientX - pointerRect.left, y: e.clientY - pointerRect.top };
+  if (guideDrag) {
+    const world = screenToWorld(vp, e.clientX - (pointerRect?.left ?? 0), e.clientY - (pointerRect?.top ?? 0));
+    guideDrag = { axis: guideDrag.axis, world };
+    markDirty();
+    return;
+  }
+  if (marquee) {
+    marquee.x = e.clientX - (pointerRect?.left ?? 0);
+    marquee.y = e.clientY - (pointerRect?.top ?? 0);
+    if (!marquee.active && Math.hypot(marquee.x - marquee.startX, marquee.y - marquee.startY) > 3) {
+      marquee.active = true;
+    }
+    if (marquee.active) updateMarqueeSelection();
+    markDirty();
+    return;
+  }
   if (!drag) {
     if (pen.draft) {
       const rect = canvasRef.value!.getBoundingClientRect();
@@ -1250,36 +1412,13 @@ function onPointerMove(e: PointerEvent) {
       }
     }
     pen.vectorDrag.preview = vec;
-  } else if (drag.mode === "crop" && drag.cropId) {
-    const node = docStore.doc.nodes[drag.cropId];
-    const ref = node?.image;
-    if (node && ref && drag.cropStart) {
-      const world = screenToWorld(vp, sx, sy);
-      const natural = { width: ref.naturalWidth, height: ref.naturalHeight };
-      const box = { width: node.width, height: node.height };
-      const dx = world.x - drag.startX;
-      const dy = world.y - drag.startY;
-      let next: CropRect;
-      if (drag.cropHandle) {
-        const h = drag.cropHandle;
-        const signX = h.includes("e") ? 1 : h.includes("w") ? -1 : 0;
-        const signY = h.includes("s") ? 1 : h.includes("n") ? -1 : 0;
-        next = scaleCrop(
-          drag.cropStart,
-          natural,
-          box,
-          { width: box.width + signX * dx, height: box.height + signY * dy },
-          cropCornerOf(h),
-        );
-      } else {
-        next = panCrop(drag.cropStart, natural, box, dx, dy);
-      }
-      docStore.apply(
-        { type: "node.update", params: { nodeId: node.id, patch: { image: { ...ref, crop: next } } } },
-        "裁切图片",
-      );
-      drag.moved = true;
-    }
+  } else if (drag.mode === "crop") {
+    const world = screenToWorld(vp, sx, sy);
+    if (applyCropDrag(drag, world)) drag.moved = true;
+  } else if (drag.mode === "rotate") {
+    if (rotateState) applyRotate(rotateState, w, e.shiftKey);
+  } else if (drag.mode === "multi-resize") {
+    if (multiScale) applyMultiScale(multiScale, w, e.shiftKey);
   } else if (drag.mode === "move") {
     drag.lastScreen = { x: sx, y: sy };
     drag.lastMods = { alt: e.altKey, meta: e.metaKey, shift: e.shiftKey };
@@ -1295,7 +1434,7 @@ function onPointerMove(e: PointerEvent) {
     const delta = localDelta(drag.resizeId, w.x - drag.startX, w.y - drag.startY);
     let next = resizeRect(drag.startRect, drag.handle, delta.dx, delta.dy, e.shiftKey, min);
     // 缩放参考线：只吸被拖动的边；⇧ 等比 / ⌥ 临时关闭时不吸附
-    if (!e.altKey && !e.shiftKey && node && drag.guide) {
+    if (snapEnabled.value && !e.altKey && !e.shiftKey && node && drag.guide) {
       const origin = worldRect(docStore.doc, node.id);
       const ox = origin ? origin.x - node.x : 0;
       const oy = origin ? origin.y - node.y : 0;
@@ -1332,7 +1471,7 @@ function onPointerMove(e: PointerEvent) {
     preview = { x: drag.startX, y: drag.startY, w: pw, h: ph, valid: Boolean(drag.pageId) };
     // 绘制参考线：只吸指针那一角，起点（锚）不动；⌥ 临时关闭
     const page = drag.pageId ? docStore.doc.nodes[drag.pageId] : null;
-    if (!e.altKey && page) {
+    if (snapEnabled.value && !e.altKey && page) {
       const x0 = Math.min(preview.x, preview.x + preview.w);
       const y0 = Math.min(preview.y, preview.y + preview.h);
       const w0 = Math.abs(preview.w);
@@ -1504,6 +1643,28 @@ function commitMoveDrag(d: NonNullable<typeof drag>, e: PointerEvent): void {
 }
 
 function onPointerUp(e: PointerEvent) {
+  if (guideDrag) {
+    const rect = canvasRef.value?.getBoundingClientRect();
+    const sx = rect ? e.clientX - rect.left : 0;
+    const sy = rect ? e.clientY - rect.top : 0;
+    // 拖回标尺里松手 = 取消
+    const inRuler = sx < RULER_SIZE || sy < RULER_SIZE;
+    const pending = guideDrag;
+    guideDrag = null;
+    dragging.value = false;
+    if (!inRuler) commitGuide(pending.axis, pending.world);
+    markDirty();
+    return;
+  }
+  if (marquee) {
+    const wasActive = marquee.active;
+    marquee = null;
+    dragging.value = false;
+    // 没拖动 = 点击空白：清空选区
+    if (!wasActive) select([]);
+    markDirty();
+    return;
+  }
   if (!drag) return;
   dragging.value = false;
   clearInsertPreview();
@@ -1516,6 +1677,20 @@ function onPointerUp(e: PointerEvent) {
     drag = null;
     guideLines = [];
     gapMarks = [];
+    markDirty();
+    return;
+  }
+  if (drag.mode === "rotate") {
+    endRotate();
+    rotateState = null;
+    drag = null;
+    markDirty();
+    return;
+  }
+  if (drag.mode === "multi-resize") {
+    endMultiScale();
+    multiScale = null;
+    drag = null;
     markDirty();
     return;
   }
@@ -1736,7 +1911,34 @@ function onKey(e: KeyboardEvent) {
     }
   }
 
+  // 方向键微移：1px，⇧ 10px；连按合并成一条撤销
+  const step = e.shiftKey ? 10 : 1;
+  const nudgeX = e.key === "ArrowLeft" ? -step : e.key === "ArrowRight" ? step : 0;
+  const nudgeY = e.key === "ArrowUp" ? -step : e.key === "ArrowDown" ? step : 0;
+  if (
+    (nudgeX !== 0 || nudgeY !== 0) &&
+    !e.metaKey &&
+    !e.ctrlKey &&
+    !e.altKey &&
+    ui.mode === "edit" &&
+    !ui.cropNodeId &&
+    !textEdit.value &&
+    !pageRename.value
+  ) {
+    e.preventDefault();
+    nudgeSelection(nudgeX, nudgeY);
+    return;
+  }
+
   if (e.key !== "Escape") return;
+
+  if (marquee) {
+    if (marquee.active) select(marquee.base);
+    marquee = null;
+    dragging.value = false;
+    markDirty();
+    return;
+  }
 
   if (ui.cropNodeId) {
     ui.cropNodeId = null;
@@ -1835,7 +2037,9 @@ onMounted(() => {
   hooks.focusNode = focusNode;
   hooks.focusPage = focusPage;
   hooks.fitActivePage = fitActivePage;
-  hooks.insertImageBytes = (bytes, name) => insertImages([{ bytes, name }], viewportCenterWorld());
+  hooks.insertImageBytes = (bytes, name) => insertImages([{ bytes, name }], imageDeps, viewportCenterWorld(imageDeps));
+  hooks.pasteNodes = () => pasteNodesFromClipboard(pasteDeps);
+  hooks.selectAllLayers = selectAllInPage;
   hooks.getActivePageId = () => {
     if (ui.mode === "edit") return ensureActivePage()?.id ?? null;
     return pageAtViewportCenter()?.id ?? null;
@@ -1844,7 +2048,7 @@ onMounted(() => {
   hooks.requestRedraw = markDirty;
   unsub = docStore.subscribe(markDirty);
   stopShortcuts = registerShortcuts({
-    "file.insertImage": () => pickImages(),
+    "file.insertImage": () => openImagePicker(imageInput.value),
     "mode.pan": () => {
       switchMode("pan");
       clearHover();
@@ -1859,7 +2063,15 @@ onMounted(() => {
     "tool.text": () => pickTool("text"),
     "edit.undo": () => docStore.undo(),
     "edit.redo": () => docStore.redo(),
+    "edit.group": () => groupSelection(),
+    "edit.ungroup": () => ungroupSelection(),
+    "edit.rename": () => startRenameForSelection(),
     "edit.delete": () => deleteSelectionAction(pen),
+    "edit.duplicate": () => duplicateSelection(),
+    "edit.moveForward": () => reorderSelection("forward"),
+    "edit.moveBackward": () => reorderSelection("backward"),
+    "edit.moveToFront": () => reorderSelection("front"),
+    "edit.moveToBack": () => reorderSelection("back"),
     "component.create": createComponentFromSelection,
     "component.detach": detachSelection,
     "view.zoomIn": () => zoomStep(1.2),
@@ -1867,6 +2079,9 @@ onMounted(() => {
     "view.zoomReset": resetZoom,
     "view.fit": () => fitView(),
     "view.fitAll": () => fitAll(),
+    "view.toggleGrid": () => toggleView("grid"),
+    "view.toggleSnap": () => toggleView("snap"),
+    "view.toggleGuides": () => toggleView("guides"),
   });
   stopModeWatch = watch(
     () => ui.mode,
@@ -1909,7 +2124,7 @@ onMounted(() => {
   window.addEventListener("keydown", onKey, true);
   window.addEventListener("pointerdown", draftGuards.onWindowPointerDown, true);
   window.addEventListener("blur", draftGuards.onWindowBlur);
-  window.addEventListener("blur", onWindowBlurEndCrop);
+  window.addEventListener("blur", onWindowBlurEndGesture);
 });
 
 onBeforeUnmount(() => {
@@ -1942,7 +2157,7 @@ onBeforeUnmount(() => {
       @wheel.prevent="onWheel"
     />
 
-    <!-- 页面名称行内改名 -->
+    <!-- 行内改名（页面名 / 图层名，F2） -->
     <input
       v-if="pageRename"
       ref="renameEl"
@@ -2014,220 +2229,4 @@ onBeforeUnmount(() => {
   </div>
 </template>
 
-<style scoped>
-.viewport {
-  position: absolute;
-  inset: 0;
-}
-
-.image-input {
-  display: none;
-}
-
-.canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  touch-action: none;
-  /* 只有最上层 UI 画布接收指针事件；网格与文档层纯视觉 */
-  pointer-events: none;
-}
-.dev-hud {
-  position: absolute;
-  left: 50%;
-  bottom: 44px;
-  transform: translateX(-50%);
-  padding: 3px 7px;
-  border-radius: 6px;
-  background: var(--overlay-strong);
-  color: #fff;
-  font-family: var(--mono);
-  font-size: 10px;
-  pointer-events: none;
-  z-index: 3;
-}
-
-.canvas-grid {
-  z-index: 0;
-}
-.canvas-doc {
-  z-index: 1;
-}
-.canvas-ui {
-  z-index: 2;
-  pointer-events: auto;
-}
-
-/* 页面名称行内改名（与画布标签同位置、同字号） */
-.rename-input {
-  position: absolute;
-  z-index: 8;
-  height: 18px;
-  box-sizing: border-box;
-  padding: 0 5px;
-  border: 1px solid var(--accent-line);
-  border-radius: 6px;
-  background: var(--surface);
-  color: var(--text);
-  font-size: 11px;
-  font-family: "Geist Variable", "PingFang SC", sans-serif;
-  outline: none;
-  box-shadow: 0 0 0 3px var(--accent-soft);
-}
-
-/* 文本行内编辑：透明底 + 细描边，字与画布渲染对齐 */
-.text-edit {
-  position: absolute;
-  z-index: 8;
-  margin: 0;
-  padding: 0;
-  border: none;
-  border-radius: 2px;
-  background: transparent;
-  box-shadow:
-    0 0 0 1px var(--accent-line),
-    0 0 0 4px rgba(79, 70, 229, 0.1);
-  color: var(--text);
-  white-space: pre-wrap;
-  overflow: hidden;
-  outline: none;
-}
-.text-edit > div + div {
-  margin-top: var(--para, 0px);
-}
-.text-edit.is-list > div {
-  position: relative;
-  padding-left: 1.2em;
-}
-.text-edit.is-numbered {
-  counter-reset: text-li;
-}
-.text-edit.is-numbered > div::before {
-  counter-increment: text-li;
-  content: counter(text-li) ".";
-  position: absolute;
-  left: 0;
-}
-.text-edit.is-list:not(.is-numbered) > div::before {
-  content: "•";
-  position: absolute;
-  left: 0.15em;
-}
-
-.zoom-bar {
-  position: absolute;
-  right: 306px;
-  bottom: 22px;
-  z-index: 7;
-  display: flex;
-  align-items: center;
-  gap: 1px;
-  padding: 3px 4px;
-  border-radius: var(--radius-pill);
-  background: var(--surface-strong);
-}
-
-.zoom-backdrop {
-  position: absolute;
-  inset: 0;
-  z-index: 5;
-}
-
-.zoom-menu {
-  position: absolute;
-  right: 306px;
-  bottom: 58px;
-  z-index: 6;
-  min-width: 132px;
-  padding: 4px;
-  background: var(--surface);
-  border: 1px solid var(--hairline);
-  border-radius: var(--radius-md);
-  box-shadow: var(--shadow-float);
-  animation: zoom-menu-in 160ms var(--ease) both;
-}
-
-@keyframes zoom-menu-in {
-  from {
-    opacity: 0;
-    transform: translateY(4px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-.zoom-menu button {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  width: 100%;
-  border: none;
-  background: transparent;
-  color: var(--text-dim);
-  border-radius: var(--radius-sm);
-  padding: 6px 10px;
-  font-size: 11.5px;
-  font-family: var(--mono);
-  cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease);
-}
-
-.zoom-menu button:hover {
-  background: var(--tint-5);
-  color: var(--text);
-}
-
-.zoom-menu .check {
-  color: var(--accent);
-  font-size: 10px;
-  display: grid;
-  place-items: center;
-}
-
-.z-menu-divider {
-  display: block;
-  height: 1px;
-  background: var(--hairline);
-  margin: 4px 6px;
-}
-
-.zoom-bar button {
-  display: grid;
-  place-items: center;
-  height: 24px;
-  min-width: 24px;
-  border: none;
-  background: transparent;
-  border-radius: 6px;
-  color: var(--text-dim);
-  font-size: 13px;
-  font-family: inherit;
-  cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease);
-}
-
-.zoom-bar button:hover {
-  background: var(--tint-6);
-  color: var(--text);
-}
-
-.zoom-pct {
-  min-width: 46px !important;
-  font-family: var(--mono) !important;
-  font-size: 10.5px !important;
-}
-
-.z-divider {
-  width: 1px;
-  height: 14px;
-  background: var(--hairline);
-  margin: 0 2px;
-}
-</style>
+<style scoped src="./canvas-view.css"></style>

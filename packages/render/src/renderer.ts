@@ -217,12 +217,12 @@ export function drawDocument(backend: RenderBackend, doc: DocState, options: Dra
     // 页面淡化的包围盒交给后端退化为视口：整页子树遍历太贵，而层本身会被视口裁住
     if (dimmed) backend.pushOpacity(0.35);
     const geo = geometryOf(page, options);
-    // 页面 = 画布上的白色画板（带柔和投影）
+    // 页面 = 画布上的画板（带柔和投影）：背景取页面的填充，缺省白
     backend.drawRect(
       geo.x !== page.x || geo.y !== page.y || geo.width !== page.width || geo.height !== page.height
         ? { ...page, ...geo }
         : page,
-      "#ffffff",
+      resolvePaint(doc, page.style.fill) ?? "#ffffff",
       "rgba(15,23,42,0.10)",
       1,
       { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 },

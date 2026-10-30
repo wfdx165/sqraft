@@ -9,6 +9,9 @@ import { effectPadding } from "./effects";
 
 export type NodeId = string;
 
+/** 当前文件格式版本：新增字段时 +1，并在 migrate 里补一段迁移。 */
+export const CURRENT_FORMAT_VERSION = 4;
+
 export type NodeType =
   | "page" | "frame" | "group" | "rect" | "ellipse" | "line"
   | "polygon" | "star" | "path" | "text" | "image"
@@ -180,6 +183,8 @@ export interface DocNode {
   image?: ImageRef;
   /** 作为蒙版：遮罩同一父级里它上方相邻的兄弟（Figma 语义） */
   isMask?: boolean;
+  /** 参考线：仅 page 使用，页面本地坐标（页面左上角为原点） */
+  guides?: { x: number[]; y: number[] };
   style: NodeStyle;
 }
 
@@ -249,7 +254,7 @@ export function createEmptyDoc(): DocState {
   });
   return {
     version: 1,
-    formatVersion: 2,
+    formatVersion: CURRENT_FORMAT_VERSION,
     rootIds: [page.id],
     nodes: { [page.id]: page },
     tokens: {

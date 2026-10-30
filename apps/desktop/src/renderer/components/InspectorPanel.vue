@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { useInspector } from "../inspector/useInspector";
+import Icon from "./Icon.vue";
 import ImageSection from "./ImageSection.vue";
 import { EFFECT_TYPES } from "@sqraft/core";
 import { docStore, ui } from "../store";
@@ -110,6 +111,13 @@ const {
   supportsLayout,
   supportsSizing,
   readonly,
+  selectionBounds,
+  setBoundsNumber,
+  showAlign,
+  canAlign,
+  canDistribute,
+  align,
+  distribute,
   tokenNames,
   radiusExpanded,
   paddingExpanded,
@@ -219,8 +227,35 @@ const {
         </div>
       </section>
 
+      <!-- 对齐与分布：单选对齐父内容区、多选对齐选区包围盒；自动布局子项置灰 -->
+      <section v-if="showAlign" class="block">
+        <span class="micro-label">对齐</span>
+        <div class="align-row">
+          <button class="icon-btn" :disabled="!canAlign" title="左对齐" @click="align('left')"><Icon name="align-left" :size="14" /></button>
+          <button class="icon-btn" :disabled="!canAlign" title="水平居中" @click="align('h-center')"><Icon name="align-h-center" :size="14" /></button>
+          <button class="icon-btn" :disabled="!canAlign" title="右对齐" @click="align('right')"><Icon name="align-right" :size="14" /></button>
+          <button class="icon-btn" :disabled="!canAlign" title="顶对齐" @click="align('top')"><Icon name="align-top" :size="14" /></button>
+          <button class="icon-btn" :disabled="!canAlign" title="垂直居中" @click="align('v-center')"><Icon name="align-v-center" :size="14" /></button>
+          <button class="icon-btn" :disabled="!canAlign" title="底对齐" @click="align('bottom')"><Icon name="align-bottom" :size="14" /></button>
+          <button class="icon-btn" :disabled="!canDistribute" title="水平等间距（至少 3 个图层）" @click="distribute('horizontal')"><Icon name="distribute-h" :size="14" /></button>
+          <button class="icon-btn" :disabled="!canDistribute" title="垂直等间距（至少 3 个图层）" @click="distribute('vertical')"><Icon name="distribute-v" :size="14" /></button>
+        </div>
+        <p v-if="!canAlign" class="hint">自动布局子项的位置由布局决定，不能手动对齐</p>
+      </section>
+
       <section v-if="multi" class="block">
         <span class="micro-label">批量变换</span>
+        <!-- 包围盒语义：X/Y 平移整体，W/H 等比缩放整体 -->
+        <div class="grid two" v-if="selectionBounds">
+          <label>X</label>
+          <input class="mono" type="number" step="1" :value="fmt(selectionBounds.x)" :disabled="readonly" @change="setBoundsNumber('x', $event)" />
+          <label>Y</label>
+          <input class="mono" type="number" step="1" :value="fmt(selectionBounds.y)" :disabled="readonly" @change="setBoundsNumber('y', $event)" />
+          <label>W</label>
+          <input class="mono" type="number" step="1" :value="fmt(selectionBounds.width)" :disabled="readonly" @change="setBoundsNumber('w', $event)" />
+          <label>H</label>
+          <input class="mono" type="number" step="1" :value="fmt(selectionBounds.height)" :disabled="readonly" @change="setBoundsNumber('h', $event)" />
+        </div>
         <div class="grid two">
           <label>旋转</label>
           <input class="mono" type="number" step="1" :value="numValue(shared((n) => n.rotation))" placeholder="混合" :disabled="readonly" @change="setRotation($event)" />
@@ -447,7 +482,7 @@ const {
       <section v-if="supportsFill || supportsStroke" class="block">
         <span class="micro-label">外观</span>
         <div v-if="supportsFill" class="row">
-          <label>填充</label>
+          <label>{{ node.type === "page" ? "背景" : "填充" }}</label>
           <div class="color-control">
             <span class="swatch" :style="{ background: colorOf(node.style.fill) }" />
             <select :value="fillTokenOf(node)" :disabled="readonly" @change="setFill">
@@ -864,6 +899,32 @@ header {
 .icon-group {
   display: flex;
   gap: 4px;
+}
+
+.align-row {
+  display: flex;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
+.align-row .icon-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 24px;
+  padding: 0;
+}
+
+.align-row .icon-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.hint {
+  margin: 6px 0 0;
+  font-size: 10.5px;
+  color: var(--text-faint);
 }
 
 .icon-btn {

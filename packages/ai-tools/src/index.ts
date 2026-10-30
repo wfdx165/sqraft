@@ -12,6 +12,10 @@ import {
   firstPageId,
   makeAnchor,
   newId,
+  planDuplicate,
+  type AlignEdge,
+  type DistributeAxis,
+  type ReorderAction,
   nextComponentName,
   validateVector,
   walkSubtree,
@@ -353,6 +357,64 @@ export const tools: ToolDefinition[] = [
     },
   },
   {
+    name: "group_nodes",
+    description:
+      "把多个节点打成一个分组（Figma 语义：无填充、不裁剪、尺寸等于子节点并集，缩放组等于缩放子节点）。返回新分组 id。",
+    input_schema: {
+      type: "object",
+      properties: {
+        nodeIds: { type: "array", items: { type: "string" }, minItems: 1 },
+        name: { type: "string", description: "分组名；省略时自动编号" },
+      },
+      required: ["nodeIds"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "arrange_nodes",
+    description:
+      "排列一组节点：六种对齐（单选对父容器内容区、多选对选区包围盒）、两种等间距分布（至少 3 个）、四种层级调整。自动布局子项会被拒绝（位置由布局决定）。",
+    input_schema: {
+      type: "object",
+      properties: {
+        nodeIds: { type: "array", items: { type: "string" }, minItems: 1 },
+        action: {
+          type: "string",
+          enum: [
+            "align-left",
+            "align-h-center",
+            "align-right",
+            "align-top",
+            "align-v-center",
+            "align-bottom",
+            "distribute-h",
+            "distribute-v",
+            "bring-forward",
+            "send-backward",
+            "bring-to-front",
+            "send-to-back",
+          ],
+        },
+      },
+      required: ["nodeIds", "action"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "duplicate_node",
+    description: "原地复制节点（含整棵子树，组件引用与覆盖一起重映射），返回新根节点 id 列表。",
+    input_schema: {
+      type: "object",
+      properties: {
+        nodeId: { type: "string" },
+        offsetX: { type: "number", description: "相对原件的水平偏移，默认 10" },
+        offsetY: { type: "number", description: "相对原件的垂直偏移，默认 10" },
+      },
+      required: ["nodeId"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "screenshot",
     description:
       "截取当前画布视口为 PNG（data URL），用于自检生成结果。只包含设计稿本身（不含网格、选中框、参考线）。可用 region 只截文档坐标下的某个范围，例如某个画板。",
@@ -607,6 +669,9 @@ const MUTATING_TOOLS = new Set([
   "detach_instance",
   "update_node",
   "delete_node",
+  "group_nodes",
+  "arrange_nodes",
+  "duplicate_node",
 ]);
 
 export function makeExecutor(
@@ -895,6 +960,60 @@ export function makeExecutor(
         if (!store.doc.nodes[nodeId]) throw new Error(`节点 ${nodeId} 不存在`);
         store.apply({ type: "node.delete", params: { nodeId } }, "ai:delete");
         return JSON.stringify({ ok: true });
+      }
+      case "group_nodes": {
+        const nodeIds = args.nodeIds as NodeId[];
+        if (!Array.isArray(nodeIds) || nodeIds.length === 0) throw new Error("group_nodes 需要 nodeIds");
+        const groupId = newId();
+        store.apply(
+          { type: "node.group", params: { nodeIds, groupId, name: args.name as string | undefined } },
+          "ai:group",
+        );
+        return JSON.stringify({ ok: true, groupId });
+      }
+      case "arrange_nodes": {
+        const nodeIds = args.nodeIds as NodeId[];
+        if (!Array.isArray(nodeIds) || nodeIds.length === 0) throw new Error("arrange_nodes 需要 nodeIds");
+        const action = String(args.action ?? "");
+        const ALIGN: Record<string, AlignEdge> = {
+          "align-left": "left",
+          "align-h-center": "h-center",
+          "align-right": "right",
+          "align-top": "top",
+          "align-v-center": "v-center",
+          "align-bottom": "bottom",
+        };
+        const DISTRIBUTE: Record<string, DistributeAxis> = {
+          "distribute-h": "horizontal",
+          "distribute-v": "vertical",
+        };
+        const REORDER: Record<string, ReorderAction> = {
+          "bring-forward": "forward",
+          "send-backward": "backward",
+          "bring-to-front": "front",
+          "send-to-back": "back",
+        };
+        if (ALIGN[action]) {
+          store.apply({ type: "node.align", params: { nodeIds, align: ALIGN[action] } }, "ai:align");
+        } else if (DISTRIBUTE[action]) {
+          store.apply({ type: "node.distribute", params: { nodeIds, axis: DISTRIBUTE[action] } }, "ai:distribute");
+        } else if (REORDER[action]) {
+          store.apply({ type: "node.reorder", params: { nodeIds, action: REORDER[action] } }, "ai:reorder");
+        } else {
+          throw new Error(`arrange_nodes 不支持的动作: ${action}`);
+        }
+        return JSON.stringify({ ok: true });
+      }
+      case "duplicate_node": {
+        const nodeId = args.nodeId as NodeId;
+        if (!store.doc.nodes[nodeId]) throw new Error(`节点 ${nodeId} 不存在`);
+        const plan = planDuplicate(store.doc, [nodeId], {
+          dx: typeof args.offsetX === "number" ? args.offsetX : 10,
+          dy: typeof args.offsetY === "number" ? args.offsetY : 10,
+          makeId: newId,
+        });
+        store.apply(plan.command, "ai:duplicate");
+        return JSON.stringify({ ok: true, nodeIds: plan.rootIds });
       }
       case "screenshot": {
         const region = args.region as ScreenshotRegion | undefined;

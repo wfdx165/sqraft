@@ -115,6 +115,10 @@ export const hooks: {
   insertInstance: (componentId: NodeId) => void;
   /** 把一张位图插到视口中心（⌘V / 菜单粘贴用） */
   insertImageBytes: (bytes: Uint8Array, name: string) => Promise<void>;
+  /** 粘贴 sqraft 节点载荷；剪贴板里没有节点数据时返回 false（继续试图片/文本） */
+  pasteNodes: () => Promise<boolean>;
+  /** ⌘A：全选当前层级的可见未锁定图层（由画布实现） */
+  selectAllLayers: () => void;
   requestRedraw: () => void;
 } = {
   getScreenshot: async () => "",
@@ -124,5 +128,7 @@ export const hooks: {
   getActivePageId: () => null,
   insertInstance: () => {},
   insertImageBytes: async () => {},
+  pasteNodes: async () => false,
+  selectAllLayers: () => {},
   requestRedraw: () => {},
 };

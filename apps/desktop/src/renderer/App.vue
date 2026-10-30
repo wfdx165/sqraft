@@ -11,11 +11,12 @@ import WelcomeView from "./components/WelcomeView.vue";
 import ConnectionStatus from "./components/ConnectionStatus.vue";
 import McpSetupPanel from "./components/McpSetupPanel.vue";
 import AboutPanel from "./components/AboutPanel.vue";
-import { ui } from "./store";
+import { hooks, ui } from "./store";
 import { bindingRev, installShortcuts, keyOf, registerShortcuts, runAction, shortcutUi, type ActionId } from "./shortcuts";
 import { closeDocument, installFileSession, newDocument } from "./file-session";
 import { installMcpHost } from "./mcp-host";
 import { pasteFromClipboard } from "./paste";
+import { copySelectionAction, cutSelectionAction } from "./canvas/node-clipboard";
 
 /** 菜单里出现的动作：键位同步给主进程，点击回送到渲染层同一个执行器。 */
 const MENU_ACTIONS: ActionId[] = [
@@ -25,6 +26,8 @@ const MENU_ACTIONS: ActionId[] = [
   "file.save",
   "file.saveAs",
   "file.closeDoc",
+  "edit.copy",
+  "edit.cut",
   "edit.undo",
   "edit.paste",
   "edit.redo",
@@ -33,6 +36,9 @@ const MENU_ACTIONS: ActionId[] = [
   "view.zoomReset",
   "view.fit",
   "view.fitAll",
+  "view.toggleGrid",
+  "view.toggleSnap",
+  "view.toggleGuides",
 ];
 
 const mcpSetupOpen = ref(false);
@@ -62,6 +68,15 @@ onMounted(() => {
     "file.new": () => void newDocument(),
     "file.closeDoc": () => void closeDocument(),
     "edit.paste": () => void pasteFromClipboard(),
+    // 复制/剪切/全选放在根组件：欢迎页也要能复制文本（画布不在时走原生）
+    "edit.copy": () => void copySelectionAction(),
+    "edit.cut": () => void cutSelectionAction(),
+    "edit.selectAll": () => {
+      const el = document.activeElement as HTMLElement | null;
+      const editing = !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+      if (editing) document.execCommand("selectAll");
+      else hooks.selectAllLayers();
+    },
   });
 });
 onBeforeUnmount(() => {

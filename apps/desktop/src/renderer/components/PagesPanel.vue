@@ -13,6 +13,7 @@ import {
 } from "@sqraft/core";
 import { dispatch, docStore, hooks, select, ui } from "../store";
 import { registerShortcuts } from "../shortcuts";
+import { planLayerDrop, type DropPosition } from "../canvas/layer-drag";
 import Icon from "./Icon.vue";
 import { assetUrl } from "../assets";
 
@@ -127,6 +128,51 @@ function thumbOf(n: DocNode): string | null {
 
 function toggleLayerLock(n: DocNode): void {
   dispatch({ type: "node.update", params: { nodeId: n.id, patch: { locked: !n.locked } } }, "lock");
+}
+
+/* ---------- 图层拖拽 ---------- */
+
+const dragId = ref<NodeId | null>(null);
+const dropHint = ref<{ id: NodeId; position: DropPosition } | null>(null);
+
+function onDragStart(row: Row, e: DragEvent) {
+  dragId.value = row.node.id;
+  e.dataTransfer?.setData("text/plain", row.node.id);
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+}
+
+function onDragOver(row: Row, e: DragEvent) {
+  if (!dragId.value || dragId.value === row.node.id) return;
+  e.preventDefault();
+  const el = e.currentTarget as HTMLElement;
+  const box = el.getBoundingClientRect();
+  const ratio = (e.clientY - box.top) / Math.max(1, box.height);
+  const container = row.node.type === "frame" || row.node.type === "component" || row.node.type === "group";
+  // 容器行中间 40% = 放进容器，其余按上下半区插入
+  dropHint.value =
+    container && ratio > 0.3 && ratio < 0.7
+      ? { id: row.node.id, position: "inside" }
+      : { id: row.node.id, position: ratio < 0.5 ? "above" : "below" };
+}
+
+function onDrop(row: Row) {
+  const id = dragId.value;
+  const hint = dropHint.value;
+  dragId.value = null;
+  dropHint.value = null;
+  if (!id || !hint) return;
+  const plan = planLayerDrop(docStore.doc, id, hint.id, hint.position);
+  if (!plan) return;
+  dispatch(
+    { type: "node.reparent", params: { nodeId: id, parentId: plan.parentId, index: plan.index } },
+    "调整层级",
+  );
+  select([id]);
+}
+
+function onDragEnd() {
+  dragId.value = null;
+  dropHint.value = null;
 }
 
 /* ---------- 页面操作 ---------- */
@@ -322,9 +368,20 @@ function onLayerDelete(id: NodeId) {
             v-for="row in rows"
             :key="row.node.id"
             class="row"
-            :class="{ selected: ui.selection.includes(row.node.id) }"
+            :class="{
+              selected: ui.selection.includes(row.node.id),
+              dragging: dragId === row.node.id,
+              'drop-above': dropHint?.id === row.node.id && dropHint.position === 'above',
+              'drop-below': dropHint?.id === row.node.id && dropHint.position === 'below',
+              'drop-inside': dropHint?.id === row.node.id && dropHint.position === 'inside',
+            }"
             :style="{ paddingLeft: 18 + row.depth * 12 + 'px' }"
+            draggable="true"
             @click="onLayerClick(row, $event)"
+            @dragstart="onDragStart(row, $event)"
+            @dragover="onDragOver(row, $event)"
+            @drop.prevent="onDrop(row)"
+            @dragend="onDragEnd"
           >
             <button
               v-if="row.node.type === 'instance'"
@@ -554,6 +611,24 @@ header {
   padding: 4px 0 4px 26px;
   font-size: 11px;
   color: var(--text-faint);
+}
+
+.row.dragging {
+  opacity: 0.45;
+}
+
+/* 插入指示线：上方 / 下方 / 放进容器 */
+.row.drop-above {
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.row.drop-below {
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.row.drop-inside {
+  box-shadow: inset 0 0 0 1px var(--accent-line);
+  background: var(--accent-soft);
 }
 
 .row {

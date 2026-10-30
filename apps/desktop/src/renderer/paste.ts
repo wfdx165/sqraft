@@ -46,8 +46,9 @@ export async function pasteFromClipboard(): Promise<void> {
     return;
   }
 
-  // 2) 画布：剪贴板里有图（位图或 Finder 复制的文件）就插入
+  // 2) 画布：优先级 sqraft 节点 > 图片 > 文本
   if (!ui.docOpen) return;
+  if (await hooks.pasteNodes()) return;
   const bytes = await window.sqraft.app.readClipboardImage();
   if (!bytes) return;
   await hooks.insertImageBytes(bytes, "粘贴的图片");

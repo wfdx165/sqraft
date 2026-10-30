@@ -148,6 +148,10 @@ export interface SqraftApi {
      * 不返回 mime：真实格式由渲染层按 magic bytes 判定（扩展名/声明都不可信）。
      */
     readClipboardImage(): Promise<Uint8Array | null>;
+    /** 把节点载荷写进系统剪贴板的 sqraft 自定义 MIME（JSON 字符串） */
+    writeClipboardNodes(json: string): Promise<void>;
+    /** 读节点载荷；剪贴板里没有 sqraft 数据时返回 null */
+    readClipboardNodes(): Promise<string | null>;
     /** 读剪贴板纯文本（输入框里的粘贴用它，因为 ⌘V 的菜单 role 会让位） */
     readClipboardText(): Promise<string>;
     /** 主进程要求"跳过欢迎页直接建空稿"（MCP 自动拉起） */
@@ -186,6 +190,8 @@ export const CHANNELS = {
   appCopyText: "app:copy-text",
   appClipboardImage: "app:clipboard-image",
   appClipboardText: "app:clipboard-text",
+  appClipboardNodesWrite: "app:clipboard-nodes-write",
+  appClipboardNodesRead: "app:clipboard-nodes-read",
   appInfo: "app:info",
   appNewDocument: "app:new-document",
   recentList: "recent:list",

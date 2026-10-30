@@ -35,6 +35,15 @@ const paths: Record<string, string> = {
   component: "M12 3.5 20.5 12 12 20.5 3.5 12z",
   slot: "M4.5 6.5h15v11h-15zM8.5 12h2M13.5 12h2",
   pencil: "M4 20h4L20.5 7.5a2.1 2.1 0 0 0-3-3L5 17v3zM15.5 5.5l3 3",
+  // 对齐/分布：外框 + 参考线 + 被对齐的两根条
+  "align-left": "M4 4v16M7 7.5h9v3H7zM7 13.5h13v3H7z",
+  "align-h-center": "M12 4v16M7.5 7.5h9v3h-9zM5 13.5h14v3H5z",
+  "align-right": "M20 4v16M8 7.5h9v3H8zM4 13.5h13v3H4z",
+  "align-top": "M4 4h16M7.5 7v9h3V7zM13.5 7v13h3V7z",
+  "align-v-center": "M4 12h16M7.5 7.5v9h3v-9zM13.5 5v14h3V5z",
+  "align-bottom": "M4 20h16M7.5 8v9h3V8zM13.5 4v13h3V4z",
+  "distribute-h": "M4 4v16M20 4v16M10 7.5h4v9h-4z",
+  "distribute-v": "M4 4h16M4 20h16M7.5 10h9v4h-9z",
 };
 </script>
 

@@ -703,3 +703,55 @@ describe("图片工具", () => {
     await expect(call(run, "update_node", { nodeId: rect.nodeId, crop: { x: 0, y: 0 } })).rejects.toThrow(/图片节点/);
   });
 });
+
+describe("AI 工具：分组 / 排列 / 复制", () => {
+  async function threeRects() {
+    const { store, run, pageId } = setup();
+    const ids: string[] = [];
+    for (const x of [0, 100, 300]) {
+      const node = createNode("rect", { parentId: pageId, x, y: 0, width: 10, height: 10 });
+      store.apply({ type: "node.create", params: { nodes: [node], parentId: pageId } });
+      ids.push(node.id);
+    }
+    return { store, run, pageId, ids };
+  }
+
+  it("group_nodes 返回新分组 id，一次调用一条撤销", async () => {
+    const { store, run, ids } = await threeRects();
+    const res = await call(run, "group_nodes", { nodeIds: ids, name: "卡片组" });
+    const groupId = res.groupId as string;
+    expect(store.doc.nodes[groupId].type).toBe("group");
+    expect(store.doc.nodes[groupId].name).toBe("卡片组");
+    expect(store.doc.nodes[groupId].children).toHaveLength(3);
+
+    store.undo();
+    expect(store.doc.nodes[groupId]).toBeUndefined();
+  });
+
+  it("arrange_nodes：对齐 / 分布 / 层级", async () => {
+    const { store, run, ids } = await threeRects();
+    await call(run, "arrange_nodes", { nodeIds: ids, action: "distribute-h" });
+    expect(store.doc.nodes[ids[1]].x).toBe(150);
+
+    await call(run, "arrange_nodes", { nodeIds: ids, action: "align-left" });
+    for (const id of ids) expect(store.doc.nodes[id].x).toBe(0);
+
+    await call(run, "arrange_nodes", { nodeIds: [ids[0]], action: "bring-to-front" });
+    const page = store.doc.nodes[store.doc.nodes[ids[0]].parentId!];
+    expect(page.children.at(-1)).toBe(ids[0]);
+  });
+
+  it("arrange_nodes：非法动作与 <3 个分布都报错", async () => {
+    const { run, ids } = await threeRects();
+    await expect(run("arrange_nodes", { nodeIds: ids, action: "spin" })).rejects.toThrow();
+    await expect(run("arrange_nodes", { nodeIds: [ids[0], ids[1]], action: "distribute-h" })).rejects.toThrow();
+  });
+
+  it("duplicate_node 返回新根 id，并保留子树", async () => {
+    const { store, run, pageId } = await threeRects();
+    const res = await call(run, "duplicate_node", { nodeId: store.doc.nodes[pageId].children[0] });
+    const copyId = (res.nodeIds as string[])[0];
+    expect(store.doc.nodes[copyId]).toBeDefined();
+    expect(store.doc.nodes[copyId].x).toBe(10);
+  });
+});

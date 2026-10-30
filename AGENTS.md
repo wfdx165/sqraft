@@ -91,3 +91,13 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 - 交互改动：dev 在跑时用调试端口做只读检查（截图 + 读 DOM，不重启实例）；dev 没在跑就只跑 `pnpm test && pnpm build`，把下面的手点清单交给用户
 - 桌面能力（无自动化回归，必须手点）：欢迎页 → 新建 → 改 → 保存 → 关窗 → 重开；MCP 连入 → 建节点 → 截图 → 一次撤销全撤（终端里应能看到对应的 `[mcp]` 行：连接、`tools/call`、耗时）；拖到副屏再拖回
 - 文件相关：新建/画一个矩形 → `⌘S`（首次弹另存为）→ `⌘W`（不应直接关闭）→ 重开 App 打开该文件，内容一致；外部改动该文件后再保存应出现"覆盖 / 另存为"
+
+## Agent skills
+
+### Issue tracker
+
+Issues live as markdown files under `.scratch/<feature-slug>/issues/`; specs live in `docs/specs/`. See `docs/agents/issue-tracker.md`.
+
+### Domain docs
+
+Single-context: `GLOSSARY.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.

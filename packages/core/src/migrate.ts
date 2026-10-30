@@ -4,6 +4,7 @@
  */
 
 import {
+  CURRENT_FORMAT_VERSION,
   ZERO_CORNER_RADIUS,
   createLayoutSpec,
   type CornerRadius,
@@ -14,7 +15,7 @@ import {
   type Padding,
 } from "./model";
 
-export const CURRENT_FORMAT_VERSION = 3;
+export { CURRENT_FORMAT_VERSION };
 
 function paddingOf(value: unknown): Padding {
   if (typeof value === "number") {
@@ -105,6 +106,8 @@ export function migrateDoc(state: DocState, fromVersion = state.formatVersion ??
     migrateV2to3(state);
     version = 3;
   }
+  // 4：页面新增可选的 `guides`（参考线）。缺省即"没有参考线"，不需要改数据。
+  if (version < 4) version = 4;
   state.formatVersion = CURRENT_FORMAT_VERSION;
   return state;
 }

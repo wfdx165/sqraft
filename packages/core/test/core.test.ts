@@ -38,6 +38,9 @@ import {
 } from "../src/vector";
 import type { DocState } from "../src/model";
 import { clampSides, hitPolygon, polygonPoints } from "../src/polygon";
+import { planDuplicate } from "../src/duplicate";
+import { reorderChildren } from "../src/arrange";
+import { normalizeAngle } from "../src/rotate";
 import { materializeInstance } from "../src/component";
 
 describe("命令系统", () => {
@@ -2584,5 +2587,587 @@ describe("事务中止", () => {
     store.undo();
     expect(store.doc.nodes[rect.id]).toBeUndefined();
     expect(store.canUndo).toBe(!undoDepth);
+  });
+});
+
+describe("复制子树（node.duplicate）", () => {
+  /** 确定性的 id 生成器：命令必须在创建前拿到新 id，测试里不能依赖 newId() */
+  function idGen() {
+    let n = 0;
+    return () => `dup${++n}`;
+  }
+
+  function setup() {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = firstPageId(store.doc)!;
+    return { store, pageId };
+  }
+
+  it("矩形复制：新 id、偏移 10px、紧跟原件，撤销可回", () => {
+    const { store, pageId } = setup();
+    const rect = createNode("rect", { parentId: pageId, x: 5, y: 6, width: 20, height: 20 });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+
+    const plan = planDuplicate(store.doc, [rect.id], { dx: 10, dy: 10, makeId: idGen() });
+    store.apply(plan.command, "原地复制");
+
+    expect(plan.rootIds).toHaveLength(1);
+    const copy = store.doc.nodes[plan.rootIds[0]];
+    expect(copy.id).not.toBe(rect.id);
+    expect(copy.parentId).toBe(pageId);
+    expect([copy.x, copy.y]).toEqual([15, 16]);
+    expect(store.doc.nodes[pageId].children).toEqual([rect.id, copy.id]);
+
+    store.undo();
+    expect(store.doc.nodes[copy.id]).toBeUndefined();
+    expect(store.doc.nodes[rect.id]).toBeDefined();
+    expect(store.doc.nodes[pageId].children).toEqual([rect.id]);
+  });
+
+  it("整棵子树重映射：children 与 parentId 都指向副本，子节点不叠加位移", () => {
+    const { store, pageId } = setup();
+    const frame = createNode("frame", { name: "F", x: 10, y: 20, width: 100, height: 100 });
+    const child = createNode("rect", { x: 5, y: 5, width: 10, height: 10, parentId: frame.id });
+    frame.children = [child.id];
+    store.apply({ type: "node.create", params: { nodes: [frame, child], parentId: pageId } });
+
+    const plan = planDuplicate(store.doc, [frame.id], { makeId: idGen() });
+    store.apply(plan.command);
+
+    const copy = store.doc.nodes[plan.rootIds[0]];
+    expect(copy.children).toHaveLength(1);
+    const childCopy = store.doc.nodes[copy.children[0]];
+    expect(childCopy.id).not.toBe(child.id);
+    expect(childCopy.parentId).toBe(copy.id);
+    expect([childCopy.x, childCopy.y]).toEqual([5, 5]);
+    expect([copy.x, copy.y]).toEqual([20, 30]);
+  });
+
+  it("祖先与后代同时选中时只复制一次", () => {
+    const { store, pageId } = setup();
+    const frame = createNode("frame", { name: "F" });
+    const child = createNode("rect", { parentId: frame.id });
+    frame.children = [child.id];
+    store.apply({ type: "node.create", params: { nodes: [frame, child], parentId: pageId } });
+
+    const plan = planDuplicate(store.doc, [frame.id, child.id], { makeId: idGen() });
+    expect(plan.rootIds).toHaveLength(1);
+  });
+
+  it("同一父级多个根：副本分别紧跟各自原件", () => {
+    const { store, pageId } = setup();
+    const a = createNode("rect", { name: "A" });
+    const b = createNode("rect", { name: "B" });
+    store.apply({ type: "node.create", params: { nodes: [a], parentId: pageId } });
+    store.apply({ type: "node.create", params: { nodes: [b], parentId: pageId } });
+
+    const plan = planDuplicate(store.doc, [a.id, b.id], { makeId: idGen() });
+    store.apply(plan.command);
+    const order = store.doc.nodes[pageId].children;
+    expect(order.map((id) => store.doc.nodes[id].name)).toEqual(["A", "A", "B", "B"]);
+  });
+
+  it("复制主组件：新主组件，属性目标指向副本内部节点", () => {
+    const { store, pageId } = setup();
+    const frame = createNode("frame", { name: "卡片", width: 200, height: 120 });
+    const title = createNode("text", { parentId: frame.id, text: "标题", name: "标题" });
+    frame.children = [title.id];
+    store.apply({ type: "node.create", params: { nodes: [frame, title], parentId: pageId } });
+    store.apply({ type: "component.create", params: { nodeIds: [frame.id] } });
+    store.apply({
+      type: "property.define",
+      params: { componentId: frame.id, targetMainId: title.id, id: "p1", type: "text", name: "标题" },
+    });
+
+    const plan = planDuplicate(store.doc, [frame.id], { makeId: idGen() });
+    store.apply(plan.command);
+
+    const copy = store.doc.nodes[plan.rootIds[0]];
+    expect(copy.type).toBe("component");
+    expect(copy.propertyDefs).toHaveLength(1);
+    // 属性目标必须指向副本里的那个文本节点，而不是原母版的
+    expect(copy.propertyDefs![0].targetMainId).toBe(copy.children[0]);
+    expect(copy.children[0]).not.toBe(title.id);
+  });
+
+  it("复制实例仍引用同一个母版", () => {
+    const { store, pageId } = setup();
+    const frame = createNode("frame", { name: "卡片", width: 200, height: 120 });
+    store.apply({ type: "node.create", params: { nodes: [frame], parentId: pageId } });
+    store.apply({ type: "component.create", params: { nodeIds: [frame.id] } });
+    store.apply({
+      type: "instance.create",
+      params: { componentId: frame.id, parentId: pageId, nodeId: "inst1", x: 300, y: 0 },
+    });
+
+    const plan = planDuplicate(store.doc, ["inst1"], { makeId: idGen() });
+    store.apply(plan.command);
+    const copy = store.doc.nodes[plan.rootIds[0]];
+    expect(copy.type).toBe("instance");
+    expect(copy.componentId).toBe(frame.id);
+  });
+});
+
+describe("层级顺序（node.reorder）", () => {
+  /** 建三个同父级矩形，返回按 children 顺序的 id（从下往上） */
+  function setup() {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = firstPageId(store.doc)!;
+    const ids = ["a", "b", "c"].map((name) => {
+      const node = createNode("rect", { name, parentId: pageId });
+      store.apply({ type: "node.create", params: { nodes: [node], parentId: pageId } });
+      return node.id;
+    });
+    return { store, pageId, ids };
+  }
+
+  const names = (store: DocStore, pageId: string) =>
+    store.doc.nodes[pageId].children.map((id) => store.doc.nodes[id].name);
+
+  it("上移一层 / 下移一层只挪一格", () => {
+    const { store, ids, pageId } = setup();
+    store.apply({ type: "node.reorder", params: { nodeIds: [ids[0]], action: "forward" } });
+    expect(names(store, pageId)).toEqual(["b", "a", "c"]);
+    store.apply({ type: "node.reorder", params: { nodeIds: [ids[2]], action: "backward" } });
+    expect(names(store, pageId)).toEqual(["b", "c", "a"]);
+  });
+
+  it("置顶 / 置底", () => {
+    const { store, ids, pageId } = setup();
+    store.apply({ type: "node.reorder", params: { nodeIds: [ids[0]], action: "front" } });
+    expect(names(store, pageId)).toEqual(["b", "c", "a"]);
+    store.apply({ type: "node.reorder", params: { nodeIds: [ids[2]], action: "back" } });
+    expect(names(store, pageId)).toEqual(["c", "b", "a"]);
+  });
+
+  it("多选保持相对顺序，整块移动", () => {
+    const children = ["a", "b", "c", "d"];
+    expect(reorderChildren(children, new Set(["b", "c"]), "front")).toEqual(["a", "d", "b", "c"]);
+    expect(reorderChildren(children, new Set(["b", "c"]), "back")).toEqual(["b", "c", "a", "d"]);
+    expect(reorderChildren(children, new Set(["b", "c"]), "forward")).toEqual(["a", "d", "b", "c"]);
+    expect(reorderChildren(children, new Set(["b", "c"]), "backward")).toEqual(["b", "c", "a", "d"]);
+  });
+
+  it("已经在顶时上移是空操作，不产生撤销记录", () => {
+    const { store, ids } = setup();
+    // 最后一次 apply 是创建 c：再撤销一次应当删掉 c
+    store.apply({ type: "node.reorder", params: { nodeIds: [ids[2]], action: "forward" } });
+    store.undo();
+    expect(store.doc.nodes[ids[2]]).toBeUndefined();
+  });
+
+  it("跨父级选区各自在父级内排序", () => {
+    const { store, pageId, ids } = setup();
+    const frame = createNode("frame", { name: "F" });
+    store.apply({ type: "node.create", params: { nodes: [frame], parentId: pageId } });
+    const inner = createNode("rect", { name: "inner", parentId: frame.id });
+    store.apply({ type: "node.create", params: { nodes: [inner], parentId: frame.id } });
+
+    store.apply({ type: "node.reorder", params: { nodeIds: [ids[0], inner.id], action: "front" } });
+    // 页面级只挪 a（F 没被选中）；F 内部只有一个子节点，顺序不变
+    expect(names(store, pageId)).toEqual(["b", "c", "F", "a"]);
+    expect(store.doc.nodes[frame.id].children).toEqual([inner.id]);
+  });
+});
+
+describe("对齐与分布（node.align / node.distribute）", () => {
+  function setup() {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = firstPageId(store.doc)!;
+    return { store, pageId };
+  }
+
+  function rect(store: DocStore, pageId: string, x: number, y: number, w = 10, h = 10) {
+    const node = createNode("rect", { parentId: pageId, x, y, width: w, height: h });
+    store.apply({ type: "node.create", params: { nodes: [node], parentId: pageId } });
+    return node;
+  }
+
+  it("多选左对齐：对齐到选区包围盒，整体宽度不变", () => {
+    const { store, pageId } = setup();
+    const a = rect(store, pageId, 10, 0, 20);
+    const b = rect(store, pageId, 50, 40, 10);
+    const c = rect(store, pageId, 90, 80, 30);
+
+    store.apply({ type: "node.align", params: { nodeIds: [a.id, b.id, c.id], align: "left" } });
+    for (const n of [a, b, c]) expect(store.doc.nodes[n.id].x).toBe(10);
+    // y 不受影响
+    expect([store.doc.nodes[a.id].y, store.doc.nodes[b.id].y, store.doc.nodes[c.id].y]).toEqual([0, 40, 80]);
+  });
+
+  it("单选对齐到父容器边界（父无布局）", () => {
+    const { store, pageId } = setup();
+    const frame = createNode("frame", { x: 100, y: 50, width: 200, height: 100 });
+    store.apply({ type: "node.create", params: { nodes: [frame], parentId: pageId } });
+    const child = createNode("rect", { parentId: frame.id, x: 30, y: 20, width: 10, height: 10 });
+    store.apply({ type: "node.create", params: { nodes: [child], parentId: frame.id } });
+
+    store.apply({ type: "node.align", params: { nodeIds: [child.id], align: "right" } });
+    // 右对齐到父右边：200 - 10 = 190
+    expect(store.doc.nodes[child.id].x).toBe(190);
+    store.apply({ type: "node.align", params: { nodeIds: [child.id], align: "v-center" } });
+    expect(store.doc.nodes[child.id].y).toBe(45);
+  });
+
+  it("绝对定位子项对齐到父容器内容区（扣掉内边距）", () => {
+    const { store, pageId } = setup();
+    const frame = createNode("frame", { x: 0, y: 0, width: 200, height: 100 });
+    frame.layout = createLayoutSpec({
+      direction: "horizontal",
+      gap: 0,
+      padding: { left: 16, top: 12, right: 16, bottom: 12 },
+    });
+    store.apply({ type: "node.create", params: { nodes: [frame], parentId: pageId } });
+    const child = createNode("rect", { parentId: frame.id, x: 80, y: 40, width: 10, height: 10, layoutAbsolute: true });
+    store.apply({ type: "node.create", params: { nodes: [child], parentId: frame.id } });
+
+    store.apply({ type: "node.align", params: { nodeIds: [child.id], align: "left" } });
+    expect(store.doc.nodes[child.id].x).toBe(16);
+    store.apply({ type: "node.align", params: { nodeIds: [child.id], align: "top" } });
+    expect(store.doc.nodes[child.id].y).toBe(12);
+  });
+
+  it("分布：两端不动，中间等间距", () => {
+    const { store, pageId } = setup();
+    const a = rect(store, pageId, 0, 0, 10);
+    const b = rect(store, pageId, 100, 0, 20);
+    const c = rect(store, pageId, 300, 0, 10);
+
+    store.apply({ type: "node.distribute", params: { nodeIds: [a.id, b.id, c.id], axis: "horizontal" } });
+    expect(store.doc.nodes[a.id].x).toBe(0);
+    expect(store.doc.nodes[b.id].x).toBe(145);
+    expect(store.doc.nodes[c.id].x).toBe(300);
+  });
+
+  it("分布少于 3 个节点报错", () => {
+    const { store, pageId } = setup();
+    const a = rect(store, pageId, 0, 0);
+    const b = rect(store, pageId, 100, 0);
+    expect(() =>
+      store.apply({ type: "node.distribute", params: { nodeIds: [a.id, b.id], axis: "horizontal" } }),
+    ).toThrow(/3/);
+  });
+
+  it("自动布局子项不能对齐（位置由布局决定）", () => {
+    const { store, pageId } = setup();
+    const frame = createNode("frame", { width: 200, height: 100 });
+    frame.layout = createLayoutSpec({ direction: "horizontal", gap: 8, padding: { left: 0, top: 0, right: 0, bottom: 0 } });
+    store.apply({ type: "node.create", params: { nodes: [frame], parentId: pageId } });
+    const child = createNode("rect", { parentId: frame.id, width: 10, height: 10 });
+    store.apply({ type: "node.create", params: { nodes: [child], parentId: frame.id } });
+
+    expect(() => store.apply({ type: "node.align", params: { nodeIds: [child.id], align: "left" } })).toThrow(
+      /自动布局/,
+    );
+  });
+});
+
+describe("Token 删除", () => {
+  it("新建 Token 的逆是删除：撤销不留孤儿条目，重做能回来", () => {
+    const store = new DocStore(createEmptyDoc());
+    store.apply({ type: "token.define", params: { path: "color/brand", tokenType: "color", value: "#123456" } });
+    expect(store.doc.tokens["color/brand"]).toEqual({ type: "color", value: "#123456" });
+
+    store.undo();
+    expect(store.doc.tokens["color/brand"]).toBeUndefined();
+
+    store.redo();
+    expect(store.doc.tokens["color/brand"]).toEqual({ type: "color", value: "#123456" });
+  });
+});
+
+describe("分组 / 解组", () => {
+  function setup() {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = firstPageId(store.doc)!;
+    return { store, pageId };
+  }
+
+  function rect(store: DocStore, pageId: string, x: number, y: number, w = 10, h = 10) {
+    const node = createNode("rect", { parentId: pageId, x, y, width: w, height: h });
+    store.apply({ type: "node.create", params: { nodes: [node], parentId: pageId } });
+    return node;
+  }
+
+  it("分组：尺寸等于并集，子节点本地坐标正确，世界坐标不变", () => {
+    const { store, pageId } = setup();
+    const a = rect(store, pageId, 10, 20, 30, 40);
+    const b = rect(store, pageId, 100, 80, 20, 20);
+    const beforeA = worldRect(store.doc, a.id)!;
+
+    store.apply({ type: "node.group", params: { nodeIds: [a.id, b.id], groupId: "g1" } });
+    const group = store.doc.nodes["g1"];
+    expect(group.type).toBe("group");
+    expect([group.x, group.y, group.width, group.height]).toEqual([10, 20, 110, 80]);
+    expect(group.children).toEqual([a.id, b.id]);
+    expect(group.style.fill).toBeUndefined();
+    expect(group.clip).toBe(false);
+
+    // 世界坐标不变
+    const afterA = worldRect(store.doc, a.id)!;
+    expect([afterA.x, afterA.y]).toEqual([beforeA.x, beforeA.y]);
+    expect([store.doc.nodes[a.id].x, store.doc.nodes[a.id].y]).toEqual([0, 0]);
+    expect([store.doc.nodes[b.id].x, store.doc.nodes[b.id].y]).toEqual([90, 60]);
+  });
+
+  it("解组：子节点回父级、保持世界坐标、组消失", () => {
+    const { store, pageId } = setup();
+    const a = rect(store, pageId, 10, 20);
+    const b = rect(store, pageId, 60, 20);
+    store.apply({ type: "node.group", params: { nodeIds: [a.id, b.id], groupId: "g1" } });
+    const before = worldRect(store.doc, b.id)!;
+
+    store.apply({ type: "node.ungroup", params: { nodeId: "g1" } });
+    expect(store.doc.nodes["g1"]).toBeUndefined();
+    expect(store.doc.nodes[pageId].children).toEqual([a.id, b.id]);
+    const after = worldRect(store.doc, b.id)!;
+    expect([after.x, after.y]).toEqual([before.x, before.y]);
+  });
+
+  it("分组再解组回到原状（往返）", () => {
+    const { store, pageId } = setup();
+    const a = rect(store, pageId, 10, 20);
+    const b = rect(store, pageId, 60, 20);
+    store.apply({ type: "node.group", params: { nodeIds: [a.id, b.id], groupId: "g1" } });
+    store.apply({ type: "node.ungroup", params: { nodeId: "g1" } });
+    expect([store.doc.nodes[a.id].x, store.doc.nodes[a.id].y]).toEqual([10, 20]);
+    expect([store.doc.nodes[b.id].x, store.doc.nodes[b.id].y]).toEqual([60, 20]);
+  });
+
+  it("跨父级选区：组落在第一个节点的父级，世界坐标不变", () => {
+    const { store, pageId } = setup();
+    const frame = createNode("frame", { parentId: pageId, x: 100, y: 50, width: 200, height: 100 });
+    store.apply({ type: "node.create", params: { nodes: [frame], parentId: pageId } });
+    const inner = createNode("rect", { parentId: frame.id, x: 10, y: 10, width: 10, height: 10 });
+    store.apply({ type: "node.create", params: { nodes: [inner], parentId: frame.id } });
+    const outer = rect(store, pageId, 400, 400);
+
+    const beforeInner = worldRect(store.doc, inner.id)!;
+    store.apply({ type: "node.group", params: { nodeIds: [outer.id, inner.id], groupId: "g1" } });
+
+    const group = store.doc.nodes["g1"];
+    expect(group.parentId).toBe(pageId);
+    expect(worldRect(store.doc, inner.id)!.x).toBe(beforeInner.x);
+  });
+
+  it("撤销一次把分组整个收回", () => {
+    const { store, pageId } = setup();
+    const a = rect(store, pageId, 10, 20);
+    store.apply({ type: "node.group", params: { nodeIds: [a.id], groupId: "g1" } });
+    store.undo();
+    expect(store.doc.nodes["g1"]).toBeUndefined();
+    expect(store.doc.nodes[a.id].parentId).toBe(pageId);
+    expect([store.doc.nodes[a.id].x, store.doc.nodes[a.id].y]).toEqual([10, 20]);
+  });
+});
+
+describe("等比缩放（node.scale）", () => {
+  function setup() {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = firstPageId(store.doc)!;
+    return { store, pageId };
+  }
+
+  it("几何绕锚点缩放：位置与尺寸一起变", () => {
+    const { store, pageId } = setup();
+    const a = createNode("rect", { parentId: pageId, x: 0, y: 0, width: 10, height: 10 });
+    const b = createNode("rect", { parentId: pageId, x: 20, y: 10, width: 10, height: 10 });
+    store.apply({ type: "node.create", params: { nodes: [a], parentId: pageId } });
+    store.apply({ type: "node.create", params: { nodes: [b], parentId: pageId } });
+
+    store.apply({
+      type: "node.scale",
+      params: { nodeIds: [a.id, b.id], originX: 0, originY: 0, scaleX: 2, scaleY: 2 },
+    });
+    expect([store.doc.nodes[a.id].x, store.doc.nodes[a.id].width]).toEqual([0, 20]);
+    expect([store.doc.nodes[b.id].x, store.doc.nodes[b.id].y]).toEqual([40, 20]);
+    expect([store.doc.nodes[b.id].width, store.doc.nodes[b.id].height]).toEqual([20, 20]);
+  });
+
+  it("圆角 / 字号 / 描边 / 效果半径按比例", () => {
+    const { store, pageId } = setup();
+    const node = createNode("rect", {
+      parentId: pageId,
+      width: 10,
+      height: 10,
+      style: {
+        cornerRadius: { topLeft: 4, topRight: 4, bottomRight: 4, bottomLeft: 4 },
+        fontSize: 12,
+        strokeWidth: 2,
+        effects: [{ type: "layer-blur", visible: true, radius: 6 }],
+      },
+    });
+    store.apply({ type: "node.create", params: { nodes: [node], parentId: pageId } });
+
+    store.apply({
+      type: "node.scale",
+      params: { nodeIds: [node.id], originX: 0, originY: 0, scaleX: 2, scaleY: 2 },
+    });
+    const style = store.doc.nodes[node.id].style;
+    expect(style.cornerRadius?.topLeft).toBe(8);
+    expect(style.fontSize).toBe(24);
+    expect(style.strokeWidth).toBe(4);
+    expect((style.effects?.[0] as { radius: number }).radius).toBe(12);
+  });
+
+  it("图片裁切随框缩放并夹回原图范围", () => {
+    const { store, pageId } = setup();
+    const node = createNode("image", {
+      parentId: pageId,
+      width: 100,
+      height: 100,
+      image: { assetId: "a1", naturalWidth: 100, naturalHeight: 100, crop: { x: 10, y: 10, width: 50, height: 50 } },
+    });
+    store.apply({ type: "node.create", params: { nodes: [node], parentId: pageId } });
+
+    store.apply({
+      type: "node.scale",
+      params: { nodeIds: [node.id], originX: 0, originY: 0, scaleX: 2, scaleY: 2 },
+    });
+    // 裁切区域翻倍后顶到原图边界：夹回 100×100 并从 0 开始
+    expect(store.doc.nodes[node.id].image?.crop).toEqual({ x: 0, y: 0, width: 100, height: 100 });
+  });
+
+  it("缩放分组等于缩放子节点", () => {
+    const { store, pageId } = setup();
+    const a = createNode("rect", { parentId: pageId, x: 0, y: 0, width: 10, height: 10 });
+    const b = createNode("rect", { parentId: pageId, x: 10, y: 0, width: 10, height: 10 });
+    store.apply({ type: "node.create", params: { nodes: [a], parentId: pageId } });
+    store.apply({ type: "node.create", params: { nodes: [b], parentId: pageId } });
+    store.apply({ type: "node.group", params: { nodeIds: [a.id, b.id], groupId: "g1" } });
+
+    store.apply({
+      type: "node.scale",
+      params: { nodeIds: ["g1"], originX: 0, originY: 0, scaleX: 2, scaleY: 2 },
+    });
+    expect([store.doc.nodes[a.id].x, store.doc.nodes[a.id].width]).toEqual([0, 20]);
+    expect([store.doc.nodes[b.id].x, store.doc.nodes[b.id].width]).toEqual([20, 20]);
+    expect(store.doc.nodes["g1"].width).toBe(40);
+  });
+
+  it("比例为 1 时不产生撤销记录", () => {
+    const { store, pageId } = setup();
+    const a = createNode("rect", { parentId: pageId });
+    store.apply({ type: "node.create", params: { nodes: [a], parentId: pageId } });
+    store.apply({ type: "node.scale", params: { nodeIds: [a.id], originX: 0, originY: 0, scaleX: 1, scaleY: 1 } });
+    store.undo();
+    expect(store.doc.nodes[a.id]).toBeUndefined();
+  });
+});
+
+describe("旋转（node.rotate）", () => {
+  function setup() {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = firstPageId(store.doc)!;
+    return { store, pageId };
+  }
+
+  it("单选绕自身中心：位置不变、角度累加", () => {
+    const { store, pageId } = setup();
+    const node = createNode("rect", { parentId: pageId, x: 10, y: 20, width: 20, height: 20 });
+    store.apply({ type: "node.create", params: { nodes: [node], parentId: pageId } });
+
+    store.apply({
+      type: "node.rotate",
+      params: { nodeIds: [node.id], centerX: 20, centerY: 30, angle: 90 },
+    });
+    expect([store.doc.nodes[node.id].x, store.doc.nodes[node.id].y]).toEqual([10, 20]);
+    expect(store.doc.nodes[node.id].rotation).toBe(90);
+  });
+
+  it("多选绕包围盒中心：位置一起转", () => {
+    const { store, pageId } = setup();
+    const a = createNode("rect", { parentId: pageId, x: 0, y: 0, width: 10, height: 10 });
+    const b = createNode("rect", { parentId: pageId, x: 90, y: 0, width: 10, height: 10 });
+    store.apply({ type: "node.create", params: { nodes: [a], parentId: pageId } });
+    store.apply({ type: "node.create", params: { nodes: [b], parentId: pageId } });
+
+    store.apply({
+      type: "node.rotate",
+      params: { nodeIds: [a.id, b.id], centerX: 50, centerY: 5, angle: 180 },
+    });
+    // 浮点误差：按 1e-6 比较
+    expect(store.doc.nodes[a.id].x).toBeCloseTo(90, 6);
+    expect(store.doc.nodes[a.id].y).toBeCloseTo(0, 6);
+    expect(store.doc.nodes[b.id].x).toBeCloseTo(0, 6);
+    expect(store.doc.nodes[b.id].y).toBeCloseTo(0, 6);
+    expect(store.doc.nodes[a.id].rotation).toBe(180);
+  });
+
+  it("角度归一到 (-180, 180]", () => {
+    expect(normalizeAngle(370)).toBe(10);
+    expect(normalizeAngle(-190)).toBe(170);
+    expect(normalizeAngle(180)).toBe(180);
+  });
+});
+
+describe("锁定节点不参与排列/缩放/旋转", () => {
+  function setup() {
+    const store = new DocStore(createEmptyDoc());
+    const pageId = firstPageId(store.doc)!;
+    return { store, pageId };
+  }
+
+  it("缩放跳过锁定节点，其余照常", () => {
+    const { store, pageId } = setup();
+    const a = createNode("rect", { parentId: pageId, x: 0, y: 0, width: 10, height: 10 });
+    const b = createNode("rect", { parentId: pageId, x: 100, y: 0, width: 10, height: 10, locked: true });
+    store.apply({ type: "node.create", params: { nodes: [a], parentId: pageId } });
+    store.apply({ type: "node.create", params: { nodes: [b], parentId: pageId } });
+
+    store.apply({
+      type: "node.scale",
+      params: { nodeIds: [a.id, b.id], originX: 0, originY: 0, scaleX: 2, scaleY: 2 },
+    });
+    expect(store.doc.nodes[a.id].width).toBe(20);
+    expect(store.doc.nodes[b.id].width).toBe(10);
+    expect(store.doc.nodes[b.id].x).toBe(100);
+  });
+
+  it("旋转跳过锁定节点", () => {
+    const { store, pageId } = setup();
+    const a = createNode("rect", { parentId: pageId, x: 0, y: 0, width: 10, height: 10 });
+    const b = createNode("rect", { parentId: pageId, x: 100, y: 0, width: 10, height: 10, locked: true });
+    store.apply({ type: "node.create", params: { nodes: [a], parentId: pageId } });
+    store.apply({ type: "node.create", params: { nodes: [b], parentId: pageId } });
+
+    store.apply({
+      type: "node.rotate",
+      params: { nodeIds: [a.id, b.id], centerX: 0, centerY: 0, angle: 90 },
+    });
+    expect(store.doc.nodes[a.id].rotation).toBe(90);
+    expect(store.doc.nodes[b.id].rotation).toBe(0);
+  });
+
+  it("对齐跳过锁定节点（不抛异常）", () => {
+    const { store, pageId } = setup();
+    const a = createNode("rect", { parentId: pageId, x: 10, y: 0, width: 10, height: 10 });
+    const b = createNode("rect", { parentId: pageId, x: 100, y: 0, width: 10, height: 10, locked: true });
+    store.apply({ type: "node.create", params: { nodes: [a], parentId: pageId } });
+    store.apply({ type: "node.create", params: { nodes: [b], parentId: pageId } });
+
+    expect(() =>
+      store.apply({ type: "node.align", params: { nodeIds: [a.id, b.id], align: "left" } }),
+    ).not.toThrow();
+    expect(store.doc.nodes[a.id].x).toBe(0);
+    expect(store.doc.nodes[b.id].x).toBe(100);
+  });
+});
+
+describe("分组跨页", () => {
+  it("不同页面的节点不能分组", () => {
+    const store = new DocStore(createEmptyDoc());
+    const first = firstPageId(store.doc)!;
+    const second = createNode("page", { name: "第二页" });
+    store.apply({ type: "node.create", params: { nodes: [second], parentId: null } });
+
+    const a = createNode("rect", { parentId: first, x: 0, y: 0, width: 10, height: 10 });
+    const b = createNode("rect", { parentId: second.id, x: 0, y: 0, width: 10, height: 10 });
+    store.apply({ type: "node.create", params: { nodes: [a], parentId: first } });
+    store.apply({ type: "node.create", params: { nodes: [b], parentId: second.id } });
+
+    expect(() => store.apply({ type: "node.group", params: { nodeIds: [a.id, b.id], groupId: "g1" } })).toThrow(
+      /同一页面/,
+    );
   });
 });
