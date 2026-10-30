@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { createEmptyDoc, createNode, DocStore, firstPageId } from "@sqraft/core";
+import { createDocWithPage, createEmptyDoc, createNode, DocStore, firstPageId } from "@sqraft/core";
 import { makeExecutor, type ToolExecutor } from "../src/index";
 
 /** 每个用例一份干净文档 + 执行器（getActivePageId 固定为第一页）。 */
 function setup(): { store: DocStore; run: ToolExecutor; pageId: string } {
-  const store = new DocStore(createEmptyDoc());
+  const store = new DocStore(createDocWithPage());
   const pageId = firstPageId(store.doc)!;
   const run = makeExecutor(store, async () => "", () => pageId);
   return { store, run, pageId };
@@ -34,7 +34,7 @@ describe("AI 工具：路径", () => {
     expect(node.height).toBe(50);
     expect(node.vector?.anchors[0]).toMatchObject({ x: 0, y: 0 });
     // 未给颜色时开放路径默认描边
-    expect(node.style.stroke).toEqual({ token: "color/text" });
+    expect(node.style.stroke).toEqual({ value: "#1a1a1a" });
     expect(node.style.strokeWidth).toBe(2);
   });
 
@@ -49,7 +49,7 @@ describe("AI 工具：路径", () => {
         { x: 50, y: 80 },
       ],
     });
-    expect(store.doc.nodes[res.nodeId as string].style.fill).toEqual({ token: "color/primary" });
+    expect(store.doc.nodes[res.nodeId as string].style.fill).toEqual({ value: "#3366ff" });
     await expect(
       run("create_node", {
         kind: "path",
@@ -127,7 +127,7 @@ describe("AI 工具：多边形", () => {
     expect(node.type).toBe("polygon");
     expect(node.sides).toBe(3);
     expect(node.name).toBe("三角形");
-    expect(node.style.fill).toEqual({ token: "color/primary" });
+    expect(node.style.fill).toEqual({ value: "#3366ff" });
   });
 
   it("边数夹紧到 3–12，非 3 时叫多边形", async () => {
@@ -157,10 +157,10 @@ describe("AI 工具：多边形", () => {
 });
 
 describe("AI 工具：样式纪律", () => {
-  it("画板缺省填充 color/surface（与 GUI 一致）", async () => {
+  it("画板缺省填充白色字面量（与 GUI 一致）", async () => {
     const { store, run } = setup();
     const created = await call(run, "create_node", { kind: "frame" });
-    expect(store.doc.nodes[created.nodeId as string].style.fill).toEqual({ token: "color/surface" });
+    expect(store.doc.nodes[created.nodeId as string].style.fill).toEqual({ value: "#ffffff" });
   });
 
   it("新建画板 / 组件默认开启自动布局（纵向、gap 10、padding 10）", async () => {
@@ -184,24 +184,29 @@ describe("AI 工具：样式纪律", () => {
     expect(store.doc.nodes[rect.nodeId as string].layout).toBeUndefined();
   });
 
-  it("字面量色值被拒绝，Token 引用通过", async () => {
-    const { run } = setup();
-    await expect(run("create_node", { kind: "rect", fillToken: "#ff0000" })).rejects.toThrow(/禁止使用字面量色值/);
-    await expect(
-      run("create_node", { kind: "path", points: [{ x: 0, y: 0 }, { x: 10, y: 10 }], strokeToken: "#ff0000" }),
-    ).rejects.toThrow(/禁止使用字面量色值/);
-    await expect(
-      run("create_node", { kind: "rect", fillToken: "color/primary" }),
-    ).resolves.toContain("nodeId");
+  it("字面量色值可用；引用不存在的 Token 仍报错", async () => {
+    const { store, run } = setup();
+    const rect = await call(run, "create_node", { kind: "rect", fill: "#ff0000" });
+    expect(store.doc.nodes[rect.nodeId as string].style.fill).toEqual({ value: "#ff0000" });
+
+    const path = await call(run, "create_node", {
+      kind: "path",
+      points: [{ x: 0, y: 0 }, { x: 10, y: 10 }],
+      stroke: "#00ff00",
+    });
+    expect(store.doc.nodes[path.nodeId as string].style.stroke).toEqual({ value: "#00ff00" });
+
+    // Token 引用仍然校验存在性
+    await expect(run("create_node", { kind: "rect", fillToken: "color/primary" })).rejects.toThrow(/不存在的 Token/);
   });
 
   it("只改描边时保留原有填充（style 整体替换但先展开旧值）", async () => {
     const { store, run } = setup();
-    const created = await call(run, "create_node", { kind: "rect", fillToken: "color/primary" });
+    const created = await call(run, "create_node", { kind: "rect", fill: "#123456" });
     const id = created.nodeId as string;
-    await call(run, "update_node", { nodeId: id, strokeToken: "color/text", strokeWidth: 3 });
-    expect(store.doc.nodes[id].style.fill).toEqual({ token: "color/primary" });
-    expect(store.doc.nodes[id].style.stroke).toEqual({ token: "color/text" });
+    await call(run, "update_node", { nodeId: id, stroke: "#abcdef", strokeWidth: 3 });
+    expect(store.doc.nodes[id].style.fill).toEqual({ value: "#123456" });
+    expect(store.doc.nodes[id].style.stroke).toEqual({ value: "#abcdef" });
     expect(store.doc.nodes[id].style.strokeWidth).toBe(3);
   });
 });
@@ -472,7 +477,7 @@ describe("AI 工具：自动布局与排版", () => {
   });
 
   it("文本自动尺寸使用宿主注入的测量函数", async () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     const run = makeExecutor(store, async () => "", () => pageId, () => ({ width: 123, height: 45 }));
     const text = await call(run, "create_node", { kind: "text", text: "Hello" });
@@ -487,15 +492,15 @@ describe("AI 工具：节点效果", () => {
       kind: "rect",
       width: 200,
       height: 120,
-      fillToken: "color/primary",
+      fill: "#3366ff",
       effects: [
-        { type: "drop-shadow", x: 0, y: 6, blur: 18, spread: 2, fillToken: "color/text" },
+        { type: "drop-shadow", x: 0, y: 6, blur: 18, spread: 2, color: "#1a1a1a" },
         { type: "backdrop-blur", radius: 12 },
       ],
     });
     const node = store.doc.nodes[res.nodeId as string];
     expect(node.style.effects).toHaveLength(2);
-    expect(node.style.effects?.[0]).toMatchObject({ type: "drop-shadow", blur: 18, color: { token: "color/text" } });
+    expect(node.style.effects?.[0]).toMatchObject({ type: "drop-shadow", blur: 18, color: { value: "#1a1a1a" } });
     expect(node.style.effects?.[1]).toMatchObject({ type: "backdrop-blur", radius: 12 });
 
     const doc = await call(run, "read_document");
@@ -506,7 +511,7 @@ describe("AI 工具：节点效果", () => {
     const { store, run } = setup();
     const created = await call(run, "create_node", {
       kind: "rect",
-      effects: [{ type: "drop-shadow", fillToken: "color/text" }],
+      effects: [{ type: "drop-shadow", color: "#1a1a1a" }],
     });
     const nodeId = created.nodeId as string;
     expect(store.doc.nodes[nodeId].style.effects).toHaveLength(1);
@@ -514,7 +519,7 @@ describe("AI 工具：节点效果", () => {
     await call(run, "update_node", {
       nodeId,
       effects: [
-        { type: "inner-shadow", fillToken: "color/text", blur: 4 },
+        { type: "inner-shadow", color: "#1a1a1a", blur: 4 },
         { type: "layer-blur", radius: 6 },
       ],
     });
@@ -544,7 +549,7 @@ describe("AI 工具：节点效果", () => {
 
 describe("AI 工具：文档级操作与截图区域", () => {
   it("document.new 交给宿主执行", async () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const calls: string[] = [];
     const run = makeExecutor(store, async () => "", undefined, undefined, {
       newDocument: async () => {
@@ -558,7 +563,7 @@ describe("AI 工具：文档级操作与截图区域", () => {
   });
 
   it("document.new 把用户取消如实回报", async () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const run = makeExecutor(store, async () => "", undefined, undefined, {
       newDocument: async () => false,
       openDocument: async () => true,
@@ -567,7 +572,7 @@ describe("AI 工具：文档级操作与截图区域", () => {
   });
 
   it("document.open 把用户取消如实回报", async () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     let opened = 0;
     const run = makeExecutor(store, async () => "", undefined, undefined, {
       newDocument: async () => true,
@@ -581,7 +586,7 @@ describe("AI 工具：文档级操作与截图区域", () => {
   });
 
   it("document.open 拒绝路径参数（文件必须由用户选择）", async () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const run = makeExecutor(store, async () => "", undefined, undefined, {
       newDocument: async () => true,
       openDocument: async () => true,
@@ -590,13 +595,13 @@ describe("AI 工具：文档级操作与截图区域", () => {
   });
 
   it("没有宿主时文档类工具给出可读错误", async () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const run = makeExecutor(store, async () => "");
     await expect(run("document.new", {})).rejects.toThrow(/不支持新建文档/);
   });
 
   it("screenshot 把区域交给宿主，并校验参数", async () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const regions: unknown[] = [];
     const run = makeExecutor(store, async (region) => {
       regions.push(region);
@@ -654,7 +659,7 @@ describe("图片工具", () => {
   }
 
   it("create_node kind=image 走宿主落资源，尺寸取原图", async () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const calls: string[] = [];
     const run = makeExecutor(store, async () => "", undefined, undefined, host(calls));
     const created = await call(run, "create_node", {
@@ -675,7 +680,7 @@ describe("图片工具", () => {
   });
 
   it("超过 5MB 直接拒绝，不调宿主", async () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const calls: string[] = [];
     const run = makeExecutor(store, async () => "", undefined, undefined, host(calls));
     const huge = "A".repeat(Math.ceil((5 * 1024 * 1024 * 4) / 3) + 8);
@@ -684,7 +689,7 @@ describe("图片工具", () => {
   });
 
   it("update_node 能改裁切与蒙版标记", async () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const calls: string[] = [];
     const run = makeExecutor(store, async () => "", undefined, undefined, host(calls));
     const created = await call(run, "create_node", { kind: "image", image: { data: PNG_BASE64 } });
@@ -697,7 +702,7 @@ describe("图片工具", () => {
   });
 
   it("crop 用在非图片节点上给出可读错误", async () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const run = makeExecutor(store, async () => "");
     const rect = await call(run, "create_node", { kind: "rect" });
     await expect(call(run, "update_node", { nodeId: rect.nodeId, crop: { x: 0, y: 0 } })).rejects.toThrow(/图片节点/);
@@ -753,5 +758,77 @@ describe("AI 工具：分组 / 排列 / 复制", () => {
     const copyId = (res.nodeIds as string[])[0];
     expect(store.doc.nodes[copyId]).toBeDefined();
     expect(store.doc.nodes[copyId].x).toBe(10);
+  });
+});
+
+describe("AI 工具：空文档自动建页", () => {
+  it("没有页面时 create_node 自动建页，且只占一条撤销", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const run = makeExecutor(store, async () => "", () => null);
+
+    const res = await call(run, "create_node", { kind: "rect", fill: "#ff0000" });
+    expect(store.doc.rootIds).toHaveLength(1);
+    const pageId = store.doc.rootIds[0];
+    expect(store.doc.nodes[pageId].type).toBe("page");
+    expect(store.doc.nodes[res.nodeId as string].parentId).toBe(pageId);
+
+    store.undo();
+    expect(store.doc.rootIds).toHaveLength(0);
+    expect(store.doc.nodes[res.nodeId as string]).toBeUndefined();
+  });
+
+  it("显式传不存在的 parentId 仍然报错", async () => {
+    const store = new DocStore(createEmptyDoc());
+    const run = makeExecutor(store, async () => "", () => null);
+    await expect(run("create_node", { kind: "rect", parentId: "missing" })).rejects.toThrow(/parentId/);
+  });
+});
+
+describe("AI 工具：导出与布局检查", () => {
+  it("export_png 校验倍率并交给宿主渲染", async () => {
+    const store = new DocStore(createDocWithPage());
+    const pageId = firstPageId(store.doc)!;
+    const run = makeExecutor(store, async () => "", () => pageId, undefined, {
+      newDocument: async () => true,
+      openDocument: async () => true,
+      exportPng: (request) => `data:image/png;base64,${request.scale}`,
+    });
+
+    const ok = await call(run, "export_png", { scale: 3 });
+    expect(ok.image).toBe("data:image/png;base64,3");
+    await expect(run("export_png", { scale: 9 })).rejects.toThrow(/scale/);
+    await expect(run("export_png", { pageId: "missing" })).rejects.toThrow(/pageId/);
+  });
+
+  it("inspect_layout 返回世界坐标与布局参数", async () => {
+    const { store, run, pageId } = setup();
+    const frame = createNode("frame", { parentId: pageId, x: 100, y: 50, width: 200, height: 100 });
+    const child = createNode("rect", { parentId: frame.id, x: 10, y: 20, width: 30, height: 40, layoutAbsolute: true });
+    frame.children = [child.id];
+    store.apply({ type: "node.create", params: { nodes: [frame, child], parentId: pageId } });
+
+    const res = JSON.parse((await run("inspect_layout", { pageId })) as string) as {
+      nodes: Array<Record<string, unknown>>;
+    };
+    const row = res.nodes.find((n) => n.id === child.id)!;
+    expect(row).toMatchObject({ x: 110, y: 70, width: 30, height: 40, absolute: true });
+  });
+
+  it("inspect_layout 的 nodeIds 含整棵子树，重复的后代只输出一次", async () => {
+    const { store, run, pageId } = setup();
+    const frame = createNode("frame", { parentId: pageId, x: 0, y: 0, width: 100, height: 100 });
+    const child = createNode("rect", { parentId: frame.id, x: 5, y: 5, width: 10, height: 10 });
+    frame.children = [child.id];
+    store.apply({ type: "node.create", params: { nodes: [frame, child], parentId: pageId } });
+
+    const rows = async (nodeIds: string[]) => {
+      const res = JSON.parse(await run("inspect_layout", { pageId, nodeIds })) as {
+        nodes: Array<{ id: string; depth: number }>;
+      };
+      return res.nodes.map((n) => `${n.id}:${n.depth}`);
+    };
+    expect(await rows([frame.id])).toEqual([`${frame.id}:0`, `${child.id}:1`]);
+    // 同时请求父与子：子作为后代只出现一次，depth 以根为准
+    expect(await rows([frame.id, child.id])).toEqual([`${frame.id}:0`, `${child.id}:1`]);
   });
 });

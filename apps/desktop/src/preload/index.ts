@@ -30,6 +30,8 @@ const api: SqraftApi = {
     openPath: (path: string) => ipcRenderer.invoke(CHANNELS.fileOpenPath, path) as Promise<OpenFileResult>,
     save: (request: SaveFileRequest) => ipcRenderer.invoke(CHANNELS.fileSave, request) as Promise<SaveFileResult>,
     saveAs: (request: SaveAsRequest) => ipcRenderer.invoke(CHANNELS.fileSaveAs, request) as Promise<SaveAsResult>,
+    exportPng: (request: { suggestedName: string; bytes: Uint8Array }) =>
+      ipcRenderer.invoke(CHANNELS.fileExportPng, request) as Promise<SaveAsResult>,
   },
   dialog: {
     unsaved: () => ipcRenderer.invoke(CHANNELS.dialogUnsaved) as Promise<UnsavedChoice>,
@@ -68,6 +70,8 @@ const api: SqraftApi = {
     info: () => ipcRenderer.invoke(CHANNELS.appInfo) as Promise<AppInfo>,
     copyText: (text: string) => ipcRenderer.send(CHANNELS.appCopyText, text),
     readClipboardImage: () => ipcRenderer.invoke(CHANNELS.appClipboardImage) as Promise<Uint8Array | null>,
+    writeClipboardImage: (dataUrl: string) =>
+      ipcRenderer.invoke(CHANNELS.appClipboardImageWrite, dataUrl) as Promise<boolean>,
     writeClipboardNodes: (json: string) =>
       ipcRenderer.invoke(CHANNELS.appClipboardNodesWrite, json) as Promise<void>,
     readClipboardNodes: () => ipcRenderer.invoke(CHANNELS.appClipboardNodesRead) as Promise<string | null>,

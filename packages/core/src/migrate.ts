@@ -108,6 +108,8 @@ export function migrateDoc(state: DocState, fromVersion = state.formatVersion ??
   }
   // 4：页面新增可选的 `guides`（参考线）。缺省即"没有参考线"，不需要改数据。
   if (version < 4) version = 4;
+  // 5：页面新增可选的 `backgroundImage`。缺省即"没有背景图"，不需要改数据。
+  if (version < 5) version = 5;
   state.formatVersion = CURRENT_FORMAT_VERSION;
   return state;
 }

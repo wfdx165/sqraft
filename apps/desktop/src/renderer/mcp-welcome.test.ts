@@ -19,15 +19,15 @@ function info(overrides: Partial<McpSetupInfo> = {}): McpSetupInfo {
 
 describe("欢迎页的 MCP 三态", () => {
   it("没读配置（null）时按未安装处理", () => {
-    expect(welcomeMcpState(null, 0)).toBe("not-installed");
+    expect(welcomeMcpState(null, [])).toBe("not-installed");
   });
 
   it("装了但没人连 → idle", () => {
-    expect(welcomeMcpState(info({ installed: true }), 0)).toBe("idle");
+    expect(welcomeMcpState(info({ installed: true }), [])).toBe("idle");
   });
 
   it("有 agent 在线时压过安装状态", () => {
-    expect(welcomeMcpState(info({ installed: false }), 2)).toBe("connected");
+    expect(welcomeMcpState(info({ installed: false }), [{}, {}])).toBe("connected");
   });
 
   it("三个状态各有自己的主按钮文案", () => {
@@ -52,14 +52,14 @@ describe("客户端预设", () => {
 
 describe("欢迎页的状态行", () => {
   it("监听中且无连接", () => {
-    expect(statusLine({ listening: true, clients: 0 })).toBe("MCP 服务监听中 · 等待 agent 接入");
+    expect(statusLine({ listening: true, clients: [] })).toBe("MCP 服务监听中 · 等待 agent 接入");
   });
 
   it("监听中并报出在线人数", () => {
-    expect(statusLine({ listening: true, clients: 3 })).toBe("MCP 服务监听中 · 已连接 3 个 agent");
+    expect(statusLine({ listening: true, clients: [{}, {}, {}] })).toBe("MCP 服务监听中 · 已连接 3 个 agent");
   });
 
   it("服务没起来时如实说，不假装在线", () => {
-    expect(statusLine({ listening: false, clients: 0 })).toBe("MCP 服务未启动");
+    expect(statusLine({ listening: false, clients: [] })).toBe("MCP 服务未启动");
   });
 });

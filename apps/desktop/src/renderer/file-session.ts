@@ -7,6 +7,7 @@ import { createEmptyDoc, firstPageId } from "@sqraft/core";
 import { docStore, ui } from "./store";
 import { parseDoc, serializeDoc } from "./fileio";
 import { allAssets, assetEntryName, loadAssets, resetAssets } from "./assets";
+import { fontEntryName, fontTable, fontsForSave, loadFonts, registerDocFonts, resetFonts } from "./fonts";
 
 export const fileState = reactive({
   path: null as string | null,
@@ -20,8 +21,16 @@ const bridge = window.sqraft;
 const MAX_SAVE_BYTES = 300 * 1024 * 1024;
 
 /** 保存时把仓库里的图片一并写进 zip（不在文档里的孤儿资源也一并带上，避免撤销后丢图）。 */
+/** 保存用快照：字体表从字体仓库现算（字体是资产，不进撤销栈）。 */
+function snapshotForSave(): ReturnType<typeof docStore.snapshot> {
+  return { ...docStore.snapshot(), fonts: fontTable(docStore.doc) };
+}
+
 function saveEntries(): { name: string; bytes: Uint8Array }[] {
-  return allAssets().map((asset) => ({ name: assetEntryName(asset), bytes: asset.bytes }));
+  return [
+    ...allAssets().map((asset) => ({ name: assetEntryName(asset), bytes: asset.bytes })),
+    ...fontsForSave(docStore.doc).map((font) => ({ name: fontEntryName(font), bytes: font.bytes })),
+  ];
 }
 
 /**
@@ -30,7 +39,7 @@ function saveEntries(): { name: string; bytes: Uint8Array }[] {
  */
 function estimatedSaveBytes(entries: readonly { bytes: Uint8Array }[]): number {
   const assets = entries.reduce((sum, entry) => sum + entry.bytes.length, 0);
-  return assets + JSON.stringify(docStore.snapshot()).length;
+  return assets + JSON.stringify(snapshotForSave()).length;
 }
 
 /** 超限就提示并放弃保存；返回 true 表示可以继续。 */
@@ -67,6 +76,7 @@ async function confirmReplaceCurrent(): Promise<boolean> {
 export async function newDocument(): Promise<boolean> {
   if (!(await confirmReplaceCurrent())) return false;
   resetAssets();
+  resetFonts();
   docStore.replace(createEmptyDoc());
   fileState.path = null;
   fileState.name = "未命名";
@@ -86,6 +96,7 @@ export async function closeDocument(): Promise<void> {
   if (!(await confirmReplaceCurrent())) return;
   // 资源跟着文档生命周期走：回到欢迎页时位图与 object URL 都该释放
   resetAssets();
+  resetFonts();
   docStore.replace(createEmptyDoc());
   fileState.path = null;
   fileState.name = "未命名";
@@ -126,8 +137,12 @@ async function adoptFile(file: { path: string; name: string; mtimeMs: number; by
     const { state, files } = await parseDoc(file.bytes);
     // 先确认文件能解析，再丢弃当前文档的资源，避免打开失败后连旧图一起没了
     resetAssets();
+    resetFonts();
     loadAssets(files);
+    loadFonts(files);
     docStore.replace(state);
+    // 必须在 replace 之后：registerDocFonts 要遍历新文档的字体表，否则注册的是旧文档
+    void registerDocFonts(state);
     ui.docOpen = true;
     fileState.path = file.path;
     fileState.name = file.name;
@@ -149,7 +164,7 @@ export async function saveDocument(): Promise<boolean> {
   if (!fileState.path) return saveDocumentAs();
   const entries = saveEntries();
   if (!(await withinSaveLimit(entries))) return false;
-  const bytes = await serializeDoc(docStore.snapshot(), entries);
+  const bytes = await serializeDoc(snapshotForSave(), entries);
   if (bytes.length > MAX_SAVE_BYTES) {
     await bridge.dialog.error(`文件超过 ${MAX_SAVE_BYTES / 1024 / 1024}MB，已取消保存。请减少或压缩图片后重试。`);
     return false;
@@ -179,7 +194,7 @@ export async function saveDocument(): Promise<boolean> {
 export async function saveDocumentAs(): Promise<boolean> {
   const entries = saveEntries();
   if (!(await withinSaveLimit(entries))) return false;
-  const bytes = await serializeDoc(docStore.snapshot(), entries);
+  const bytes = await serializeDoc(snapshotForSave(), entries);
   if (bytes.length > MAX_SAVE_BYTES) {
     await bridge.dialog.error(`文件超过 ${MAX_SAVE_BYTES / 1024 / 1024}MB，已取消保存。请减少或压缩图片后重试。`);
     return false;

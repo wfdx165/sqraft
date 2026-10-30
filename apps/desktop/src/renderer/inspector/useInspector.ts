@@ -29,6 +29,8 @@ import {
 } from "@sqraft/core";
 import { textSizeOf } from "../text-metrics";
 import { dispatch, docStore, hooks, ui } from "../store";
+import { putAsset } from "../assets";
+import { firstFamilyOf, fontFamilies, fontWeightsOf, putFont } from "../fonts";
 import { selectionBounds as boundsOf } from "../canvas/selection-bounds";
 
 /**
@@ -95,8 +97,102 @@ function applyNodes(fn: (n: DocNode) => Partial<DocNode> | null, label = "inspec
   if (cmds.length > 0) dispatch(cmds, label);
 }
 
+/**
+ * 样式写入：页面也参与（页面的 `style.fill` 就是背景色），
+ * 但几何/布局等入口仍走 `targets()`，对页面禁用。
+ */
 function applyStyle(fn: (style: NodeStyle, n: DocNode) => NodeStyle, label = "inspect"): void {
-  applyNodes((n) => ({ style: fn({ ...n.style }, n) }), label);
+  const cmds: Command[] = [];
+  for (const n of nodes.value) {
+    if (lockedChain(n)) continue;
+    const style = fn({ ...n.style }, n);
+    cmds.push({ type: "node.update", params: { nodeId: n.id, patch: { style } } });
+  }
+  if (cmds.length > 0) dispatch(cmds, label);
+}
+
+/* ---------- 字体导入 ---------- */
+
+const fontInput = ref<HTMLInputElement | null>(null);
+
+/** 已导入的字族（下拉里单独一组） */
+const importedFamilies = computed(() => {
+  void ui.version;
+  return fontFamilies();
+});
+
+/** 当前字族实际有的字重；系统字体给全档 */
+const weightOptions = computed<number[]>(() => {
+  const family = firstFamilyOf(String(nodes.value[0]?.style.fontFamily ?? ""));
+  const imported = importedFamilies.value.find((name) => name.toLowerCase() === family.toLowerCase());
+  return imported ? fontWeightsOf(imported) : [100, 200, 300, 400, 500, 600, 700, 800, 900];
+});
+
+async function importFont(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  if (!file) return;
+  const result = await putFont(new Uint8Array(await file.arrayBuffer()), file.name);
+  if (!result.ok) {
+    await window.sqraft.dialog.error(result.reason);
+    return;
+  }
+  // 导入即套用到当前文本选区，省一次手动选择
+  const stack = `'${result.record.family}', sans-serif`;
+  applyStyle((style) => ({ ...style, fontFamily: stack, fontWeight: result.record.weight }));
+  ui.version += 1;
+}
+
+/* ---------- 页面背景图 ---------- */
+
+const backgroundInput = ref<HTMLInputElement | null>(null);
+
+async function setBackgroundImage(event: Event): Promise<void> {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = "";
+  const page = nodes.value.find((n) => n.type === "page");
+  if (!file || !page) return;
+  const asset = await putAsset(new Uint8Array(await file.arrayBuffer()));
+  if (!asset.ok) {
+    await window.sqraft.dialog.error(asset.reason);
+    return;
+  }
+  dispatch(
+    {
+      type: "node.update",
+      params: {
+        nodeId: page.id,
+        patch: {
+          backgroundImage: {
+            assetId: asset.id,
+            fit: page.backgroundImage?.fit ?? "cover",
+          },
+        },
+      },
+    },
+    "背景图",
+  );
+}
+
+function setBackgroundFit(event: Event): void {
+  const page = nodes.value.find((n) => n.type === "page");
+  if (!page?.backgroundImage) return;
+  const fit = (event.target as HTMLSelectElement).value as "cover" | "contain" | "tile";
+  dispatch(
+    { type: "node.update", params: { nodeId: page.id, patch: { backgroundImage: { ...page.backgroundImage, fit } } } },
+    "背景图",
+  );
+}
+
+function clearBackgroundImage(): void {
+  const page = nodes.value.find((n) => n.type === "page");
+  if (!page) return;
+  dispatch(
+    { type: "node.update", params: { nodeId: page.id, patch: { backgroundImage: undefined } } },
+    "清除背景图",
+  );
 }
 
 /* ---------- 多选包围盒 ---------- */
@@ -1037,6 +1133,14 @@ function resetOuterField(field: string): void {
     setEffectNumber,
     setEffectColorToken,
     setEffectColorValue,
+    importedFamilies,
+    weightOptions,
+    fontInput,
+    importFont,
+    backgroundInput,
+    setBackgroundImage,
+    setBackgroundFit,
+    clearBackgroundImage,
     selectionBounds,
     setBoundsNumber,
     showAlign,

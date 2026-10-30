@@ -112,6 +112,26 @@ export function registerFileChannels(): void {
     }
   });
 
+  ipcMain.handle(
+    CHANNELS.fileExportPng,
+    async (event, request: { suggestedName: string; bytes: Uint8Array }): Promise<SaveAsResult> => {
+      const window = windowOf(event.sender);
+      const options = {
+        defaultPath: request.suggestedName,
+        filters: [{ name: "PNG 图片", extensions: ["png"] }],
+      };
+      const result = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options);
+      if (result.canceled || !result.filePath) return { status: "canceled" };
+      try {
+        // 导出的是成品图，不参与"外部改动"检测，也不进最近文件
+        await writeFileAtomic(result.filePath, request.bytes);
+        return { status: "ok", path: result.filePath, name: basename(result.filePath), mtimeMs: 0 };
+      } catch (error) {
+        return { status: "error", message: `导出失败：${messageOf(error)}` };
+      }
+    },
+  );
+
   // 同一时刻只允许一个"未保存"框：渲染层若有多个监听（dev 热更新残留）同时请求，
   // 复用同一个结果，避免多个 sheet 叠在一起、用户被迫连点几次。
   ipcMain.handle(CHANNELS.dialogUnsaved, (event): Promise<UnsavedChoice> => {

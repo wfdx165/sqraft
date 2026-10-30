@@ -219,6 +219,30 @@ export function imageFor(assetId: string): ResolvedImage | null {
   return null;
 }
 
+/**
+ * 等待一份资源解码完成（导出前预载用：`imageFor` 只读缓存，未解码会落成占位）。
+ * 超限/解码失败返回 null，不抛错。
+ */
+export async function ensureAssetDecoded(assetId: string): Promise<ResolvedImage | null> {
+  const hit = decoded.get(assetId);
+  if (hit) return hit;
+  if (failed.has(assetId)) return null;
+  const record = records.get(assetId);
+  if (!record) return null;
+  try {
+    const image = await ensureDecoded(record);
+    if (Math.max(image.width, image.height) > MAX_ASSET_SIDE) {
+      failed.add(assetId);
+      return null;
+    }
+    remember(record, image);
+    return image;
+  } catch {
+    failed.add(assetId);
+    return null;
+  }
+}
+
 /** 图层面板缩略图用；资源不存在时返回 null。 */
 export function assetUrl(assetId: string): string | null {
   return records.get(assetId)?.url ?? null;

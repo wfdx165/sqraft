@@ -22,6 +22,7 @@ export type ActionId =
   | "edit.redo"
   | "edit.copy"
   | "edit.cut"
+  | "edit.copyImage"
   | "edit.selectAll"
   | "edit.rename"
   | "edit.group"
@@ -49,6 +50,7 @@ export type ActionId =
   | "file.insertImage"
   | "file.save"
   | "file.saveAs"
+  | "file.exportPng"
   | "file.closeDoc";
 
 export type ActionGroup = "模式" | "工具" | "编辑" | "组件" | "视图" | "其它";
@@ -77,6 +79,7 @@ export const ACTIONS: ShortcutAction[] = [
   { id: "tool.path", group: "工具", label: "钢笔", default: "P" },
   { id: "tool.text", group: "工具", label: "文本", default: "T" },
   { id: "edit.copy", group: "编辑", label: "复制", default: "⌘C" },
+  { id: "edit.copyImage", group: "编辑", label: "复制为图片（PNG）", default: "⌘⇧C" },
   { id: "edit.selectAll", group: "编辑", label: "全选当前页", default: "⌘A" },
   { id: "edit.rename", group: "编辑", label: "重命名图层", default: "F2" },
   { id: "edit.group", group: "编辑", label: "分组", default: "⌘G" },
@@ -107,6 +110,7 @@ export const ACTIONS: ShortcutAction[] = [
   { id: "file.insertImage", group: "其它", label: "插入图片", default: "⇧⌘I" },
   { id: "file.save", group: "其它", label: "保存文件", default: "⌘S" },
   { id: "file.saveAs", group: "其它", label: "另存为", default: "⇧⌘S" },
+  { id: "file.exportPng", group: "其它", label: "导出 PNG", default: "⌘⇧E" },
   { id: "file.closeDoc", group: "其它", label: "关闭文档", default: "⌘W" },
 ];
 
@@ -119,7 +123,7 @@ export const FIXED_HINTS: { keys: string; label: string }[] = [
 ];
 
 /** 系统菜单/角色占用，绑了也轮不到我们。 */
-const RESERVED = new Set(["⌘R", "⌘T", "⌘Q", "⌘M", "⌘H", "⌘⌥Esc", "⌘⇧W", "⌘⇧T"]);
+const RESERVED = new Set(["⌘R", "⌘T", "⌘Q", "⌘M", "⌘H", "⌘⌥Esc", "⌘⇧W", "⌘⇧T", "⌘⌥I", "F12"]);
 
 /** 输入焦点内仍然生效的命令（保存/打开/页面搜索不该被输入框吞掉）。 */
 const GLOBAL_ACTIONS = new Set<ActionId>([

@@ -65,11 +65,21 @@ export interface McpSetupInfo {
   opencodeJson: string;
 }
 
+/** 一条 agent 连接：只读展示用（身份、连接时间、最近一次工具调用）。 */
+export interface McpClientInfo {
+  id: string;
+  /** 身份标签，如 `c1 claude(8123)` */
+  label: string;
+  connectedAt: number;
+  lastToolAt?: number;
+  lastTool?: string;
+}
+
 export interface McpStatus {
   /** 服务是否在监听（端口占用等原因启动失败时为 false） */
   listening: boolean;
-  /** 已连接的 agent 客户端数量 */
-  clients: number;
+  /** 已连接的 agent 客户端（数量 = 列表长度） */
+  clients: McpClientInfo[];
 }
 
 export interface McpInstallResult {
@@ -110,6 +120,8 @@ export interface SqraftApi {
     openPath(path: string): Promise<OpenFileResult>;
     save(request: SaveFileRequest): Promise<SaveFileResult>;
     saveAs(request: SaveAsRequest): Promise<SaveAsResult>;
+    /** 导出 PNG：弹系统保存框并落盘（bytes 是 PNG 原始字节） */
+    exportPng(request: { suggestedName: string; bytes: Uint8Array }): Promise<SaveAsResult>;
   };
   dialog: {
     unsaved(): Promise<UnsavedChoice>;
@@ -148,6 +160,8 @@ export interface SqraftApi {
      * 不返回 mime：真实格式由渲染层按 magic bytes 判定（扩展名/声明都不可信）。
      */
     readClipboardImage(): Promise<Uint8Array | null>;
+    /** 把 PNG data URL 写进系统剪贴板（复制为图片） */
+    writeClipboardImage(dataUrl: string): Promise<boolean>;
     /** 把节点载荷写进系统剪贴板的 sqraft 自定义 MIME（JSON 字符串） */
     writeClipboardNodes(json: string): Promise<void>;
     /** 读节点载荷；剪贴板里没有 sqraft 数据时返回 null */
@@ -174,6 +188,7 @@ export const CHANNELS = {
   fileOpen: "file:open",
   fileSave: "file:save",
   fileSaveAs: "file:save-as",
+  fileExportPng: "file:export-png",
   fileOpenPath: "file:open-path",
   fileOpenRequest: "file:open-request",
   fileDropped: "file:dropped",
@@ -190,6 +205,7 @@ export const CHANNELS = {
   appCopyText: "app:copy-text",
   appClipboardImage: "app:clipboard-image",
   appClipboardText: "app:clipboard-text",
+  appClipboardImageWrite: "app:clipboard-image-write",
   appClipboardNodesWrite: "app:clipboard-nodes-write",
   appClipboardNodesRead: "app:clipboard-nodes-read",
   appInfo: "app:info",

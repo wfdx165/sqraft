@@ -63,7 +63,7 @@ export function buildCreatedNode(input: CreateDragInput): CreatedNode {
               },
             ],
           },
-          style: { stroke: { token: "color/text" }, strokeWidth: 2 },
+          style: { stroke: { value: "#1a1a1a" }, strokeWidth: 2 },
         }
       : {
           name: isTriangle ? nextPolygonName(docStore, 3) : (TOOL_NAMES[tool] ?? tool),
@@ -74,8 +74,8 @@ export function buildCreatedNode(input: CreateDragInput): CreatedNode {
           sides: isTriangle ? 3 : undefined,
           // 新建画板/组件默认开启自动布局（纵向、gap 10、padding 10）
           layout: defaultLayoutFor(isTriangle ? "polygon" : tool),
-          // 画板默认白底（color/surface），形状默认主色
-          style: { fill: { token: tool === "frame" ? "color/surface" : "color/primary" } },
+          // 画板默认白底、形状默认主色：都是字面量，不预设设计系统
+          style: { fill: { value: tool === "frame" ? "#ffffff" : "#3366ff" } },
         },
   );
 
@@ -83,7 +83,7 @@ export function buildCreatedNode(input: CreateDragInput): CreatedNode {
   if (tool === "text") {
     // 文本：自动尺寸 + 与界面一致的字体，创建后直接进入编辑（全选）
     const style = {
-      fill: { token: "color/text" },
+      fill: { value: "#1a1a1a" },
       fontSize: DEFAULT_TEXT_FONT_SIZE,
       fontFamily: DEFAULT_TEXT_FONT_FAMILY,
     };

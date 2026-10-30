@@ -114,8 +114,8 @@ export function finishDraft(pen: PenState, deps: PenDeps, closed: boolean): void
       anchors: anchors.map((a) => ({ ...a, x: a.x - page.x, y: a.y - page.y })),
     },
     style: close
-      ? { fill: { token: "color/primary" } }
-      : { stroke: { token: "color/text" }, strokeWidth: 2 },
+      ? { fill: { value: "#3366ff" } }
+      : { stroke: { value: "#1a1a1a" }, strokeWidth: 2 },
   });
   deps.dispatch({ type: "node.create", params: { nodes: [node], parentId: d.pageId } }, "pen");
   // 切到拖动模式时不要回填选区（模式切换已经清空选区）

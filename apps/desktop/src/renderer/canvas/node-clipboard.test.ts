@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createEmptyDoc, createNode, firstPageId } from "@sqraft/core";
+import { createDocWithPage, createNode, firstPageId } from "@sqraft/core";
 
 // 图片仓库在测试里只需要"已存在/注册成功"，解码属于 assets 自己的测试
 const assetState = vi.hoisted(() => ({
@@ -39,7 +39,7 @@ describe("节点剪贴板", () => {
 
   beforeEach(() => {
     clipboard = "";
-    docStore.replace(createEmptyDoc());
+    docStore.replace(createDocWithPage());
     pageId = firstPageId(docStore.doc)!;
     ui.selection = [];
   });

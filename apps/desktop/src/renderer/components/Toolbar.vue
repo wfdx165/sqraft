@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted } from "vue";
-import { docStore, redo, switchMode, ui, undo, type ToolKind } from "../store";
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { docStore, layoutUi, redo, switchMode, ui, undo, type ToolKind } from "../store";
 import { closeDocument, fileState, openDocument, saveDocument, saveDocumentAs } from "../file-session";
+import { openContextMenu, type ContextMenuItem } from "../context-menu";
 import { keyOf, PANEL_BINDING, registerShortcuts, shortcutUi, type ActionId } from "../shortcuts";
 import { vTip } from "../tooltip";
 import appIcon from "../brand/app-icon.png";
@@ -18,8 +19,62 @@ const tools: { kind: ToolKind; action: ActionId; label: string; icon: string }[]
   { kind: "text", action: "tool.text", label: "文本", icon: "text" },
 ];
 
+/** 空文档没有页面：绘图工具不可用，先建页再画 */
+const hasPage = computed(() => {
+  void ui.version;
+  return docStore.doc.rootIds.some((id) => docStore.doc.nodes[id]?.type === "page");
+});
+
+/* ---------- 窄窗口：低优先级分组收进「⋯」 ---------- */
+/** 收起顺序（从最先收起的开始）：文档胶囊 → 打开/保存 → 快捷键入口 → 撤销/重做 */
+const OVERFLOW_ORDER = ["doc", "file", "shortcuts", "history"] as const;
+type OverflowGroup = (typeof OVERFLOW_ORDER)[number];
+
+const barEl = ref<HTMLElement | null>(null);
+const hiddenGroups = ref<Set<OverflowGroup>>(new Set());
+
+/**
+ * 溢出收纳：只收不放（宽度变大或面板变化时从零重算），避免"收起→放回"来回抖。
+ * 每次只动一组并等一帧，测到的才是真实布局宽度。
+ */
+async function fitBar(reset: boolean): Promise<void> {
+  if (reset) hiddenGroups.value = new Set();
+  await nextTick();
+  const bar = barEl.value;
+  if (!bar) return;
+  for (let guard = 0; guard < OVERFLOW_ORDER.length + 1; guard += 1) {
+    if (bar.scrollWidth <= bar.clientWidth + 1) return;
+    const next = OVERFLOW_ORDER.find((id) => !hiddenGroups.value.has(id));
+    if (!next) return;
+    hiddenGroups.value = new Set([...hiddenGroups.value, next]);
+    await nextTick();
+  }
+}
+
+/** 「⋯」菜单：把被收起的分组原样放回来。 */
+function openOverflowMenu(e: MouseEvent): void {
+  const items: ContextMenuItem[] = [];
+  if (hiddenGroups.value.has("doc")) {
+    items.push({ label: `当前文件：${docName.value}`, disabled: true, run: () => {} });
+    items.push({ label: "回到欢迎页", hint: keyOf("file.closeDoc"), run: () => void onClose() });
+  }
+  if (hiddenGroups.value.has("file")) {
+    items.push({ label: "打开…", hint: keyOf("file.open"), separator: items.length > 0, run: () => void onOpen() });
+    items.push({ label: "保存", hint: keyOf("file.save"), run: () => void onSave() });
+  }
+  if (hiddenGroups.value.has("history")) {
+    items.push({ label: "撤销", hint: keyOf("edit.undo"), separator: items.length > 0, disabled: !docStore.canUndo, run: () => undo() });
+    items.push({ label: "重做", hint: keyOf("edit.redo"), disabled: !docStore.canRedo, run: () => redo() });
+  }
+  if (hiddenGroups.value.has("shortcuts")) {
+    items.push({ label: "键盘快捷键", hint: PANEL_BINDING, separator: items.length > 0, run: () => toggleShortcuts() });
+  }
+  openContextMenu({ x: e.clientX, y: e.clientY }, items);
+}
+
 /** 点绘图工具自动切到编辑模式（模式分离：拖动模式只浏览） */
 function pickTool(kind: ToolKind) {
+  if (!hasPage.value) return;
   switchMode("edit");
   ui.tool = kind;
 }
@@ -56,18 +111,47 @@ function toggleShortcuts() {
 }
 
 let unregister = () => {};
+let stopLayoutWatch = () => {};
+let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+let lastWidth = window.innerWidth;
+
+function scheduleFit(reset = false): void {
+  if (resizeTimer) clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    resizeTimer = null;
+    void fitBar(reset);
+  }, 60);
+}
+
+/** 窗口变宽：从零重算；变窄：在当前基础上继续收。 */
+function onBarResize(): void {
+  const width = window.innerWidth;
+  const grew = width > lastWidth;
+  lastWidth = width;
+  scheduleFit(grew);
+}
+
 onMounted(() => {
   unregister = registerShortcuts({ "file.open": onOpen, "file.save": onSave, "file.saveAs": onSaveAs });
+  window.addEventListener("resize", onBarResize);
+  // 面板收起/展开会改工具栏可用宽度（窗口尺寸本身没变，收不到 resize）
+  stopLayoutWatch = watch(() => layoutUi.rev, () => scheduleFit(true));
+  void nextTick(() => void fitBar(false));
 });
-onBeforeUnmount(() => unregister());
+onBeforeUnmount(() => {
+  unregister();
+  stopLayoutWatch();
+  window.removeEventListener("resize", onBarResize);
+  if (resizeTimer) clearTimeout(resizeTimer);
+});
 </script>
 
 <template>
-  <header class="bar glass">
+  <header ref="barEl" class="bar glass">
     <span class="brand"><img class="mark" :src="appIcon" alt="" />Sqraft</span>
 
     <!-- 当前文件：名字（未保存带 •）+ 回欢迎页 -->
-    <div class="doc-chip">
+    <div v-show="!hiddenGroups.has('doc')" class="doc-chip">
       <Icon name="pages" :size="12" class="doc-icon" />
       <span class="doc-name" :title="docTip">{{ docName }}</span>
       <span v-if="docDirty" class="doc-dot" aria-hidden="true">•</span>
@@ -80,6 +164,7 @@ onBeforeUnmount(() => unregister());
       </button>
     </div>
     <button
+      v-show="!hiddenGroups.has('doc')"
       class="doc-chip back"
       v-tip="{ label: '关闭文档，回到欢迎页', shortcut: keyOf('file.closeDoc') }"
       @click="onClose"
@@ -87,7 +172,7 @@ onBeforeUnmount(() => unregister());
       <Icon name="home" :size="12" /><span>欢迎页</span>
     </button>
 
-    <span class="divider" />
+    <span v-show="!hiddenGroups.has('doc')" class="divider" />
 
     <nav class="group modes">
       <button
@@ -116,14 +201,15 @@ onBeforeUnmount(() => unregister());
         :key="t.kind"
         class="icon-btn"
         :class="{ active: ui.mode === 'edit' && ui.tool === t.kind }"
-        v-tip="{ label: t.label, shortcut: keyOf(t.action) }"
+        :disabled="!hasPage"
+        v-tip="{ label: hasPage ? t.label : '先新建页面', shortcut: keyOf(t.action) }"
         @click="pickTool(t.kind)"
       >
         <Icon :name="t.icon" />
       </button>
     </nav>
-    <span class="divider" />
-    <nav class="group">
+    <span v-show="!hiddenGroups.has('history')" class="divider" />
+    <nav v-show="!hiddenGroups.has('history')" class="group">
       <button class="icon-btn" v-tip="{ label: '撤销', shortcut: keyOf('edit.undo') }" :disabled="!docStore.canUndo" @click="undo">
         <Icon name="undo" />
       </button>
@@ -131,14 +217,15 @@ onBeforeUnmount(() => unregister());
         <Icon name="redo" />
       </button>
     </nav>
-    <span class="divider" />
-    <nav class="group">
+    <span v-show="!hiddenGroups.has('file')" class="divider" />
+    <nav v-show="!hiddenGroups.has('file')" class="group">
       <button class="icon-btn" v-tip="{ label: '打开', shortcut: keyOf('file.open') }" @click="onOpen"><Icon name="open" /></button>
       <button class="icon-btn" v-tip="{ label: '保存', shortcut: keyOf('file.save') }" @click="onSave"><Icon name="save" /></button>
     </nav>
-    <span class="divider" />
+    <span v-show="!hiddenGroups.has('shortcuts')" class="divider" />
 
     <button
+      v-show="!hiddenGroups.has('shortcuts')"
       class="icon-btn"
       :class="{ active: shortcutUi.open }"
       data-shortcuts-toggle
@@ -146,6 +233,16 @@ onBeforeUnmount(() => unregister());
       @click="toggleShortcuts"
     >
       <Icon name="keyboard" />
+    </button>
+
+    <!-- 窄窗口：被收起的分组集中在这里 -->
+    <button
+      v-if="hiddenGroups.size > 0"
+      class="icon-btn overflow"
+      v-tip="{ label: '更多' }"
+      @click="openOverflowMenu"
+    >
+      <span class="dots">⋯</span>
     </button>
   </header>
 </template>
@@ -157,6 +254,22 @@ onBeforeUnmount(() => unregister());
   gap: 6px;
   padding: 6px 8px;
   border-radius: var(--radius-pill);
+  /* 窄窗口：收起的分组不进布局，超出的部分由 fitBar 收进「⋯」 */
+  overflow: hidden;
+}
+
+.bar > * {
+  flex: none;
+}
+
+.overflow {
+  color: var(--text-dim);
+}
+
+.dots {
+  font-size: 14px;
+  line-height: 1;
+  letter-spacing: 0.5px;
 }
 
 .brand {

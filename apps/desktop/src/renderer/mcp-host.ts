@@ -4,16 +4,18 @@
  */
 import { reactive } from "vue";
 import { makeExecutor, toMCPManifest } from "@sqraft/ai-tools";
-import type { McpStatus } from "../shared/ipc";
+import type { McpClientInfo, McpStatus } from "../shared/ipc";
 import { docStore, hooks, ui } from "./store";
 import { newDocument, openDocument } from "./file-session";
 import { textSizeOf } from "./text-metrics";
 import { putAsset } from "./assets";
+import { putFont } from "./fonts";
 
 /** 连接状态（纯 UI，不进文档）：欢迎页的状态行与文档态的胶囊共用它 */
 export const mcpUi = reactive({
   listening: false,
-  clients: 0,
+  /** 连接列表（只读展示）；计数一律取 length */
+  clients: [] as McpClientInfo[],
   busy: false,
 });
 
@@ -26,6 +28,11 @@ function applyStatus(status: McpStatus): void {
   mcpUi.clients = status.clients;
 }
 
+/** 主动刷新连接列表：`lastTool` 只在主进程更新，不会主动推送，详情浮层打开时轮询用。 */
+export function refreshMcpStatus(): void {
+  void window.sqraft.mcp.status().then(applyStatus);
+}
+
 let installed = false;
 
 export function installMcpHost(): void {
@@ -36,7 +43,7 @@ export function installMcpHost(): void {
   bridge.mcp.setTools(manifest);
   bridge.mcp.onStatus(applyStatus);
   // 服务可能比页面先就绪，也可能稍后才监听成功：挂载时主动取一次
-  void bridge.mcp.status().then(applyStatus);
+  refreshMcpStatus();
 
   const executor = makeExecutor(
     docStore,
@@ -46,6 +53,16 @@ export function installMcpHost(): void {
     {
       newDocument: () => newDocument(),
       openDocument: () => openDocument(),
+    exportPng: (request) => hooks.renderExport(request),
+    importFont: async (fileName, dataBase64) => {
+      const binary = atob(dataBase64);
+      const bytes = new Uint8Array(binary.length);
+      for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+      const result = await putFont(bytes, fileName);
+      if (!result.ok) return null;
+      ui.version += 1;
+      return { family: result.record.family, weight: result.record.weight, style: result.record.style };
+    },
       addImage: async (data, mimeType) => {
         const bytes = Uint8Array.from(atob(data), (ch) => ch.charCodeAt(0));
         const asset = await putAsset(bytes);

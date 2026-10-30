@@ -1,6 +1,8 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
+  DEFAULT_PAGE_HEIGHT,
+  DEFAULT_PAGE_WIDTH,
   createNode,
   firstPageId,
   imageCropOf,
@@ -14,7 +16,7 @@ import {
   type VectorPath,
 } from "@sqraft/core";
 import { Canvas2DBackend, drawDocument, screenToWorld, worldToScreen, type Viewport } from "@sqraft/render";
-import { imageFor } from "../assets";
+import { ensureAssetDecoded, imageFor } from "../assets";
 import {
   dropImages,
   insertImages,
@@ -35,6 +37,8 @@ import {
   removeDraftAnchor,
 } from "../canvas/pen";
 import { dispatch, docStore, hooks, select, switchMode, ui } from "../store";
+import { closeContextMenu } from "../context-menu";
+import { openNodeMenu, openPageMenu } from "../object-menu";
 import { hitTest, isLocked, pageAt, slotUnder } from "../canvas/hit";
 import { containerAt, layoutParentOf, reorderGuide, reorderIndexAt } from "../canvas/layout-drag";
 import { dropAllowed, dropTargetAt, type DropTarget } from "../canvas/drop-target";
@@ -54,6 +58,7 @@ import { reorderSelection } from "../canvas/reorder-selection";
 import { flushNudge, nudgeSelection } from "../canvas/nudge";
 import { marqueeHits } from "../canvas/marquee";
 import { boundsHandlePoints, selectionBounds as boundsOfSelection } from "../canvas/selection-bounds";
+import { renderPngAsync } from "../canvas/export-image";
 import { RULER_SIZE, drawGuidesOverlay, drawRulers, guideAt } from "../canvas/rulers";
 import {
   abortMultiScale,
@@ -62,7 +67,7 @@ import {
   endMultiScale,
   type MultiScaleState,
 } from "../canvas/multi-scale";
-import { abortRotate, applyRotate, beginRotate, endRotate, type RotateState } from "../canvas/rotate-drag";
+import { abortRotate, applyRotate, beginRotate, endRotate, rotateZoneAt, type RotateState } from "../canvas/rotate-drag";
 import { groupSelection, ungroupSelection } from "../canvas/group-actions";
 import { createDraftGuards } from "../canvas/draft-guard";
 import { paintDropSlot as paintDrop, paintSlotPlaceholders as paintSlots } from "../canvas/slot-overlay";
@@ -182,6 +187,29 @@ let drag: {
   cropStart?: CropRect;
 } | null = null;
 let preview: { x: number; y: number; w: number; h: number; valid: boolean } | null = null;
+/** 文档里是否已经有页面（空文件给引导卡，工具置灰） */
+const hasPage = computed(() => {
+  void ui.version;
+  return docStore.doc.rootIds.some((id) => docStore.doc.nodes[id]?.type === "page");
+});
+
+/** 空文档：建第一个页面并适配视图 */
+function createFirstPage(): void {
+  const page = createNode("page", {
+    name: "页面 1",
+    x: 0,
+    y: 0,
+    width: DEFAULT_PAGE_WIDTH,
+    height: DEFAULT_PAGE_HEIGHT,
+  });
+  dispatch({ type: "node.create", params: { nodes: [page], parentId: null } }, "新建页面");
+  ui.activePageId = page.id;
+  ui.expandedPageId = page.id;
+  select([]);
+  markDirty();
+  void nextTick(() => fitView());
+}
+
 /** 多选缩放：拖拽中累积的比例（每次只下发增量） */
 let multiScale: MultiScaleState | null = null;
 /** 从标尺拖出参考线：axis = x 是竖线，y 是横线；world 是指针的世界坐标 */
@@ -203,8 +231,21 @@ let rotateState: RotateState | null = null;
 /** 钢笔 / 锚点编辑的会话状态（纯 UI 状态）。 */
 const pen = createPenState();
 const viewportNav = createViewportNav({ vp, pen, markDirty, commitEditors });
-const { flyTo, focusRect, focusNode, focusPage, activePage, pageAtViewportCenter, ensureActivePage, setActivePage, fitAll, fitActivePage, fitView, visibleRatio } =
-  viewportNav;
+const {
+  flyTo,
+  focusRect,
+  focusNode,
+  focusPage,
+  activePage,
+  pageAtViewportCenter,
+  ensureActivePage,
+  setActivePage,
+  activatePage,
+  fitAll,
+  fitActivePage,
+  fitView,
+  visibleRatio,
+} = viewportNav;
 const componentActionDeps = { vp, ensureActivePage, markDirty };
 const insertInstance = (id: NodeId) => insertInstanceAction(componentActionDeps, id);
 const createComponentFromSelection = () => createComponentFromSelectionAction(componentActionDeps);
@@ -216,6 +257,31 @@ const HANDLE_HIT_PX = 7;
 /** 拖动换父级时的边缘自动滚屏：触发区（屏幕像素）与最大速度（屏幕像素/秒） */
 const EDGE_SCROLL_ZONE = 40;
 const EDGE_SCROLL_MAX = 960;
+
+/**
+ * 切页会立刻改变视口：同一次双击的第二次按下在“同一位置 + 短时间”内出现时，
+ * 不能再按旧屏幕坐标解释（否则会选中缩放后跑到指针下的其它节点）。
+ * 用位置判断而不是 `pointerdown.detail`——Chromium 的 pointerdown detail 恒为 0。
+ */
+const REPEAT_CLICK_MS = 700;
+const REPEAT_CLICK_PX = 4;
+let pageSwitchClick: { x: number; y: number; at: number } | null = null;
+/** 被吞掉的那一次按下不再触发 dblclick（文本编辑/裁切等） */
+let suppressCanvasDblClickUntil = 0;
+
+function notePageSwitchClick(sx: number, sy: number): void {
+  const at = performance.now();
+  pageSwitchClick = { x: sx, y: sy, at };
+  suppressCanvasDblClickUntil = at + REPEAT_CLICK_MS;
+}
+
+function swallowRepeatClick(sx: number, sy: number): boolean {
+  const first = pageSwitchClick;
+  if (!first) return false;
+  pageSwitchClick = null;
+  if (performance.now() - first.at > REPEAT_CLICK_MS) return false;
+  return Math.hypot(sx - first.x, sy - first.y) <= REPEAT_CLICK_PX;
+}
 
 /** 指针在画布内的最后位置（屏幕坐标）：粘贴节点的落点用它 */
 let lastPointer: { x: number; y: number } | null = null;
@@ -235,6 +301,8 @@ let marquee: {
 let resizePreview: { id: NodeId; x: number; y: number; width: number; height: number } | null = null;
 let vectorPreview: { id: NodeId; vector: VectorPath } | null = null;
 const hoverHandle = ref<ResizeHandle | null>(null);
+/** 指针在四角外侧的旋转热区里（光标换成旋转样式） */
+const hoverRotate = ref(false);
 const hoverInactive = ref(false);
 const hoverLabel = ref(false);
 const dragging = ref(false);
@@ -255,6 +323,7 @@ const cursor = computed(() =>
     mode: ui.mode,
     tool: ui.tool,
     dragging: dragging.value,
+    hoverRotate: hoverRotate.value,
     hoverHandle: hoverHandle.value,
     hoverLabel: hoverLabel.value,
     hoverText: Boolean(hoverTextId.value),
@@ -485,7 +554,18 @@ function autoScrollStep(dt: number): boolean {
   return true;
 }
 
-const resize = () => viewportNav.resize(canvasRef.value);
+/** 窗口尺寸变化的防抖计时器：拖动边框时不跟着抖，停手再适配 */
+let resizeTimer: ReturnType<typeof setTimeout> | null = null;
+
+const resize = () => {
+  viewportNav.resize(canvasRef.value);
+  if (resizeTimer) clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    resizeTimer = null;
+    // 只有视角还停在适配结果上才重新适配；手动缩放过就保持原样（别抢用户视角）
+    if (viewportNav.isFitted()) fitView();
+  }, 120);
+};
 
 /** 选区包围盒（世界坐标，忽略旋转）：多选手柄与检查器共用同一份实现 */
 function selectionWorldBounds(): Rect | null {
@@ -517,6 +597,31 @@ function hitHandle(sx: number, sy: number): { handle: ResizeHandle; id: NodeId }
     if (Math.abs(sx - hx) <= HANDLE_HIT_PX && Math.abs(sy - hy) <= HANDLE_HIT_PX) return { handle, id };
   }
   return null;
+}
+
+/**
+ * 旋转热区的四个角（屏幕坐标）：多选用选区包围盒，单选用随节点旋转的四边形。
+ * 只给"编辑模式 + 选择工具 + 有选区且无锁定节点"的情况返回角点。
+ */
+function rotateZoneCorners(): { x: number; y: number }[] | null {
+  if (pen.pathEdit) return null;
+  if (ui.mode !== "edit" || ui.tool !== "select" || ui.selection.length === 0) return null;
+  // 选区含锁定节点时不给旋转入口：core 会跳过它们，手势看起来像失效
+  if (ui.selection.some((id) => isLocked(id))) return null;
+  if (ui.selection.length > 1) {
+    const bounds = selectionWorldBounds();
+    if (!bounds) return null;
+    const tl = worldToScreen(vp, bounds.x, bounds.y);
+    const br = worldToScreen(vp, bounds.x + bounds.width, bounds.y + bounds.height);
+    return [tl, { x: br.x, y: tl.y }, br, { x: tl.x, y: br.y }];
+  }
+  return selectionQuad(vp, ui.selection[0], resizePreview, drag);
+}
+
+/** 四角外侧 12px 的旋转热区；手柄本体（±HANDLE_HIT_PX）仍归缩放。 */
+function hitRotateZone(sx: number, sy: number): boolean {
+  const corners = rotateZoneCorners();
+  return corners ? rotateZoneAt(corners, sx, sy, HANDLE_HIT_PX) : false;
 }
 
 /** 参与移动的根节点：父节点也被选中的子节点不重复参与。 */
@@ -619,6 +724,27 @@ function startRenameForSelection(): void {
   });
 }
 
+/** ⌘⇧C：把选区（无选区则活动页）复制成 PNG 到剪贴板 */
+async function copySelectionAsPng(): Promise<void> {
+  const pageId = ensureActivePage()?.id ?? null;
+  if (!pageId) return;
+  const ids = ui.selection.filter((id) => {
+    const node = docStore.doc.nodes[id];
+    return !!node && node.type !== "page";
+  });
+  // 字体可能还在加载：导出前等一次，避免落成回退字体
+  await document.fonts.ready;
+  const dataUrl = await renderPngAsync(docStore.doc, {
+    pageId,
+    nodeIds: ids.length > 0 ? ids : undefined,
+    scale: 2,
+    resolveImage: (assetId) => imageFor(assetId),
+    ensureImage: ensureAssetDecoded,
+  });
+  if (!dataUrl) return;
+  await window.sqraft.app.writeClipboardImage(dataUrl);
+}
+
 /** ⌘A：全选当前层级的可见未锁定图层（实例上下文内只选当前层） */
 function selectAllInPage(): void {
   const level = ui.instanceContext.length ? ui.instanceContext.at(-1)! : ensureActivePage()?.id;
@@ -659,7 +785,30 @@ function onRenameKey(e: KeyboardEvent) {
   }
 }
 
+/** 右键：页面本体 → 页面菜单，元素 → 元素菜单；空白处不弹（先点一下对象）。 */
+function onContextMenu(e: MouseEvent): void {
+  // 行内文本编辑 / 改名输入框：保留系统菜单（复制、粘贴）
+  const target = e.target as HTMLElement | null;
+  if (target && (target.tagName === "TEXTAREA" || target.tagName === "INPUT")) return;
+  e.preventDefault();
+  if (!canvasRef.value) return;
+  commitEditors();
+  const rect = canvasRef.value.getBoundingClientRect();
+  const sx = e.clientX - rect.left;
+  const sy = e.clientY - rect.top;
+  const world = screenToWorld(vp, sx, sy);
+  const hit = hitTest(vp, world.x, world.y);
+  const position = { x: e.clientX, y: e.clientY };
+  if (!hit) {
+    closeContextMenu();
+    return;
+  }
+  if (hit.id === hit.pageId || hit.inactive) openPageMenu(hit.pageId, position);
+  else openNodeMenu(hit.id, position);
+}
+
 function onDoubleClick(e: MouseEvent) {
+  if (performance.now() < suppressCanvasDblClickUntil) return;
   const guideRect = canvasRef.value?.getBoundingClientRect();
   if (guideRect && guidesVisible.value) {
     const pageNode = ui.activePageId ? docStore.doc.nodes[ui.activePageId] ?? null : null;
@@ -714,8 +863,8 @@ function onDoubleClick(e: MouseEvent) {
     return;
   }
   if (hit.inactive) {
-    setActivePage(hit.pageId, false);
-    select([hit.pageId]);
+    // 点另一页 = 切页 + 适配该页（与左栏页面行一致）
+    activatePage(hit.pageId);
     return;
   }
   const node = docStore.doc.nodes[hit.id];
@@ -792,6 +941,10 @@ function clearHover() {
     hoverHandle.value = null;
     markDirty();
   }
+  if (hoverRotate.value) {
+    hoverRotate.value = false;
+    markDirty();
+  }
   if (hoverInactive.value) {
     hoverInactive.value = false;
     markDirty();
@@ -813,6 +966,12 @@ function updateHover(e: PointerEvent) {
   const handle = hitHandle(sx, sy)?.handle ?? null;
   if (hoverHandle.value !== handle) {
     hoverHandle.value = handle;
+    markDirty();
+  }
+  // 旋转热区只在没有缩放手柄时提示，避免两个光标来回跳
+  const rotate = !handle && hitRotateZone(sx, sy);
+  if (hoverRotate.value !== rotate) {
+    hoverRotate.value = rotate;
     markDirty();
   }
   const w = screenToWorld(vp, sx, sy);
@@ -951,6 +1110,9 @@ function toggleCrop(nodeId: NodeId | null): void {
 
 
 function onPointerDown(e: PointerEvent) {
+  // 切页后同一次双击的第二下：位置不变但视口已经变了，旧坐标失效，直接吞掉
+  const downRect = canvasRef.value?.getBoundingClientRect();
+  if (downRect && swallowRepeatClick(e.clientX - downRect.left, e.clientY - downRect.top)) return;
   // 先收掉微移会话，避免这次点击的命令被并进"微移"那条撤销
   flushNudge();
   commitEditors();
@@ -1044,7 +1206,7 @@ function onPointerDown(e: PointerEvent) {
     }
   }
 
-  // 1) 缩放手柄（仅单选、非文本）
+  // 1) 四角外侧的旋转热区（手柄本体不落在这里，优先给缩放）
   if (hitRotateZone(sx, sy)) {
     const bounds = selectionWorldBounds();
     if (bounds) {
@@ -1055,6 +1217,7 @@ function onPointerDown(e: PointerEvent) {
     }
   }
 
+  // 2) 缩放手柄（仅单选、非文本；多选是整组等比缩放）
   const handleHit = hitHandle(sx, sy);
   if (handleHit && !handleHit.id) {
     const bounds = selectionWorldBounds();
@@ -1089,7 +1252,7 @@ function onPointerDown(e: PointerEvent) {
     }
   }
 
-  // 2) 页面名称标签：选中并开始移动整页——这是页面唯一的拖动入口
+  // 3) 页面名称标签：选中并开始移动整页——这是页面唯一的拖动入口
   //    钢笔草稿期间标签不再是拖动入口，否则画到页顶会误移动整页
   const label = ui.tool === "path" && pen.draft ? null : labelAt(sx, sy, vp, ctx);
   if (label) {
@@ -1109,7 +1272,7 @@ function onPointerDown(e: PointerEvent) {
     return;
   }
 
-  // 3) 绘图工具：只允许在页面内起笔；落在非活动页先切换活动页
+  // 4) 绘图工具：只允许在页面内起笔；落在非活动页先切换活动页
   if (ui.tool === "path") {
     if (e.button !== 0) return;
     const pageId = pageAt(w.x, w.y);
@@ -1162,7 +1325,7 @@ function onPointerDown(e: PointerEvent) {
     return;
   }
 
-  // 4) 选择
+  // 5) 选择
   const hit = hitTest(vp, w.x, w.y);
   if (!hit) {
     marquee = { startX: sx, startY: sy, x: sx, y: sy, active: false, additive: e.shiftKey, base: [...ui.selection] };
@@ -1170,11 +1333,9 @@ function onPointerDown(e: PointerEvent) {
     return;
   }
   if (hit.inactive) {
-    // 先切换活动页，再选中该页（不顺势拖动，避免误移整页）
-    setActivePage(hit.pageId, false);
-    select([hit.pageId]);
-    ui.expandedPageId = hit.pageId;
-    markDirty();
+    // 点另一页 = 切页 + 适配该页；不顺势拖动，避免误移整页
+    activatePage(hit.pageId);
+    notePageSwitchClick(sx, sy);
     return;
   }
   // 在实例上下文里点了上下文之外的节点：先退出上下文
@@ -1338,6 +1499,7 @@ function onPointerMove(e: PointerEvent) {
   if (drag.mode === "pan") {
     vp.x = drag.startWX - (sx - drag.startX) / vp.zoom;
     vp.y = drag.startWY - (sy - drag.startY) / vp.zoom;
+    viewportNav.invalidateFit();
   } else if (ui.mode !== "edit") {
     // 非编辑模式一律不允许移动/缩放/绘制（防御：模式在拖动中被切换时不留下残留手势）
     drag = null;
@@ -1680,6 +1842,28 @@ function onPointerUp(e: PointerEvent) {
     markDirty();
     return;
   }
+  if (drag.mode === "pan") {
+    const pan = drag;
+    drag = null;
+    preview = null;
+    guideLines = [];
+    gapMarks = [];
+    const rect = canvasRef.value?.getBoundingClientRect();
+    const sx = e.clientX - (rect?.left ?? 0);
+    const sy = e.clientY - (rect?.top ?? 0);
+    // 拖动模式单击页面（没有拖动位移）也切页 + 适配；按住拖动保持平移
+    if (Math.hypot(sx - pan.startX, sy - pan.startY) <= 3) {
+      const world = screenToWorld(vp, sx, sy);
+      const pageId = pageAt(world.x, world.y);
+      // 点当前页不重复缩放，只有真的换页才适配
+      if (pageId && pageId !== ui.activePageId) {
+        activatePage(pageId);
+        notePageSwitchClick(sx, sy);
+      }
+    }
+    markDirty();
+    return;
+  }
   if (drag.mode === "rotate") {
     endRotate();
     rotateState = null;
@@ -1811,6 +1995,7 @@ function clampZoom(z: number): number {
 /** 以屏幕锚点缩放（滚轮在光标处，按钮在视口中心）。 */
 function zoomAt(anchorX: number, anchorY: number, factor: number) {
   commitEditors();
+  viewportNav.invalidateFit();
   const before = screenToWorld(vp, anchorX, anchorY);
   vp.zoom = clampZoom(vp.zoom * factor);
   const after = screenToWorld(vp, anchorX, anchorY);
@@ -1874,6 +2059,7 @@ function onWheel(e: WheelEvent) {
   const my = e.shiftKey ? 0 : dy;
   vp.x += mx / vp.zoom;
   vp.y += my / vp.zoom;
+  viewportNav.invalidateFit();
   markDirty();
 }
 
@@ -2037,9 +2223,42 @@ onMounted(() => {
   hooks.focusNode = focusNode;
   hooks.focusPage = focusPage;
   hooks.fitActivePage = fitActivePage;
+  hooks.activatePage = activatePage;
   hooks.insertImageBytes = (bytes, name) => insertImages([{ bytes, name }], imageDeps, viewportCenterWorld(imageDeps));
   hooks.pasteNodes = () => pasteNodesFromClipboard(pasteDeps);
   hooks.selectAllLayers = selectAllInPage;
+  hooks.renderExport = async (request) => {
+    const pageId = request.pageId ?? ensureActivePage()?.id ?? null;
+    if (!pageId) return "";
+    const selected = ui.selection.filter((id) => {
+      const node = docStore.doc.nodes[id];
+      return !!node && node.type !== "page";
+    });
+    const nodeIds = request.nodeIds ?? (selected.length > 0 ? selected : undefined);
+    return renderPngAsync(docStore.doc, {
+      pageId,
+      nodeIds,
+      scale: request.scale,
+      resolveImage: (assetId) => imageFor(assetId),
+      ensureImage: ensureAssetDecoded,
+    });
+  };
+  hooks.startRenameOf = (id) => {
+    const node = docStore.doc.nodes[id];
+    if (!node) return;
+    if (node.type === "page") {
+      // 先把这一页铺满视口，改名输入框才落在看得见的地方
+      ui.activePageId = node.id;
+      ui.expandedPageId = node.id;
+      fitActivePage();
+      startPageRename(node);
+      return;
+    }
+    select([id]);
+    startRenameForSelection();
+  };
+  hooks.deleteSelectionNow = () => deleteSelectionAction(pen);
+  hooks.copySelectionPng = () => void copySelectionAsPng();
   hooks.getActivePageId = () => {
     if (ui.mode === "edit") return ensureActivePage()?.id ?? null;
     return pageAtViewportCenter()?.id ?? null;
@@ -2128,6 +2347,7 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  if (resizeTimer) clearTimeout(resizeTimer);
   cancelAnimationFrame(raf);
   unsub();
   stopModeWatch();
@@ -2137,12 +2357,12 @@ onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKey, true);
   window.removeEventListener("pointerdown", draftGuards.onWindowPointerDown, true);
   window.removeEventListener("blur", draftGuards.onWindowBlur);
-  window.removeEventListener("blur", onWindowBlurEndCrop);
+  window.removeEventListener("blur", onWindowBlurEndGesture);
 });
 </script>
 
 <template>
-  <div class="viewport" @dragover.prevent @drop="onCanvasDrop">
+  <div class="viewport" @dragover.prevent @drop="onCanvasDrop" @contextmenu="onContextMenu">
     <canvas ref="gridCanvasRef" class="canvas canvas-grid" aria-hidden="true" />
     <canvas ref="docCanvasRef" class="canvas canvas-doc" aria-hidden="true" />
     <canvas
@@ -2156,6 +2376,13 @@ onBeforeUnmount(() => {
       @dblclick="onDoubleClick"
       @wheel.prevent="onWheel"
     />
+
+    <!-- 空文档引导：没有页面时先建页，避免画在空气里 -->
+    <div v-if="!hasPage" class="empty-doc glass">
+      <span class="empty-title">这个文件还没有页面</span>
+      <span class="empty-hint">页面是设计的载体，先建一个再开始画</span>
+      <button class="empty-action" @click="createFirstPage">新建页面</button>
+    </div>
 
     <!-- 行内改名（页面名 / 图层名，F2） -->
     <input

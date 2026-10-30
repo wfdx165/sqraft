@@ -5,7 +5,14 @@
  */
 
 import type { DocNode, DocState, Effect, NodeId, Rect, VectorPath } from "@sqraft/core";
-import { cornerRadiusOf, imageCropOf, maskPlan, resolvePaint, polygonPoints, subtreeWorldBounds } from "@sqraft/core";
+import {
+  cornerRadiusOf,
+  imageCropOf,
+  maskPlan,
+  resolvePaint,
+  polygonPoints,
+  subtreeWorldBounds,
+} from "@sqraft/core";
 import type { RenderBackend, RenderContext, RenderEffect, ResolvedImage, Viewport } from "./backend";
 
 const CONTAINER_TYPES = new Set(["page", "frame", "group"]);
@@ -201,6 +208,11 @@ export interface DrawOptions {
   dimPageIds?: readonly NodeId[];
   /** 图片解码缓存入口（渲染层注入；缺省视为全部缺失） */
   resolveImage?: (assetId: string) => ResolvedImage | null;
+  /**
+   * 只画这些子树（导出选区用）：不画页面底，按各自的世界位置摆放。
+   * 与 `dimPageIds` 互斥——导出时不需要页面淡化。
+   */
+  onlyRootIds?: readonly NodeId[];
 }
 
 /** 绘制所有页面与内容（不含帧生命周期，便于宿主插入背景网格）。 */
@@ -210,6 +222,27 @@ export function drawDocument(backend: RenderBackend, doc: DocState, options: Dra
     resolveColor: (p) => resolvePaint(doc, p),
     resolveImage: options.resolveImage ?? (() => null),
   };
+  // 导出选区：只画选中的子树，按世界位置摆放，不画页面底
+  if (options.onlyRootIds) {
+    for (const id of options.onlyRootIds) {
+      const node = doc.nodes[id];
+      if (!node) continue;
+      // 祖先链的平移与旋转都要压进去：只压平移的话，旋转分组里的子节点会落错位置
+      const chain: DocNode[] = [];
+      let cur = node.parentId ? doc.nodes[node.parentId] : undefined;
+      while (cur) {
+        chain.push(cur);
+        cur = cur.parentId ? doc.nodes[cur.parentId] : undefined;
+      }
+      for (const ancestor of chain.reverse()) {
+        backend.pushTransform(ancestor.x, ancestor.y, ancestor.rotation, ancestor.width, ancestor.height);
+      }
+      drawNode(backend, ctx, node, options);
+      for (const _ancestor of chain) backend.popTransform();
+    }
+    return;
+  }
+
   for (const pageId of doc.rootIds) {
     const page = doc.nodes[pageId];
     if (!page) continue;
@@ -228,6 +261,18 @@ export function drawDocument(backend: RenderBackend, doc: DocState, options: Dra
       { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 },
       true,
     );
+    // 页面背景图：盖在背景色之上、子节点之下
+    const background = page.backgroundImage;
+    if (background) {
+      const resolved = options.resolveImage?.(background.assetId) ?? null;
+      if (resolved) {
+        backend.drawImageInRect(
+          resolved,
+          { x: geo.x, y: geo.y, width: geo.width, height: geo.height },
+          background.fit,
+        );
+      }
+    }
     backend.pushTransform(geo.x, geo.y);
     drawChildren(backend, ctx, page.children, options);
     backend.popTransform();

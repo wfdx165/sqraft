@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  createEmptyDoc,
+  createDocWithPage,
   createNode,
   resolvePaint,
   worldRect,
@@ -45,7 +45,7 @@ import { materializeInstance } from "../src/component";
 
 describe("命令系统", () => {
   it("创建 → 撤销 → 重做 后文档状态一致", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const rect = createNode("rect", { name: "R1", width: 10, height: 10 });
     store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
@@ -62,7 +62,7 @@ describe("命令系统", () => {
   });
 
   it("删除含子树的画板后撤销可完整恢复", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const child = createNode("rect", { name: "child" });
     const frame = createNode("frame", { name: "F", children: [child.id] });
@@ -80,7 +80,7 @@ describe("命令系统", () => {
 
   it("同一起点应用同一命令序列，结果逐字节相等（确定性）", () => {
     const run = () => {
-      const doc = createEmptyDoc();
+      const doc = createDocWithPage();
       // 固定页面 id，排除 id 生成器对确定性比较的干扰
       const page = doc.nodes[doc.rootIds[0]];
       doc.nodes = { p: { ...page, id: "p" } };
@@ -103,7 +103,8 @@ describe("命令系统", () => {
 
 describe("Token 改名", () => {
   it("改名后节点引用跟随，撤销后路径与引用双双还原", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
+    store.doc.tokens["color/primary"] = { type: "color", value: "#3366ff" };
     const pageId = store.doc.rootIds[0];
     const rect = createNode("rect", { name: "R", style: { fill: { token: "color/primary" }, stroke: { token: "color/primary" } } });
     store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
@@ -128,7 +129,9 @@ describe("Token 改名", () => {
   });
 
   it("只改引用了该 Token 的节点，其它节点不动", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
+    store.doc.tokens["color/text"] = { type: "color", value: "#1a1a1a" };
+    store.doc.tokens["color/primary"] = { type: "color", value: "#3366ff" };
     const pageId = store.doc.rootIds[0];
     const a = createNode("rect", { name: "A", style: { fill: { token: "color/text" } } });
     const b = createNode("rect", { name: "B", style: { fill: { token: "color/primary" } } });
@@ -143,7 +146,9 @@ describe("Token 改名", () => {
   });
 
   it("源不存在或目标重名时抛错且不改文档", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
+    store.doc.tokens["color/text"] = { type: "color", value: "#1a1a1a" };
+    store.doc.tokens["color/primary"] = { type: "color", value: "#3366ff" };
     const before = JSON.stringify(store.doc.tokens);
     expect(() => store.apply({ type: "token.rename", params: { from: "color/nope", to: "x/y" } })).toThrow();
     expect(() => store.apply({ type: "token.rename", params: { from: "color/primary", to: "color/text" } })).toThrow();
@@ -279,7 +284,9 @@ describe("布局求解器（golden）", () => {
 
 describe("Token 解析", () => {
   it("解析引用与字面量；缺失 Token 以示警色返回", () => {
-    const doc = createEmptyDoc();
+    const doc = createDocWithPage();
+    // 新文档不再预置 Token：这里显式造一个用于解析
+    doc.tokens["color/primary"] = { type: "color", value: "#3366ff" };
     expect(resolvePaint(doc, { token: "color/primary" })).toBe("#3366ff");
     expect(resolvePaint(doc, { value: "#123456" })).toBe("#123456");
     expect(resolvePaint(doc, { token: "color/missing" })).toBe("#ff00ff");
@@ -288,7 +295,7 @@ describe("Token 解析", () => {
 
 describe("页面与世界坐标", () => {
   it("worldRect 累加页面与容器偏移", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const frame = createNode("frame", { x: 100, y: 50 });
     const rect = createNode("rect", { x: 10, y: 20 });
@@ -300,7 +307,7 @@ describe("页面与世界坐标", () => {
   });
 
   it("nextPagePosition 放在最右侧页面之右", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     expect(nextPagePosition(store.doc)).toEqual({ x: DEFAULT_PAGE_WIDTH + PAGE_GAP, y: 0 });
   });
 });
@@ -325,7 +332,7 @@ describe("矢量路径", () => {
   });
 
   it("创建路径时以父容器坐标归一化并推导节点框", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const path = createNode("path", {
       name: "P",
@@ -343,7 +350,7 @@ describe("矢量路径", () => {
   });
 
   it("改 vector 时重新推导节点框，撤销恢复上一版几何", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const path = createNode("path", {
       vector: { closed: false, anchors: [makeAnchor(0, 0), makeAnchor(100, 0)] },
@@ -368,7 +375,7 @@ describe("矢量路径", () => {
   });
 
   it("只改宽高时按比例缩放锚点与手柄", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const path = createNode("path", {
       vector: {
@@ -385,7 +392,7 @@ describe("矢量路径", () => {
   });
 
   it("扁平路径垂直缩放后仍保持包围盒与几何一致", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const path = createNode("path", {
       vector: { closed: false, anchors: [makeAnchor(0, 0), makeAnchor(100, 0)] },
@@ -398,7 +405,7 @@ describe("矢量路径", () => {
   });
 
   it("闭合少于 3 个锚点时抛错且不占撤销记录", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const path = createNode("path", { vector: line() });
     store.apply({ type: "node.create", params: { nodes: [path], parentId: pageId } });
@@ -452,7 +459,7 @@ describe("参数化多边形", () => {
   });
 
   it("改边数只改顶点数，不改包围盒", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const poly = createNode("polygon", { x: 10, y: 20, width: 120, height: 90, sides: 3 });
     store.apply({ type: "node.create", params: { nodes: [poly], parentId: pageId } });
@@ -467,7 +474,7 @@ describe("参数化多边形", () => {
   });
 
   it("创建时创建边数夹紧，缩放顶点随包围盒走", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const poly = createNode("polygon", { width: 100, height: 100, sides: 40 });
     store.apply({ type: "node.create", params: { nodes: [poly], parentId: pageId } });
@@ -490,7 +497,7 @@ describe("参数化多边形", () => {
 
 describe("命令原子性与参数不可变", () => {
   it("批命令中途非法：整批不生效、不进撤销栈", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const before = JSON.stringify(store.doc);
     const rect = createNode("rect", { name: "R" });
@@ -508,7 +515,7 @@ describe("命令原子性与参数不可变", () => {
   });
 
   it("批命令全部合法时一步撤销整批", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const a = createNode("rect", { name: "A" });
     const b = createNode("rect", { name: "B" });
@@ -524,7 +531,7 @@ describe("命令原子性与参数不可变", () => {
   });
 
   it("node.create 不改写调用方传入的节点对象", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const path = createNode("path", {
       x: 5,
@@ -542,7 +549,7 @@ describe("命令原子性与参数不可变", () => {
 
 describe("组件：创建与实例物化", () => {
   function setup() {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const frame = createNode("frame", {
       name: "卡片",
@@ -671,7 +678,7 @@ describe("组件：创建与实例物化", () => {
 
 describe("组件：母版同步", () => {
   function setup() {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const master = createNode("frame", {
       name: "卡片",
@@ -773,7 +780,7 @@ describe("组件：母版同步", () => {
   });
 
   it("嵌套组件按依赖顺序级联同步，一次撤销全部回退", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
 
     const bMaster = createNode("frame", {
@@ -834,7 +841,7 @@ describe("组件：母版同步", () => {
 
 describe("组件：任意选区创建", () => {
   function blank() {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     return { store, pageId };
   }
@@ -947,7 +954,7 @@ describe("组件：任意选区创建", () => {
 
 describe("组件：实例覆盖", () => {
   function setup() {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const master = createNode("frame", {
       name: "卡片",
@@ -1078,7 +1085,7 @@ describe("组件：实例覆盖", () => {
 
 describe("组件：插槽", () => {
   function setup() {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const master = createNode("frame", {
       name: "卡片",
@@ -1242,7 +1249,7 @@ describe("组件：插槽", () => {
 
 describe("组件：属性", () => {
   function setup() {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const master = createNode("frame", {
       name: "卡片",
@@ -1391,7 +1398,7 @@ describe("组件：属性", () => {
   });
 
   it("实例替换属性切换嵌套实例，清除后回到默认组件", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
 
     const bMaster = createNode("frame", { name: "B", width: 100, height: 50 });
@@ -1447,7 +1454,7 @@ describe("组件：属性", () => {
 
 describe("组件：属性目标删除", () => {
   it("删除母版目标图层时属性与实例值一起清理，撤销恢复", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const master = createNode("frame", { name: "卡片", width: 200, height: 120 });
     store.apply({ type: "node.create", params: { nodes: [master], parentId: pageId } });
@@ -1491,7 +1498,7 @@ describe("组件：替换、脱离与删除", () => {
   }
 
   function setupFilled() {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const a = makeComponent(store, pageId, "A", 200, 100);
     const c = makeComponent(store, pageId, "C", 240, 120);
@@ -1549,7 +1556,7 @@ describe("组件：替换、脱离与删除", () => {
   });
 
   it("脱离实例：根转画板、插槽转容器、空槽删除、嵌套实例保留，可撤销", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
 
     // B 组件（嵌套实例用）
@@ -1607,7 +1614,7 @@ describe("组件：替换、脱离与删除", () => {
   });
 
   it("删除主组件时实例自动脱离；删除含组件的页面同理", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const master = createNode("frame", { name: "A", width: 100, height: 60 });
     store.apply({ type: "node.create", params: { nodes: [master], parentId: pageId } });
@@ -1652,7 +1659,7 @@ describe("组件：替换、脱离与删除", () => {
 
 describe("组件：嵌套实例替换与覆盖作用域", () => {
   function setupNested() {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
 
     const bMaster = createNode("frame", { name: "B", width: 100, height: 50 });
@@ -1766,7 +1773,7 @@ describe("组件：嵌套实例替换与覆盖作用域", () => {
 
 describe("组件：插槽插入与实例内容保护", () => {
   it("instance.create 进入未填充插槽时清默认、置 filled，并在母版同步后保留", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const master = createNode("frame", { name: "A", width: 200, height: 100 });
     store.apply({ type: "node.create", params: { nodes: [master], parentId: pageId } });
@@ -1802,7 +1809,7 @@ describe("组件：插槽插入与实例内容保护", () => {
   });
 
   it("实例内容不能创建组件；顶层实例本身可以整体包组件", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const master = createNode("frame", { name: "A", width: 200, height: 100 });
     store.apply({ type: "node.create", params: { nodes: [master], parentId: pageId } });
@@ -1830,7 +1837,7 @@ describe("组件：插槽插入与实例内容保护", () => {
 
 describe("自动布局：命令层写回", () => {
   function setup() {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const frame = createNode("frame", { name: "F", width: 300, height: 200 });
     store.apply({ type: "node.create", params: { nodes: [frame], parentId: pageId } });
@@ -1910,7 +1917,7 @@ describe("自动布局：命令层写回", () => {
 
 describe("拖拽换父级：命令层", () => {
   it("多根批量 reparent 到布局画板：索引连续、求解生效、一次撤销", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const target = createNode("frame", { name: "目标", width: 300, height: 200 });
     store.apply({ type: "node.create", params: { nodes: [target], parentId: pageId } });
@@ -1941,7 +1948,7 @@ describe("拖拽换父级：命令层", () => {
   });
 
   it("跨页面 reparent 保留世界坐标，撤销回到原父级", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const page1 = store.doc.rootIds[0];
     const page2 = createNode("page", { name: "页面 2", x: 2000, width: 800, height: 600 });
     store.apply({ type: "node.create", params: { nodes: [page2], parentId: null } });
@@ -1966,7 +1973,7 @@ describe("拖拽换父级：命令层", () => {
 
 describe("锁定：命令入口校验", () => {
   function setup() {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const frame = createNode("frame", { name: "锁定组", width: 200, height: 100 });
     store.apply({ type: "node.create", params: { nodes: [frame], parentId: pageId } });
@@ -2071,7 +2078,7 @@ describe("文本行盒", () => {
 
 describe("自动布局：实例覆盖", () => {
   it("实例改布局只影响自己，并写入覆盖表", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const master = createNode("frame", {
       name: "卡片",
@@ -2175,7 +2182,7 @@ describe("worldQuad：几何覆盖", () => {
 
 describe("applyDerived：派生几何白名单", () => {
   it("只允许写回几何，不进入撤销栈", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const rect = createNode("rect", { width: 100, height: 100 });
     store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
@@ -2204,7 +2211,7 @@ describe("节点效果", () => {
   };
 
   it("效果随样式整体替换，一次编辑一步撤销", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     const rect = createNode("rect", { parentId: pageId, style: { fill: { token: "color/primary" } } });
     store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
@@ -2234,7 +2241,7 @@ describe("节点效果", () => {
   });
 
   it("效果不改包围盒，也不出现在命中几何里", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     const rect = createNode("rect", { parentId: pageId, x: 40, y: 50, width: 120, height: 80 });
     store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
@@ -2247,7 +2254,7 @@ describe("节点效果", () => {
   });
 
   it("序列化往返保留效果，旧文档缺字段读入为无效果", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     const rect = createNode("rect", { parentId: pageId, style: { effects: [shadow] } });
     store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
@@ -2300,7 +2307,7 @@ describe("节点效果", () => {
 
 describe("子树绘制包围盒", () => {
   it("并入溢出子节点与旋转外接框", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     const frame = createNode("frame", { parentId: pageId, x: 100, y: 100, width: 200, height: 100, clip: false });
     const overflow = createNode("rect", {
@@ -2324,7 +2331,7 @@ describe("子树绘制包围盒", () => {
   });
 
   it("把效果外扩算进去", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     const withShadow = createNode("rect", {
       parentId: pageId,
@@ -2341,7 +2348,7 @@ describe("子树绘制包围盒", () => {
   });
 
   it("无子节点的节点退化为自身矩形（含效果外扩）", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     const rect = createNode("rect", {
       parentId: pageId,
@@ -2359,7 +2366,7 @@ describe("子树绘制包围盒", () => {
 
 describe("脏标记", () => {
   function withRect() {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     const rect = createNode("rect", { parentId: pageId, x: 0, y: 0, width: 10, height: 10 });
     store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
@@ -2379,7 +2386,7 @@ describe("脏标记", () => {
 
   it("打开文件（replace）后视为干净", () => {
     const { store } = withRect();
-    store.replace(createEmptyDoc());
+    store.replace(createDocWithPage());
     expect(store.isDirty).toBe(false);
   });
 
@@ -2400,7 +2407,7 @@ describe("事务", () => {
   }
 
   it("多条命令合并成一条撤销记录，撤销后全部消失", async () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const { pageId } = seed(store);
     const a = createNode("rect", { parentId: pageId, x: 0, y: 0, width: 10, height: 10 });
     const b = createNode("rect", { parentId: pageId, x: 20, y: 0, width: 10, height: 10 });
@@ -2418,7 +2425,7 @@ describe("事务", () => {
   });
 
   it("异常时回滚已执行的命令，且不留撤销记录", async () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const { rect } = seed(store);
     await expect(
       store.transact("会失败", () => {
@@ -2433,7 +2440,7 @@ describe("事务", () => {
   });
 
   it("嵌套事务并入最外层，只产生一条记录", async () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const { pageId } = seed(store);
     const a = createNode("rect", { parentId: pageId, x: 0, y: 0, width: 10, height: 10 });
     const b = createNode("rect", { parentId: pageId, x: 30, y: 0, width: 10, height: 10 });
@@ -2450,7 +2457,7 @@ describe("事务", () => {
   });
 
   it("提交后脏标记生效", async () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const { pageId } = seed(store);
     store.markSaved();
     const a = createNode("rect", { parentId: pageId, x: 0, y: 0, width: 10, height: 10 });
@@ -2463,7 +2470,7 @@ describe("事务", () => {
   });
 
   it("提交后再通知一次订阅者，脏标记才不会漏报", async () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const { pageId } = seed(store);
     store.markSaved();
     const seen: boolean[] = [];
@@ -2508,7 +2515,7 @@ describe("图片节点", () => {
   });
 
   it("2 → 3 迁移补齐原图尺寸与裁切", () => {
-    const state = createEmptyDoc();
+    const state = createDocWithPage();
     state.formatVersion = 2;
     const node = createNode("image", { width: 320, height: 200 });
     node.image = { assetId: "a2" } as never;
@@ -2524,7 +2531,7 @@ describe("图片节点", () => {
   });
 
   it("蒙版标记可随命令更新并撤销", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     const shape = createNode("rect", { parentId: pageId, x: 0, y: 0, width: 10, height: 10 });
     store.apply({ type: "node.create", params: { nodes: [shape], parentId: pageId } });
@@ -2567,7 +2574,7 @@ describe("蒙版配对（maskPlan）", () => {
 
 describe("事务中止", () => {
   it("abortTransact 回滚到事务前，且不留撤销记录", async () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     const rect = createNode("rect", { parentId: pageId, x: 0, y: 0, width: 10, height: 10 });
     store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
@@ -2598,7 +2605,7 @@ describe("复制子树（node.duplicate）", () => {
   }
 
   function setup() {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     return { store, pageId };
   }
@@ -2711,7 +2718,7 @@ describe("复制子树（node.duplicate）", () => {
 describe("层级顺序（node.reorder）", () => {
   /** 建三个同父级矩形，返回按 children 顺序的 id（从下往上） */
   function setup() {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     const ids = ["a", "b", "c"].map((name) => {
       const node = createNode("rect", { name, parentId: pageId });
@@ -2772,7 +2779,7 @@ describe("层级顺序（node.reorder）", () => {
 
 describe("对齐与分布（node.align / node.distribute）", () => {
   function setup() {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     return { store, pageId };
   }
@@ -2864,7 +2871,7 @@ describe("对齐与分布（node.align / node.distribute）", () => {
 
 describe("Token 删除", () => {
   it("新建 Token 的逆是删除：撤销不留孤儿条目，重做能回来", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     store.apply({ type: "token.define", params: { path: "color/brand", tokenType: "color", value: "#123456" } });
     expect(store.doc.tokens["color/brand"]).toEqual({ type: "color", value: "#123456" });
 
@@ -2878,7 +2885,7 @@ describe("Token 删除", () => {
 
 describe("分组 / 解组", () => {
   function setup() {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     return { store, pageId };
   }
@@ -2963,7 +2970,7 @@ describe("分组 / 解组", () => {
 
 describe("等比缩放（node.scale）", () => {
   function setup() {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     return { store, pageId };
   }
@@ -3057,7 +3064,7 @@ describe("等比缩放（node.scale）", () => {
 
 describe("旋转（node.rotate）", () => {
   function setup() {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     return { store, pageId };
   }
@@ -3103,7 +3110,7 @@ describe("旋转（node.rotate）", () => {
 
 describe("锁定节点不参与排列/缩放/旋转", () => {
   function setup() {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     return { store, pageId };
   }
@@ -3156,7 +3163,7 @@ describe("锁定节点不参与排列/缩放/旋转", () => {
 
 describe("分组跨页", () => {
   it("不同页面的节点不能分组", () => {
-    const store = new DocStore(createEmptyDoc());
+    const store = new DocStore(createDocWithPage());
     const first = firstPageId(store.doc)!;
     const second = createNode("page", { name: "第二页" });
     store.apply({ type: "node.create", params: { nodes: [second], parentId: null } });

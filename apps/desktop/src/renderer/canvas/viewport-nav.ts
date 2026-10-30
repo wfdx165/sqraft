@@ -7,6 +7,7 @@ import { screenToWorld, type Viewport } from "@sqraft/render";
 import { docStore, ui } from "../store";
 import { pageAt } from "./hit";
 import type { PenState } from "./pen";
+import { pageFitViewport } from "./viewport-fit";
 
 export const PULSE_MS = 620;
 export const FLY_MS = 420;
@@ -21,6 +22,16 @@ export interface ViewportNavDeps {
 export function createViewportNav(deps: ViewportNavDeps) {
   const { vp, pen, markDirty } = deps;
   let didInitialFit = false;
+  /**
+   * 当前视角是否还停在"适配结果"上（窗口尺寸变化时据此决定要不要重新适配）。
+   * 任何手动缩放/平移/飞行定位都会把它置回 false。
+   */
+  let fitted = false;
+
+  /** 手动改了视角：别再让窗口 resize 抢回去。 */
+  function invalidateFit(): void {
+    fitted = false;
+  }
 
   const nav = {
     pulse: null as { id: NodeId; start: number } | null,
@@ -28,6 +39,7 @@ export function createViewportNav(deps: ViewportNavDeps) {
   };
 
   function flyTo(worldX: number, worldY: number, zoom: number): void {
+    fitted = false;
     nav.flight = {
       from: { x: vp.x, y: vp.y, zoom: vp.zoom },
       to: { x: worldX - vp.width / (2 * zoom), y: worldY - vp.height / (2 * zoom), zoom },
@@ -79,6 +91,38 @@ export function createViewportNav(deps: ViewportNavDeps) {
     return page;
   }
 
+  /**
+   * 把某一页铺满视口（padding 80，与缩放菜单「适配活动页」一致）。
+   * 只改 UI 视口状态，不进文档、不进撤销。
+   */
+  function fitPage(page: DocNode, padding = 80): void {
+    const target = pageFitViewport(page, vp, padding);
+    vp.x = target.x;
+    vp.y = target.y;
+    vp.zoom = target.zoom;
+    fitted = true;
+    markDirty();
+  }
+
+  /**
+   * 切页：活动页 + 左栏展开 + 适配该页。
+   * 左栏点页面行、画布上点另一页、拖动模式单击页面都走这里，
+   * 保证「切页」在两种模式下只有一个含义。
+   */
+  function activatePage(id: NodeId): void {
+    const page = docStore.doc.nodes[id];
+    if (!page || page.type !== "page") return;
+    deps.commitEditors();
+    ui.activePageId = id;
+    ui.expandedPageId = id;
+    ui.selection = [];
+    ui.instanceContext = [];
+    ui.cropNodeId = null;
+    pen.pathEdit = null;
+    pen.vectorDrag = null;
+    fitPage(page);
+  }
+
   function setActivePage(id: NodeId, focus = true): void {
     if (ui.activePageId !== id) {
       ui.activePageId = id;
@@ -100,12 +144,15 @@ export function createViewportNav(deps: ViewportNavDeps) {
     const minY = Math.min(...pages.map((p) => p.y));
     const maxX = Math.max(...pages.map((p) => p.x + p.width));
     const maxY = Math.max(...pages.map((p) => p.y + p.height));
-    const w = Math.max(1, maxX - minX);
-    const h = Math.max(1, maxY - minY);
-    const zoom = Math.min(Math.max((vp.width - padding * 2) / w, 0.02), Math.max((vp.height - padding * 2) / h, 0.02), 1);
-    vp.zoom = zoom;
-    vp.x = minX + w / 2 - vp.width / (2 * zoom);
-    vp.y = minY + h / 2 - vp.height / (2 * zoom);
+    const target = pageFitViewport(
+      { x: minX, y: minY, width: Math.max(1, maxX - minX), height: Math.max(1, maxY - minY) },
+      vp,
+      padding,
+    );
+    vp.x = target.x;
+    vp.y = target.y;
+    vp.zoom = target.zoom;
+    fitted = true;
     markDirty();
   }
 
@@ -114,15 +161,7 @@ export function createViewportNav(deps: ViewportNavDeps) {
     deps.commitEditors();
     const page = ensureActivePage();
     if (!page) return;
-    const zoom = Math.min(
-      Math.max((vp.width - padding * 2) / page.width, 0.02),
-      Math.max((vp.height - padding * 2) / page.height, 0.02),
-      1,
-    );
-    vp.zoom = zoom;
-    vp.x = page.x + page.width / 2 - vp.width / (2 * zoom);
-    vp.y = page.y + page.height / 2 - vp.height / (2 * zoom);
-    markDirty();
+    fitPage(page, padding);
   }
 
   /** 模式相关的"适配"：编辑模式 = 活动页，拖动模式 = 全部。 */
@@ -169,7 +208,11 @@ export function createViewportNav(deps: ViewportNavDeps) {
     setActivePage,
     fitAll,
     fitActivePage,
+    fitPage,
+    activatePage,
     fitView,
     visibleRatio,
+    isFitted: () => fitted,
+    invalidateFit,
   };
 }

@@ -111,6 +111,14 @@ const {
   supportsLayout,
   supportsSizing,
   readonly,
+  importedFamilies,
+  weightOptions,
+  fontInput,
+  importFont,
+  backgroundInput,
+  setBackgroundImage,
+  setBackgroundFit,
+  clearBackgroundImage,
   selectionBounds,
   setBoundsNumber,
   showAlign,
@@ -390,12 +398,19 @@ const {
         </div>
         <div class="grid two">
           <label>字体</label>
-          <select :value="node.style.fontFamily ?? FONT_STACKS[0].value" :disabled="readonly" @change="setTextStyle('fontFamily', $event)">
-            <option v-for="f in FONT_STACKS" :key="f.value" :value="f.value">{{ f.label }}</option>
-          </select>
+          <div class="field-with-select">
+            <select :value="node.style.fontFamily ?? FONT_STACKS[0].value" :disabled="readonly" @change="setTextStyle('fontFamily', $event)">
+              <option v-for="f in FONT_STACKS" :key="f.value" :value="f.value">{{ f.label }}</option>
+              <optgroup v-if="importedFamilies.length" label="已导入">
+                <option v-for="f in importedFamilies" :key="f" :value="`'${f}', sans-serif`">{{ f }}</option>
+              </optgroup>
+            </select>
+            <button class="mini" :disabled="readonly" title="导入字体文件（ttf/otf/woff/woff2）" @click="fontInput?.click()">导入…</button>
+          </div>
+          <input ref="fontInput" type="file" accept=".ttf,.otf,.woff,.woff2" class="hidden-input" @change="importFont" />
           <label>字重</label>
           <select :value="String(node.style.fontWeight ?? 400)" :disabled="readonly" @change="setTextStyle('fontWeight', $event, Number)">
-            <option v-for="w in [100, 200, 300, 400, 500, 600, 700, 800, 900]" :key="w" :value="String(w)">{{ w }}</option>
+            <option v-for="w in weightOptions" :key="w" :value="String(w)">{{ w }}</option>
           </select>
           <label>字号</label>
           <input class="mono" type="number" min="1" :value="fmt(node.style.fontSize ?? 20)" :disabled="readonly" @change="setTextStyle('fontSize', $event, Number)" />
@@ -497,6 +512,32 @@ const {
           <input type="color" class="color-input" :value="colorOf(node.style.fill)" :disabled="readonly" @input="setCustomPaint('fill', $event)" />
           <input class="mono hex" :value="node.style.fill.value ?? ''" :disabled="readonly" @change="setCustomPaint('fill', $event)" />
         </div>
+        <!-- 页面背景图：盖在背景色之上 -->
+        <template v-if="node.type === 'page'">
+          <div class="row">
+            <label>背景图</label>
+            <div class="color-control">
+              <button class="mini" :disabled="readonly" @click="backgroundInput?.click()">
+                {{ node.backgroundImage ? "更换…" : "选择…" }}
+              </button>
+              <select
+                v-if="node.backgroundImage"
+                :value="node.backgroundImage.fit"
+                :disabled="readonly"
+                @change="setBackgroundFit"
+              >
+                <option value="cover">铺满</option>
+                <option value="contain">完整</option>
+                <option value="tile">平铺</option>
+              </select>
+              <button v-if="node.backgroundImage" class="mini" :disabled="readonly" @click="clearBackgroundImage">
+                清除
+              </button>
+            </div>
+          </div>
+          <input ref="backgroundInput" type="file" accept="image/*" class="hidden-input" @change="setBackgroundImage" />
+        </template>
+
         <div v-if="supportsStroke" class="row">
           <label>描边</label>
           <div class="color-control">
@@ -919,6 +960,10 @@ header {
 .align-row .icon-btn:disabled {
   opacity: 0.35;
   cursor: default;
+}
+
+.hidden-input {
+  display: none;
 }
 
 .hint {

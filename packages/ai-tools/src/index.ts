@@ -5,6 +5,8 @@
 
 import type { Command, DocNode, DocStore, Effect, NodeId, NodeStyle, VectorAnchor } from "@sqraft/core";
 import {
+  DEFAULT_PAGE_HEIGHT,
+  DEFAULT_PAGE_WIDTH,
   clampSides,
   createLayoutSpec,
   createNode,
@@ -19,6 +21,7 @@ import {
   nextComponentName,
   validateVector,
   walkSubtree,
+  worldRect,
   type CornerRadius,
   type LayoutSpec,
   type Padding,
@@ -27,8 +30,10 @@ import {
 
 /** create_node / update_node 共用的排版与外观字段。 */
 const STYLE_SCHEMA: Record<string, unknown> = {
-  fillToken: { type: "string", description: "填充色的 Token 名，如 color/primary" },
-  strokeToken: { type: "string", description: "描边色的 Token 名；开放路径默认 color/text" },
+  fillToken: { type: "string", description: "填充色的 Token 名，如 color/primary；与 fill 二选一，Token 优先" },
+  fill: { type: "string", description: "填充色的字面量（如 #3366ff）；没有设计系统时直接给色值" },
+  strokeToken: { type: "string", description: "描边色的 Token 名；与 stroke 二选一，Token 优先" },
+  stroke: { type: "string", description: "描边色的字面量（如 #1a1a1a）" },
   strokeWidth: { type: "number", description: "描边线宽" },
   cornerRadius: {
     description: "圆角：数字表示四角统一；也可传 { topLeft, topRight, bottomRight, bottomLeft }",
@@ -321,6 +326,17 @@ export const tools: ToolDefinition[] = [
           additionalProperties: false,
         },
         mask: { type: "boolean", description: "true = 作为蒙版，遮罩同父级上方相邻兄弟" },
+        backgroundImage: {
+          type: "object",
+          description: "页面背景图（仅 page）：给 data + mimeType，或直接给已有 assetId；fit 缺省 cover",
+          properties: {
+            data: { type: "string", description: "base64 图片字节（≤5MB）" },
+            mimeType: { type: "string" },
+            assetId: { type: "string", description: "已存在的图片资源 id" },
+            fit: { type: "string", enum: ["cover", "contain", "tile"] },
+          },
+          additionalProperties: false,
+        },
         points: {
           type: "array",
           minItems: 2,
@@ -415,6 +431,47 @@ export const tools: ToolDefinition[] = [
     },
   },
   {
+    name: "import_font",
+    description:
+      "导入一份字体文件（字节内联，不收路径）：支持 ttf/otf/woff/woff2，单文件 ≤5MB。返回字族、字重与风格，之后用 fontFamily 引用。",
+    input_schema: {
+      type: "object",
+      properties: {
+        fileName: { type: "string", description: "文件名（用于无法读取元数据时兜底命名）" },
+        dataBase64: { type: "string", description: "字体文件的 base64" },
+      },
+      required: ["fileName", "dataBase64"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "inspect_layout",
+    description:
+      "读取页面或指定节点的布局数据：世界坐标几何、是否绝对定位、自动布局参数（方向/gap/padding/wrap）与 hug-fill 行为。只读。",
+    input_schema: {
+      type: "object",
+      properties: {
+        pageId: { type: "string", description: "页面 id；省略时用当前活动页" },
+        nodeIds: { type: "array", items: { type: "string" }, description: "只取这些节点（含子树）；省略则整页" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "export_png",
+    description:
+      "按倍率把页面或一组节点渲染成 PNG data URL（不含选中框/参考线等 UI 叠加层）。有 nodeIds 时导出选区（透明背景），否则导出整页（带页面背景）。",
+    input_schema: {
+      type: "object",
+      properties: {
+        pageId: { type: "string", description: "页面 id；省略时用当前活动页" },
+        nodeIds: { type: "array", items: { type: "string" }, description: "要导出的节点（透明背景）" },
+        scale: { type: "number", description: "倍率 1–4，默认 2" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
     name: "screenshot",
     description:
       "截取当前画布视口为 PNG（data URL），用于自检生成结果。只包含设计稿本身（不含网格、选中框、参考线）。可用 region 只截文档坐标下的某个范围，例如某个画板。",
@@ -471,6 +528,10 @@ export interface DocumentHost {
   addImage?(data: string, mimeType: string): Promise<{ assetId: string; width: number; height: number }>;
   /** 返回是否真的打开了文件；用户取消返回 false。 */
   openDocument(): Promise<boolean>;
+  /** 按倍率渲染 PNG data URL（由宿主注入，工具层不碰 DOM；允许先解码图片再返回） */
+  exportPng?(request: { pageId: NodeId; nodeIds?: NodeId[]; scale: number }): string | Promise<string>;
+  /** 导入字体（字节内联，不收路径），返回字族/字重/风格 */
+  importFont?(fileName: string, dataBase64: string): Promise<{ family: string; weight: number; style: string } | null>;
 }
 
 function serializeSubtree(store: DocStore, id: NodeId): string {
@@ -535,15 +596,18 @@ function readPoints(value: unknown): VectorAnchor[] | null {
 }
 
 function applyStyleTokens(style: NodeStyle, args: Record<string, unknown>): void {
+  // Token 优先；没有 Token 时才用字面量（设计系统由用户自己定，不强制）
   if (args.fillToken !== undefined) style.fill = { token: String(args.fillToken) };
+  else if (typeof args.fill === "string") style.fill = { value: args.fill };
   if (args.strokeToken !== undefined) style.stroke = { token: String(args.strokeToken) };
+  else if (typeof args.stroke === "string") style.stroke = { value: args.stroke };
   if (args.strokeWidth !== undefined) style.strokeWidth = Math.max(0, Number(args.strokeWidth));
 }
 
 export function assertToken(store: DocStore, token: string | undefined, field: string): void {
   if (token === undefined) return;
   if (!store.doc.tokens[token]) {
-    throw new Error(`${field} 引用了不存在的 Token "${token}"；调用 get_tokens 查看可用 Token。禁止使用字面量色值。`);
+    throw new Error(`${field} 引用了不存在的 Token "${token}"；调用 get_tokens 查看可用 Token，或改用 fill / stroke 传字面量色值。`);
   }
 }
 
@@ -602,7 +666,7 @@ function applyStyleArgs(style: NodeStyle, args: Record<string, unknown>): NodeSt
   return next;
 }
 
-/** 效果入参 → 模型效果：颜色只接受 Token 引用（与填充同一纪律）。 */
+/** 效果入参 → 模型效果：颜色可以引用 Token，也可以给字面量。 */
 function effectsFrom(value: unknown): Effect[] {
   if (!Array.isArray(value)) throw new Error("effects 必须是数组");
   return value.map((raw) => {
@@ -611,7 +675,10 @@ function effectsFrom(value: unknown): Effect[] {
     const type = String(item.type);
     if (type === "drop-shadow" || type === "inner-shadow") {
       const token = typeof item.fillToken === "string" ? item.fillToken : "";
-      if (!token) throw new Error("阴影类效果的 fillToken 必填；禁止使用字面量色值，调用 get_tokens 查看可用 Token。");
+      const literal = typeof item.color === "string" ? item.color : "";
+      if (!token && !literal) {
+        throw new Error("阴影类效果需要 fillToken 或 color（字面量色值）之一。");
+      }
       return {
         type,
         visible: item.visible === undefined ? true : Boolean(item.visible),
@@ -619,7 +686,7 @@ function effectsFrom(value: unknown): Effect[] {
         y: Number(item.y ?? 0),
         blur: Math.max(0, Number(item.blur ?? 0)),
         spread: Number(item.spread ?? 0),
-        color: { token },
+        color: token ? { token } : { value: literal },
       } as Effect;
     }
     if (type === "layer-blur" || type === "backdrop-blur") {
@@ -714,7 +781,19 @@ export function makeExecutor(
         assertToken(store, args.fillToken as string | undefined, "fillToken");
         assertToken(store, args.strokeToken as string | undefined, "strokeToken");
         if (Array.isArray(args.effects)) assertEffectTokens(store, effectsFrom(args.effects));
-        const parentId = (args.parentId as NodeId | undefined) ?? getActivePageId?.() ?? firstPageId(store.doc);
+        // 空文档没有页面：先建一页再画（与人工"新建页面"同一套命令，仍是一次撤销）
+        let parentId = (args.parentId as NodeId | undefined) ?? getActivePageId?.() ?? firstPageId(store.doc);
+        if (!parentId && args.parentId === undefined) {
+          const page = createNode("page", {
+            name: "页面 1",
+            x: 0,
+            y: 0,
+            width: DEFAULT_PAGE_WIDTH,
+            height: DEFAULT_PAGE_HEIGHT,
+          });
+          store.apply({ type: "node.create", params: { nodes: [page], parentId: null } }, "ai:page");
+          parentId = page.id;
+        }
         if (!parentId || !store.doc.nodes[parentId]) throw new Error("parentId 不存在");
 
         let name = args.name as string | undefined;
@@ -762,14 +841,14 @@ export function makeExecutor(
         if (isPath) {
           // 与 GUI 一致：未显式给颜色时，闭合默认填充、开放默认描边
           if (!style.fill && !style.stroke) {
-            if (closed) style.fill = { token: "color/primary" };
-            else style.stroke = { token: "color/text" };
+            if (closed) style.fill = { value: "#3366ff" };
+            else style.stroke = { value: "#1a1a1a" };
           }
           if (style.stroke && style.strokeWidth === undefined) style.strokeWidth = 2;
         }
-        if (isPolygon && !style.fill && !style.stroke) style.fill = { token: "color/primary" };
+        if (isPolygon && !style.fill && !style.stroke) style.fill = { value: "#3366ff" };
         // 画板与 GUI 工具一致：默认白底
-        if (kind === "frame" && !style.fill && !style.stroke) style.fill = { token: "color/surface" };
+        if (kind === "frame" && !style.fill && !style.stroke) style.fill = { value: "#ffffff" };
 
         let imageRef: DocNode["image"];
         if (isImage) {
@@ -819,7 +898,19 @@ export function makeExecutor(
         const componentId = String(args.componentId);
         const master = store.doc.nodes[componentId];
         if (!master || master.type !== "component") throw new Error(`组件 ${componentId} 不存在`);
-        const parentId = (args.parentId as NodeId | undefined) ?? getActivePageId?.() ?? firstPageId(store.doc);
+        // 空文档没有页面：先建一页再画（与人工"新建页面"同一套命令，仍是一次撤销）
+        let parentId = (args.parentId as NodeId | undefined) ?? getActivePageId?.() ?? firstPageId(store.doc);
+        if (!parentId && args.parentId === undefined) {
+          const page = createNode("page", {
+            name: "页面 1",
+            x: 0,
+            y: 0,
+            width: DEFAULT_PAGE_WIDTH,
+            height: DEFAULT_PAGE_HEIGHT,
+          });
+          store.apply({ type: "node.create", params: { nodes: [page], parentId: null } }, "ai:page");
+          parentId = page.id;
+        }
         if (!parentId || !store.doc.nodes[parentId]) throw new Error("parentId 不存在");
         const nodeId = newId();
         store.apply(
@@ -905,6 +996,33 @@ export function makeExecutor(
           throw new Error("layout 仅适用于 frame / component / instance");
         }
         const patch: Partial<DocNode> = { ...applyNodeArgs(args) };
+
+        if (args.backgroundImage !== undefined) {
+          if (node.type !== "page") throw new Error("backgroundImage 仅适用于页面");
+          const spec = args.backgroundImage as
+            | { data?: string; mimeType?: string; assetId?: string; fit?: "cover" | "contain" | "tile" }
+            | null;
+          if (spec === null) {
+            patch.backgroundImage = undefined;
+          } else if (spec?.assetId) {
+            // 尺寸由解码后的位图决定，不在模型里写伪值
+            patch.backgroundImage = { assetId: spec.assetId, fit: spec.fit ?? "cover" };
+          } else if (spec?.data) {
+            if (!documentHost?.addImage) throw new Error("当前宿主不支持图片");
+            if (Math.ceil((spec.data.length * 3) / 4) > 5 * 1024 * 1024) {
+              throw new Error("背景图超过 5MB 上限");
+            }
+            const asset = await documentHost.addImage(spec.data, String(spec.mimeType ?? "image/png"));
+            patch.backgroundImage = {
+              assetId: asset.assetId,
+              naturalWidth: asset.width,
+              naturalHeight: asset.height,
+              fit: spec.fit ?? "cover",
+            };
+          } else {
+            throw new Error("backgroundImage 需要 data 或 assetId");
+          }
+        }
 
         const style = applyStyleArgs(node.style, args);
         if (JSON.stringify(style) !== JSON.stringify(node.style)) patch.style = style;
@@ -1014,6 +1132,73 @@ export function makeExecutor(
         });
         store.apply(plan.command, "ai:duplicate");
         return JSON.stringify({ ok: true, nodeIds: plan.rootIds });
+      }
+      case "import_font": {
+        if (!documentHost?.importFont) throw new Error("当前宿主不支持导入字体");
+        const fileName = String(args.fileName ?? "font");
+        const data = String(args.dataBase64 ?? "");
+        if (!data) throw new Error("import_font 需要 dataBase64");
+        if (Math.ceil((data.length * 3) / 4) > 5 * 1024 * 1024) throw new Error("字体超过 5MB 上限");
+        const meta = await documentHost.importFont(fileName, data);
+        if (!meta) throw new Error("字体导入失败：格式不支持或已损坏");
+        return JSON.stringify({ ok: true, ...meta });
+      }
+      case "inspect_layout": {
+        const pageId = (args.pageId as NodeId | undefined) ?? getActivePageId?.() ?? firstPageId(store.doc);
+        const page = pageId ? store.doc.nodes[pageId] : null;
+        if (!page || page.type !== "page") throw new Error("pageId 不存在或不是页面");
+        // nodeIds 是"根"：每棵都含整棵子树。被另一个 id 包含的后代去掉，避免重复输出。
+        const only = Array.isArray(args.nodeIds) ? new Set(args.nodeIds as NodeId[]) : null;
+        let roots: NodeId[];
+        if (only) {
+          roots = [...only].filter((id) => {
+            if (!store.doc.nodes[id]) return false;
+            let cur = store.doc.nodes[id];
+            while (cur?.parentId) {
+              if (only.has(cur.parentId)) return false;
+              cur = store.doc.nodes[cur.parentId];
+            }
+            return true;
+          });
+        } else {
+          roots = [...page.children];
+        }
+        const rows: unknown[] = [];
+        const emitted = new Set<NodeId>();
+        const visit = (id: NodeId, depth: number) => {
+          const node = store.doc.nodes[id];
+          if (!node || emitted.has(id)) return;
+          emitted.add(id);
+          const box = worldRect(store.doc, id);
+          rows.push({
+            id: node.id,
+            name: node.name,
+            type: node.type,
+            depth,
+            x: Math.round((box?.x ?? 0) * 100) / 100,
+            y: Math.round((box?.y ?? 0) * 100) / 100,
+            width: node.width,
+            height: node.height,
+            absolute: Boolean(node.layoutAbsolute),
+            sizingW: node.layoutSizingW,
+            sizingH: node.layoutSizingH,
+            layout: node.layout ?? null,
+          });
+          for (const childId of node.children) visit(childId, depth + 1);
+        };
+        for (const rootId of roots) visit(rootId, 0);
+        return JSON.stringify({ pageId: page.id, nodes: rows });
+      }
+      case "export_png": {
+        if (!documentHost?.exportPng) throw new Error("当前宿主不支持导出 PNG");
+        const pageId = (args.pageId as NodeId | undefined) ?? getActivePageId?.() ?? firstPageId(store.doc);
+        if (!pageId || !store.doc.nodes[pageId]) throw new Error("pageId 不存在");
+        const nodeIds = Array.isArray(args.nodeIds) ? (args.nodeIds as NodeId[]) : undefined;
+        const scale = typeof args.scale === "number" ? args.scale : 2;
+        if (!(scale > 0 && scale <= 4)) throw new Error("scale 需要在 (0, 4] 之间");
+        const image = await documentHost.exportPng({ pageId, nodeIds, scale });
+        if (!image) throw new Error("导出失败：没有可导出的内容");
+        return JSON.stringify({ ok: true, image });
       }
       case "screenshot": {
         const region = args.region as ScreenshotRegion | undefined;

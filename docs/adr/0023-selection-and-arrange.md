@@ -12,9 +12,10 @@
 
 ## 决策
 
-### 1. 剪贴板走系统剪贴板的自定义 MIME
+### 1. 剪贴板走系统剪贴板的平台原始类型
 
-- MIME 是 `application/x-sqraft+nodes`，载荷是版本化 JSON：根节点顺序、扁平节点表、被引用到的 Token 定义、被引用到的图片字节（base64 内联）。
+- 类型是反向域名 UTI `com.sqraft.nodes`，写系统剪贴板时包成 Electron 的平台原始格式 `electron application/osclipboard;format="com.sqraft.nodes"`；载荷是版本化 JSON：根节点顺序、扁平节点表、被引用到的 Token 定义、被引用到的图片字节（base64 内联）。
+- 不用 W3C 风格的自定义 MIME（如 `application/x-sqraft+nodes`）：Electron 45 下 macOS 把它映射成 `dyn.ah62d4rv4…` 动态 UTI，`clipboard.has()` 恒为 false、`read()` 也取不到内容，粘贴会静默失败（2026-10 实测）。
 - `⌘V` 的优先级是 **sqraft 节点 > 图片 > 文本**；载荷版本不认识时提示并停止后续尝试。
 - 跨文档降级：图片按内容哈希注册复用；缺失的 Token 连定义一起带过去、同名冲突保留目标值；母版不在目标文档的实例按脱离语义降级为画板（插槽转画板、清 `mainId`/`overrides`/`propValues`）。
 - 复制主组件得到新的主组件，`propertyDefs.targetMainId` 与 `componentId` 一起重映射；复制实例仍指向同一母版。

@@ -1,8 +1,9 @@
 /**
  * 节点剪贴板：`⌘C` / `⌘X` / `⌘V` 的 sqraft 载荷。
  *
- * 走系统剪贴板的自定义 MIME（`application/x-sqraft+nodes`），所以同文档、跨页、
- * 跨文档都能粘；图片以 base64 内联，`assetId` 是内容哈希，粘过去能直接复用。
+ * 走系统剪贴板的平台原始类型（主进程包装成 `electron application/osclipboard;format="com.sqraft.nodes"`，
+ * 见 `main/mcp/index.ts`），所以同文档、跨页、跨文档都能粘；图片以 base64 内联，
+ * `assetId` 是内容哈希，粘过去能直接复用。
  *
  * 与图片/文本的优先级由调用方决定：sqraft 节点 > 图片 > 文本。
  */
@@ -21,7 +22,6 @@ import { MAX_ASSET_BYTES, allAssets, hasAsset, putAsset } from "../assets";
 import { docStore, select, ui } from "../store";
 import { isLocked } from "./hit";
 
-export const NODES_MIME = "application/x-sqraft+nodes";
 const PAYLOAD_VERSION = 1;
 
 export interface ClipboardPayload {
@@ -59,7 +59,13 @@ export async function copySelectionToClipboard(): Promise<boolean> {
     tokens: collectTokens(nodes),
     assets: collectAssets(nodes),
   };
-  await window.sqraft.app.writeClipboardNodes(JSON.stringify(payload));
+  try {
+    await window.sqraft.app.writeClipboardNodes(JSON.stringify(payload));
+  } catch (error) {
+    // 写系统剪贴板失败（权限、超大载荷）不能装作复制成功：用户下一步粘贴会没反应
+    await window.sqraft.dialog.error(`复制到剪贴板失败：${String(error)}`);
+    return false;
+  }
   return true;
 }
 
@@ -115,7 +121,9 @@ export async function pasteNodesFromClipboard(deps: PasteDeps): Promise<boolean>
   try {
     payload = JSON.parse(raw) as ClipboardPayload;
   } catch {
-    return false;
+    // 类型认出来了却读不懂：说清楚，别让它悄悄退化成"粘图片/文本"再无声失败
+    await window.sqraft.dialog.error("剪贴板里的图层数据无法解析，粘贴已取消。");
+    return true;
   }
   if (!isNodePayload(payload)) {
     // 载荷带着我们的 MIME 却读不懂：多半来自更新版本的 Sqraft，说清楚比静默强

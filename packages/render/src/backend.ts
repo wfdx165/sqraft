@@ -68,6 +68,8 @@ export interface RenderBackend {
   drawImage(node: DocNode, image: ResolvedImage, crop: Rect, radius?: CornerRadius): void;
   /** 图片缺失占位（资源没随文件带过来时） */
   drawImagePlaceholder(node: DocNode, radius?: CornerRadius): void;
+  /** 把整张图按 fit 画进给定矩形（页面背景图用），超出矩形的部分裁掉 */
+  drawImageInRect(image: ResolvedImage, rect: Rect, fit: "cover" | "contain" | "tile"): void;
   /**
    * 蒙版层：其后的绘制先进入离屏，`popMaskLayer` 时用回调画出的形状 alpha
    * 裁掉多余部分再合成回来。push/pop 必须配对。

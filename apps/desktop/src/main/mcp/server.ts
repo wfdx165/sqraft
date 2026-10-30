@@ -5,13 +5,15 @@
 import { rm } from "node:fs/promises";
 import { createServer, type Socket } from "node:net";
 import { createInterface } from "node:readline";
+import type { McpClientInfo } from "../../shared/ipc";
 import { MCP_PROTOCOL_VERSION } from "./endpoint";
 import { formatClientIdentity, logError, logInfo, logWarn, type McpClientIdentity } from "./log";
 import { ClientGoneError, QueueTimeoutError, SerialQueue } from "./queue";
 import { handleRpc, type JsonRpcRequest, type McpToolHost } from "./session";
 
 export interface McpRuntime {
-  clientCount(): number;
+  /** 当前连接（只读快照，供状态栏与列表展示） */
+  clients(): McpClientInfo[];
   broadcastShutdown(): void;
   close(): Promise<void>;
 }
@@ -21,11 +23,14 @@ export async function startMcpServer(options: {
   host: McpToolHost;
   appVersion: string;
   protocol?: number;
-  onClientChange?: (count: number) => void;
+  onClientChange?: (clients: McpClientInfo[]) => void;
 }): Promise<McpRuntime> {
   const protocol = options.protocol ?? MCP_PROTOCOL_VERSION;
   const queue = new SerialQueue();
-  const clients = new Set<Socket>();
+  /** 心跳：30s 一次 ping，10s 没有 pong 就断开（只对声明支持心跳的客户端生效） */
+  const HEARTBEAT_MS = 30_000;
+  const PONG_TIMEOUT_MS = 10_000;
+  const clients = new Map<Socket, McpClientInfo>();
   /** 连接序号：日志里区分"同时连着的几个 agent"，重启归零。 */
   let sequence = 0;
 
@@ -36,10 +41,15 @@ export async function startMcpServer(options: {
     const clientId = `c${++sequence}`;
     // 拿到 hello 里的身份后补成 `c1 claude(8123)`；旧 CLI 不发就保持 `c1`
     let tag = clientId;
-    clients.add(socket);
+    const info: McpClientInfo = { id: clientId, label: tag, connectedAt: Date.now() };
+    clients.set(socket, info);
     logInfo(tag, "connect", { clients: clients.size });
-    options.onClientChange?.(clients.size);
+    options.onClientChange?.([...clients.values()]);
     let greeted = false;
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
+    /** 上一次 ping 是否还没收到 pong（超时按「未回」判断，而不是「距上次 pong 的时间」） */
+    let awaitingPong = false;
+    let pongTimer: ReturnType<typeof setTimeout> | null = null;
     const lines = createInterface({ input: socket });
     const send = (value: unknown): void => {
       if (!socket.destroyed) socket.write(`${JSON.stringify(value)}\n`);
@@ -70,14 +80,41 @@ export async function startMcpServer(options: {
           return;
         }
         greeted = true;
+        // 新版 CLI 在 hello 里声明支持心跳；旧 CLI 不声明，不踢
+        if ((hello as { heartbeat?: boolean }).heartbeat === true) {
+          heartbeat = setInterval(() => {
+            if (socket.destroyed) return;
+            awaitingPong = true;
+            send({ type: "ping" });
+            // 每个 ping 单独计时：下一个 tick 之前没回 pong 才断开
+            pongTimer = setTimeout(() => {
+              if (!awaitingPong) return;
+              logWarn(tag, "heartbeat timeout", { clients: clients.size });
+              socket.destroy();
+            }, PONG_TIMEOUT_MS);
+          }, HEARTBEAT_MS);
+        }
         const identity = formatClientIdentity(hello);
         if (identity) tag = `${clientId} ${identity}`;
+        info.label = tag;
         send({ type: "hello-ok", protocol, appVersion: options.appVersion });
         logInfo(tag, "hello ok", { protocol, app: options.appVersion });
         return;
       }
 
+      // 心跳回应：不是 RPC 请求，别丢进队列
+      if ((message as { type?: string }).type === "pong") {
+        awaitingPong = false;
+        if (pongTimer) {
+          clearTimeout(pongTimer);
+          pongTimer = null;
+        }
+        return;
+      }
+
       const request = message as JsonRpcRequest;
+      info.lastTool = request.method;
+      info.lastToolAt = Date.now();
       queue
         .enqueue(
           () => handleRpc(request, options.host, { version: options.appVersion, tag }),
@@ -100,10 +137,14 @@ export async function startMcpServer(options: {
     });
 
     const drop = (): void => {
+      if (heartbeat) clearInterval(heartbeat);
+      if (pongTimer) clearTimeout(pongTimer);
+      heartbeat = null;
+      pongTimer = null;
       if (!clients.has(socket)) return;
       clients.delete(socket);
       logInfo(tag, "disconnect", { clients: clients.size });
-      options.onClientChange?.(clients.size);
+      options.onClientChange?.([...clients.values()]);
     };
     socket.on("error", drop);
     socket.on("close", () => {
@@ -119,15 +160,15 @@ export async function startMcpServer(options: {
   logInfo(null, "server listening", { endpoint: options.endpoint, protocol });
 
   return {
-    clientCount: () => clients.size,
+    clients: () => [...clients.values()],
     broadcastShutdown: () => {
       logInfo(null, "broadcast shutdown", { clients: clients.size });
-      for (const client of clients) {
-        if (!client.destroyed) socketSend(client, { jsonrpc: "2.0", method: "sqraft/shutdown" });
+      for (const socket of clients.keys()) {
+        if (!socket.destroyed) socketSend(socket, { jsonrpc: "2.0", method: "sqraft/shutdown" });
       }
     },
     close: async () => {
-      for (const client of clients) client.destroy();
+      for (const client of clients.keys()) client.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };

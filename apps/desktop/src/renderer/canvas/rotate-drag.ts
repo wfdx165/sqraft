@@ -6,6 +6,9 @@ import { docStore, ui } from "../store";
 
 const SNAP_DEG = 15;
 
+/** 四角外侧旋转热区的厚度（规格：角外 12px） */
+export const ROTATE_ZONE_PX = 12;
+
 export interface RotateState {
   center: { x: number; y: number };
   /** 按下时的极角（弧度） */
@@ -58,4 +61,33 @@ export function applyRotate(state: RotateState, world: { x: number; y: number },
     "旋转",
   );
   state.applied = degrees;
+}
+
+/**
+ * 旋转热区命中：四角各自的“外侧象限”里、离角点 Chebyshev 距离落在 `(inner, inner + band]` 的点。
+ * `inner` 由调用方传缩放手柄的命中半径，保证手柄本体仍是缩放、两个热区不重叠；
+ * 纯屏幕几何，`corners` 由调用方按选中框四边形（含节点旋转）给出。
+ */
+export function rotateZoneAt(
+  corners: readonly { x: number; y: number }[],
+  sx: number,
+  sy: number,
+  inner: number,
+  band = ROTATE_ZONE_PX,
+): boolean {
+  if (corners.length === 0 || band <= 0) return false;
+  // 以四边形中心判定每个角的“外侧”方向（旋转后的四边形同样适用）
+  const centerX = corners.reduce((sum, point) => sum + point.x, 0) / corners.length;
+  const centerY = corners.reduce((sum, point) => sum + point.y, 0) / corners.length;
+  for (const corner of corners) {
+    const dx = sx - corner.x;
+    const dy = sy - corner.y;
+    const distance = Math.max(Math.abs(dx), Math.abs(dy));
+    if (distance <= inner || distance > inner + band) continue;
+    // 只吃角的外侧：框内靠近角的地方留给拖动
+    if (dx * Math.sign(corner.x - centerX) < 0) continue;
+    if (dy * Math.sign(corner.y - centerY) < 0) continue;
+    return true;
+  }
+  return false;
 }

@@ -1,5 +1,7 @@
 import { app, BrowserWindow, nativeTheme, screen, session, shell } from "electron";
+import { homedir } from "node:os";
 import { join } from "node:path";
+import { dataDirOf, prepareDataDir } from "./data-dir";
 import { attachCloseGuard, registerCloseChannels } from "./close-guard";
 import { registerFileChannels, requestNewDocumentOnReady } from "./ipc";
 import { mcpEndpoint } from "./mcp/endpoint";
@@ -10,6 +12,11 @@ import { currentPreferences, initRecentFiles, requestOpen, saveWindowBounds } fr
 import { restoreBounds } from "./window-state";
 
 app.setName("Sqraft");
+
+// 数据目录统一到 ~/.sqraft：必须在 app ready 之前改，之后的 getPath 才走新目录
+// （偏好、最近文件、MCP socket 都在这里）。旧目录留着不删，首次启动会迁移偏好。
+const legacyUserData = app.getPath("userData");
+app.setPath("userData", dataDirOf(homedir()));
 // 应用固定浅色：连原生菜单、标题栏、系统弹窗也不要跟随系统深色
 nativeTheme.themeSource = "light";
 
@@ -46,11 +53,12 @@ app.on("open-file", (event, path) => {
 
 const isDev = !app.isPackaged;
 
-// dev 默认开调试端口：agent 可以连上来做只读的界面检查（截图 / 读 DOM），不必重启实例。
-// `SQRAFT_DEBUG_PORT=0` 关闭，设成别的值就换端口；端口被占用时 Chromium 只报警，不影响启动。
+// dev 默认**不开**调试端口：本机任何进程都能连上来控制渲染层。
+// 需要做只读界面检查（截图 / 读 DOM）时显式开：`SQRAFT_DEBUG_PORT=9222 pnpm dev`。
+// 端口被占用时 Chromium 只报警，不影响启动。
 if (isDev) {
-  const port = process.env.SQRAFT_DEBUG_PORT ?? "9222";
-  if (port !== "0") app.commandLine.appendSwitch("remote-debugging-port", port);
+  const port = process.env.SQRAFT_DEBUG_PORT;
+  if (port && port !== "0") app.commandLine.appendSwitch("remote-debugging-port", port);
 }
 
 /** 生产构建的 CSP：只允许应用自身资源，脚本不接受 eval。 */
@@ -167,6 +175,7 @@ app.whenReady().then(async () => {
   registerMenuChannels();
   rebuildMenu();
   registerMcpChannels();
+  await prepareDataDir(legacyUserData);
   await initRecentFiles();
   const endpoint = mcpEndpoint(app.getPath("userData"));
   void startMcp(endpoint, app.getVersion()).catch((error: unknown) => {

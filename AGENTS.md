@@ -13,7 +13,7 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 ## 常用命令
 
 - 安装：`pnpm install`（pnpm 10；只有 `electron` / `esbuild` 允许跑安装脚本，见根 `package.json` 的 `pnpm.onlyBuiltDependencies`）
-- 开发：`pnpm dev` → `electron-vite dev`，同时起主进程、preload 与渲染层（Vite，渲染层 HMR）。dev 自动加 `--remote-debugging-port=9222` 供只读检查，`SQRAFT_DEBUG_PORT=0` 关闭、设别的值换端口。渲染层源码在 `apps/desktop/src/renderer`，主进程在 `src/main`，preload 在 `src/preload`
+- 开发：`pnpm dev` → `electron-vite dev`，同时起主进程、preload 与渲染层（Vite，渲染层 HMR）。dev **默认不开**调试端口；需要只读检查时用 `SQRAFT_DEBUG_PORT=9222 pnpm dev` 显式开启（`=0` 关闭）。渲染层源码在 `apps/desktop/src/renderer`，主进程在 `src/main`，preload 在 `src/preload`
 - 类型检查 + 构建：`pnpm build` —— packages 内 `tsc` 只做类型检查（`noEmit`）；桌面应用先跑 `typecheck`（main / preload / renderer 三份 `tsc --noEmit`）再 `electron-vite build` 到 `apps/desktop/out`
 - 测试：`pnpm test` —— 递归跑有 `test` 脚本的包（`@sqraft/core`、`@sqraft/ai-tools`、`@sqraft/desktop` 的 vitest）；`@sqraft/render` 无测试运行器
 - 打包：`pnpm dist` —— 按当前系统自动选命令（macOS → arm64 dmg，Windows → nsis，Linux → AppImage），产物在 `apps/desktop/release/`
@@ -42,7 +42,7 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 3. `packages/core` 不得依赖 DOM/浏览器 API——必须能在 Node 下完整测试
 4. 画布热路径不进 Vue 响应式：渲染器每帧直接读 DocStore；`ui.version` 只是触发重绘的脏标记
 5. `patch.style` 是**整体替换**（调用方先展开旧 style）；撤销正确性依赖这一点，别改成合并
-6. AI 能力只经 `packages/ai-tools` 的工具定义落地，经 MCP 暴露给外部 agent；应用内不存在模型直连与密钥；样式颜色只接受 Token 引用（`fillToken`），`assertToken` 会拒绝字面量色值
+6. AI 能力只经 `packages/ai-tools` 的工具定义落地，经 MCP 暴露给外部 agent；应用内不存在模型直连与密钥；样式颜色可以引用 Token（`fillToken`/`strokeToken`，优先）也可以给字面量（`fill`/`stroke`）——新文件不预置 Token，设计系统由用户自建（ADR-0024）
 7. 渲染只经 `RenderBackend` 接口；例外是 `CanvasView.vue` 里的选中框/拖拽预览叠加层（UI 局部）
 8. 坐标相对父容器内容区左上角；旋转绕自身中心
 9. 页面 = `DocState.rootIds` 中的 `page` 节点；"当前页面"是 UI 状态（`ui.activePageId`），不是命令的一部分
@@ -68,6 +68,7 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 ## 已知坑
 
 - `<canvas>` 除 `inset:0` 外必须显式 `width/height:100%`，否则内在像素尺寸会撑破布局（`CanvasView.vue` 修过一次）
+- `pnpm build` 的类型检查**不覆盖 `.vue`**（纯 `tsc` 不解析 SFC）：`CanvasView.vue` 等文件里写错/漏定义的符号只有运行时才炸（`hitRotateZone` 就这么让画布手势全废过）。改渲染层 .vue 后至少手点一遍；补 `vue-tsc` 是 `.scratch/desktop/issues/13` 那一票
 - `.sqraft` = zip（`manifest.json` + `doc.json` + `ops.ndjson`）；当前 `ops.ndjson` 恒为空（骨架阶段，增量日志未接）
 - `newId()` 基于时间戳+计数器，只用于"新建节点前"，不要在命令执行期调用
 - `apps/desktop/out/` 是 electron-vite 的产物（main / preload / renderer 三份），不要手改；改源码后要重新构建才会进 App
@@ -76,7 +77,8 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 - 打包时 CLI 必须在 asar 外（`extraResources`），子进程不能从 asar 里执行；未签名构建要用 `CSC_IDENTITY_AUTO_DISCOVERY=false`
 - `electron-builder.yml` 里 `npmRebuild: false` 与 `electronDist: node_modules/electron/dist` 是提速项：项目没有原生模块，且复用已解压的 Electron。加原生依赖时必须去掉 `npmRebuild: false`
 - macOS 用 `hiddenInset` 标题栏：左栏顶部为红绿灯让出 58px，左上 340×46 是拖拽区（`-webkit-app-region: drag`），改布局时别把这块盖住（标题栏只留拖拽，不放控件）。当前文件名与「回欢迎页」是工具栏品牌名右侧的两个胶囊（`Toolbar.vue`）
-- MCP 端点：`userData/mcp.sock`（Unix）或 `\\.\pipe\sqraft-mcp`（Windows）；CLI 里有一份等价路径规则，改路径要两边同步
+- 数据目录：`~/.sqraft/`（偏好、最近文件、`mcp.sock`），启动时由 `data-dir.ts` 从旧 `userData` 迁移一次偏好
+- MCP 端点：`~/.sqraft/mcp.sock`（Unix）或 `\\.\pipe\sqraft-mcp`（Windows）；CLI 里有一份等价路径规则，改路径要两边同步
 - 菜单里**别用 `role: "close"`**：它自带 `CmdOrCtrl+W` 并直接注册，会在渲染层之前吃掉 ⌘W，而 ⌘W 是"关闭文档回欢迎页"（渲染层注册表）。关闭窗口用显式的 ⇧⌘W
 - `CloseGuard` 的放行状态必须随窗口重建复位（`attach()`）：macOS 关窗后从 Dock 重开，留着的 `allow` 会让守卫永久失效、静默丢稿
 - 窗口**启动铺满工作区**（`ready-to-show` 里 `setBounds(display.workArea)`）：不是 macOS 全屏模式、也不进系统「最大化」，所以手动缩放的尺寸不跨启动保留；`preferences.json` 里的 `maximized` 字段目前不参与恢复，别以为它还有用
@@ -88,7 +90,7 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 ## 验证
 
 - 代码改动：`pnpm test && pnpm build`
-- 交互改动：dev 在跑时用调试端口做只读检查（截图 + 读 DOM，不重启实例）；dev 没在跑就只跑 `pnpm test && pnpm build`，把下面的手点清单交给用户
+- 交互改动：dev 在跑且显式开了 `SQRAFT_DEBUG_PORT` 时用调试端口做只读检查（截图 + 读 DOM，不重启实例）；dev 没在跑就只跑 `pnpm test && pnpm build`，把下面的手点清单交给用户
 - 桌面能力（无自动化回归，必须手点）：欢迎页 → 新建 → 改 → 保存 → 关窗 → 重开；MCP 连入 → 建节点 → 截图 → 一次撤销全撤（终端里应能看到对应的 `[mcp]` 行：连接、`tools/call`、耗时）；拖到副屏再拖回
 - 文件相关：新建/画一个矩形 → `⌘S`（首次弹另存为）→ `⌘W`（不应直接关闭）→ 重开 App 打开该文件，内容一致；外部改动该文件后再保存应出现"覆盖 / 另存为"
 

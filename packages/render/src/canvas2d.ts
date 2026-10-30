@@ -832,6 +832,54 @@ export class Canvas2DBackend implements RenderBackend {
     this.paintImagePlaceholder(node, radius);
   }
 
+  /** 页面背景图：cover 裁切铺满、contain 完整居中、tile 按原始像素平铺 */
+  drawImageInRect(image: ResolvedImage, rect: Rect, fit: "cover" | "contain" | "tile"): void {
+    if (rect.width <= 0 || rect.height <= 0 || image.width <= 0 || image.height <= 0) return;
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.rect(rect.x, rect.y, rect.width, rect.height);
+    ctx.clip();
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
+    try {
+      if (fit === "tile") {
+        // 用 pattern 平铺：1×1 的图在整页上也不会变成百万次 drawImage（每帧热路径）
+        ctx.translate(rect.x, rect.y);
+        const pattern = ctx.createPattern(image.source, "repeat");
+        if (pattern) {
+          ctx.fillStyle = pattern;
+          ctx.fillRect(0, 0, rect.width, rect.height);
+        } else {
+          // 兜底：极端环境不支持 pattern 时限制总次数，避免拖死整帧
+          let draws = 0;
+          for (let y = 0; y < rect.height && draws < 10_000; y += image.height) {
+            for (let x = 0; x < rect.width && draws < 10_000; x += image.width, draws += 1) {
+              ctx.drawImage(image.source, x, y, image.width, image.height);
+            }
+          }
+        }
+        ctx.translate(-rect.x, -rect.y);
+      } else {
+        const scaleX = rect.width / image.width;
+        const scaleY = rect.height / image.height;
+        const scale = fit === "cover" ? Math.max(scaleX, scaleY) : Math.min(scaleX, scaleY);
+        const width = image.width * scale;
+        const height = image.height * scale;
+        ctx.drawImage(
+          image.source,
+          rect.x + (rect.width - width) / 2,
+          rect.y + (rect.height - height) / 2,
+          width,
+          height,
+        );
+      }
+    } catch {
+      // 位图失效：背景图直接跳过，别让整帧失败
+    }
+    ctx.restore();
+  }
+
   /** 缺失图片的占位：浅灰底 + 对角叉，和"图裂了"的通用语汇一致。 */
   private paintImagePlaceholder(node: DocNode, radius: CornerRadius): void {
     if (node.width <= 0 || node.height <= 0) return;

@@ -1,9 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
 import type { MenuItemConstructorOptions } from "electron";
 
+/** 主进程菜单测试用的假窗口（菜单点击时才现取，见 BrowserWindow.getAllWindows） */
+let windows: Array<{ webContents: Record<string, unknown> }> = [];
+
 vi.mock("electron", () => ({
   app: { name: "Sqraft", getVersion: () => "0.0.1" },
-  BrowserWindow: { getFocusedWindow: () => null, getAllWindows: () => [] },
+  BrowserWindow: { getFocusedWindow: () => null, getAllWindows: () => windows },
   Menu: { buildFromTemplate: (template: unknown) => ({ template }), setApplicationMenu: vi.fn() },
   ipcMain: { on: vi.fn() },
 }));
@@ -17,6 +20,18 @@ function flatten(items: MenuItemConstructorOptions[]): MenuItemConstructorOption
     if (Array.isArray(item.submenu)) out.push(...flatten(item.submenu));
   }
   return out;
+}
+
+/** 点一下菜单项（Electron 的 click 有参数，这里只关心无副作用地触发） */
+function clickItem(item: MenuItemConstructorOptions | undefined): void {
+  const click = item?.click as (() => void) | undefined;
+  click?.();
+}
+
+function devtoolsItem(platform: NodeJS.Platform): MenuItemConstructorOptions | undefined {
+  const group = buildTemplate(platform).find((item) => item.label === "开发者");
+  if (!Array.isArray(group?.submenu)) return undefined;
+  return group.submenu.find((item) => item.label === "开发者工具");
 }
 
 describe("应用菜单", () => {
@@ -47,8 +62,40 @@ describe("应用菜单", () => {
     }
   });
 
-  it("五组菜单齐全", () => {
+  it("菜单分组齐全（含开发者）", () => {
     const labels = buildTemplate("darwin").map((item) => item.label);
-    expect(labels).toEqual(["Sqraft", "文件", "编辑", "视图", "窗口", "帮助"]);
+    expect(labels).toEqual(["Sqraft", "文件", "编辑", "开发者", "视图", "窗口", "帮助"]);
+  });
+
+  it("开发者菜单只有自带 DevTools，快捷键按平台区分", () => {
+    const macGroup = buildTemplate("darwin").find((item) => item.label === "开发者");
+    expect(macGroup?.submenu).toHaveLength(1);
+    expect(devtoolsItem("darwin")?.accelerator).toBe("Command+Alt+I");
+    // Windows/Linux 的 Ctrl+Shift+I 是渲染层的「插入图片」，所以用 F12
+    for (const platform of ["win32", "linux"] as const) {
+      expect(devtoolsItem(platform)?.accelerator).toBe("F12");
+    }
+  });
+
+  it("开发者工具：右侧停靠，再点一次关闭", () => {
+    const calls: string[] = [];
+    const contents = {
+      isDevToolsOpened: () => calls.at(-1) === "open",
+      openDevTools: (options?: { mode?: string }) => calls.push(options?.mode === "right" ? "open" : "bad-mode"),
+      closeDevTools: () => calls.push("closed"),
+    };
+    windows = [{ webContents: contents }];
+    try {
+      clickItem(devtoolsItem("darwin"));
+      expect(calls).toEqual(["open"]);
+      clickItem(devtoolsItem("darwin"));
+      expect(calls).toEqual(["open", "closed"]);
+    } finally {
+      windows = [];
+    }
+  });
+
+  it("开发者工具：没有窗口时静默返回", () => {
+    expect(() => clickItem(devtoolsItem("darwin"))).not.toThrow();
   });
 });

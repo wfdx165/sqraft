@@ -28,6 +28,7 @@ const DEFAULT_BINDINGS: Record<string, string> = {
   "file.open": "⌘O",
   "file.save": "⌘S",
   "file.saveAs": "⇧⌘S",
+  "file.exportPng": "⌘⇧E",
   "edit.copy": "⌘C",
   "edit.cut": "⌘X",
   "edit.undo": "⌘Z",
@@ -126,6 +127,7 @@ export function buildTemplate(platform: NodeJS.Platform = process.platform): Men
       actionItem("file.insertImage", "插入图片…", mac),
       actionItem("file.save", "保存", mac),
       actionItem("file.saveAs", "另存为…", mac),
+      actionItem("file.exportPng", "导出 PNG…", mac),
       { type: "separator" },
       {
         label: "打开最近",
@@ -158,6 +160,25 @@ export function buildTemplate(platform: NodeJS.Platform = process.platform): Men
       actionItem("edit.copy", "复制", mac),
       actionItem("edit.paste", "粘贴", mac),
       actionItem("edit.selectAll", "全选", mac),
+    ],
+  });
+
+  template.push({
+    label: "开发者",
+    submenu: [
+      // Windows/Linux 不用 Ctrl+Shift+I：渲染层把 ctrlKey 当 ⌘，那个组合是「插入图片」
+      {
+        label: "开发者工具",
+        accelerator: mac ? "Command+Alt+I" : "F12",
+        click: () => {
+          const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+          if (!target) return;
+          const contents = target.webContents;
+          // 再点一次关闭，与 Chrome 的内置行为一致；停靠固定在右侧
+          if (contents.isDevToolsOpened()) contents.closeDevTools();
+          else contents.openDevTools({ mode: "right" });
+        },
+      },
     ],
   });
 

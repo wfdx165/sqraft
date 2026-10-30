@@ -84,7 +84,7 @@ function switchClient(next: McpClient): void {
         <span class="mark">S</span>
         <div class="titles">
           <h1>Sqraft</h1>
-          <p>纯本地的 UI 设计工具 · 可被 agent 驱动</p>
+          <p>为 AI 原生而设计的 UI/UX 工具</p>
         </div>
       </header>
 

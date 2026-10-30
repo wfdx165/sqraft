@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createEmptyDoc, createNode, firstPageId } from "@sqraft/core";
+import { createDocWithPage, createNode, firstPageId } from "@sqraft/core";
 import { planLayerDrop } from "./layer-drag";
 
 function setup() {
-  const doc = createEmptyDoc();
+  const doc = createDocWithPage();
   const pageId = firstPageId(doc)!;
   const add = (type: "rect" | "frame", parentId: string, name: string) => {
     const node = createNode(type, { parentId, name });

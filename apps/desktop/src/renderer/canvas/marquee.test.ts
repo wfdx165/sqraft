@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { createEmptyDoc, createNode, firstPageId, type DocState } from "@sqraft/core";
+import { createDocWithPage, createNode, firstPageId, type DocState } from "@sqraft/core";
 import { intersects, marqueeHits } from "./marquee";
 
 function doc(): { state: DocState; pageId: string } {
-  const state = createEmptyDoc();
+  const state = createDocWithPage();
   return { state, pageId: firstPageId(state)! };
 }
 

@@ -10,7 +10,7 @@ import { effectPadding } from "./effects";
 export type NodeId = string;
 
 /** 当前文件格式版本：新增字段时 +1，并在 migrate 里补一段迁移。 */
-export const CURRENT_FORMAT_VERSION = 4;
+export const CURRENT_FORMAT_VERSION = 5;
 
 export type NodeType =
   | "page" | "frame" | "group" | "rect" | "ellipse" | "line"
@@ -185,12 +185,31 @@ export interface DocNode {
   isMask?: boolean;
   /** 参考线：仅 page 使用，页面本地坐标（页面左上角为原点） */
   guides?: { x: number[]; y: number[] };
+  /**
+   * 页面背景图：图片盖在背景色之上，不参与命中与图层树。
+   * 尺寸以解码后的位图为准；`natural*` 只为兼容旧文件保留（新写入不再生成）。
+   */
+  backgroundImage?: {
+    assetId: string;
+    naturalWidth?: number;
+    naturalHeight?: number;
+    fit: "cover" | "contain" | "tile";
+  };
   style: NodeStyle;
 }
 
 export interface TokenEntry {
   type: "color" | "number";
   value: string | number;
+}
+
+/** 文档里引用的一份字体（字节在 `.sqraft` 的 `fonts/` 里，按内容哈希命名）。 */
+export interface FontEntry {
+  assetId: string;
+  family: string;
+  weight: number;
+  style: "normal" | "italic";
+  mime: string;
 }
 
 export interface DocState {
@@ -201,6 +220,8 @@ export interface DocState {
   nodes: Record<NodeId, DocNode>;
   /** Token 表：key 形如 "color/primary"（单一取值，无模式） */
   tokens: Record<string, TokenEntry>;
+  /** 字体表：导入并嵌入文档的字体（缺省为空） */
+  fonts?: FontEntry[];
 }
 
 let idCounter = 0;
@@ -244,26 +265,33 @@ export const DEFAULT_PAGE_HEIGHT = 1024;
 /** 页面自由摆放时的新建间距 */
 export const PAGE_GAP = 160;
 
+/**
+ * 空文档：没有页面、没有 Token。
+ * 设计系统与页面都由用户（或 agent）自己建，编辑器不替用户做决定。
+ */
 export function createEmptyDoc(): DocState {
+  return {
+    version: 1,
+    formatVersion: CURRENT_FORMAT_VERSION,
+    rootIds: [],
+    nodes: {},
+    tokens: {},
+  };
+}
+
+/** 带一个默认页面的文档：测试与"新建页面"共用，不代表编辑器会给新文件预置页面。 */
+export function createDocWithPage(name = "页面 1"): DocState {
+  const doc = createEmptyDoc();
   const page = createNode("page", {
-    name: "页面 1",
+    name,
     x: 0,
     y: 0,
     width: DEFAULT_PAGE_WIDTH,
     height: DEFAULT_PAGE_HEIGHT,
   });
-  return {
-    version: 1,
-    formatVersion: CURRENT_FORMAT_VERSION,
-    rootIds: [page.id],
-    nodes: { [page.id]: page },
-    tokens: {
-      "color/primary": { type: "color", value: "#3366ff" },
-      "color/surface": { type: "color", value: "#ffffff" },
-      "color/text": { type: "color", value: "#1a1a1a" },
-      "radius/md": { type: "number", value: 8 },
-    },
-  };
+  doc.rootIds.push(page.id);
+  doc.nodes[page.id] = page;
+  return doc;
 }
 
 /** 解析 Paint → 具体 CSS 值。 */

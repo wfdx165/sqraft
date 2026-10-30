@@ -12,6 +12,8 @@ import {
   type NodeId,
 } from "@sqraft/core";
 import { dispatch, docStore, hooks, select, ui } from "../store";
+import { canDeletePage, deletePage as deletePageAction } from "../canvas/page-actions";
+import { openNodeMenu, openPageMenu } from "../object-menu";
 import { registerShortcuts } from "../shortcuts";
 import { planLayerDrop, type DropPosition } from "../canvas/layer-drag";
 import Icon from "./Icon.vue";
@@ -177,23 +179,14 @@ function onDragEnd() {
 
 /* ---------- 页面操作 ---------- */
 
+/** 点页面行 = 切活动页 + 适配该页（两种模式一致）；图层展开交给行首小三角。 */
 function togglePage(id: NodeId) {
-  // 编辑模式：点左栏页面 = 切换活动页 + 适配该页
-  // 必须走 fitActivePage（padding 80），与缩放菜单的「适配活动页」完全一致；
-  // focusPage 用的是 focusRect(id, 40)，缩放进近一倍，看起来"效果不一样"
-  if (ui.mode === "edit") {
-    ui.activePageId = id;
-    ui.expandedPageId = id;
-    select([]);
-    hooks.fitActivePage();
-    return;
-  }
-  if (ui.expandedPageId === id) {
-    ui.expandedPageId = null;
-    return;
-  }
-  ui.expandedPageId = id;
-  hooks.focusPage(id);
+  hooks.activatePage(id);
+}
+
+/** 行首小三角：只控制图层列表的展开/折叠，不动视口。 */
+function toggleLayers(id: NodeId) {
+  ui.expandedPageId = ui.expandedPageId === id ? null : id;
 }
 
 const renamingId = ref<NodeId | null>(null);
@@ -234,32 +227,24 @@ function addPage() {
     height: DEFAULT_PAGE_HEIGHT,
   });
   dispatch({ type: "node.create", params: { nodes: [node], parentId: null } }, "create-page");
-  ui.expandedPageId = node.id;
-  select([]);
-  if (ui.mode === "edit") {
-    // 与点左栏页面、缩放菜单「适配活动页」同一条路径：切过去并铺满视口
-    ui.activePageId = node.id;
-    hooks.fitActivePage();
-    return;
-  }
-  hooks.focusPage(node.id);
+  // 新页直接切过去并铺满视口（两种模式一致）
+  hooks.activatePage(node.id);
 }
 
 function deletePage(page: DocNode) {
-  if (pages.value.length <= 1) return;
-  let components = 0;
-  const visit = (id: NodeId) => {
-    const node = docStore.doc.nodes[id];
-    if (!node) return;
-    if (node.type === "component") components += 1;
-    for (const childId of node.children) visit(childId);
-  };
-  visit(page.id);
-  const extra = components ? `页面内有 ${components} 个主组件，引用它们的实例会自动脱离。` : "";
-  if (!window.confirm(`删除页面「${page.name}」及其全部图层？${extra}`)) return;
-  dispatch({ type: "node.delete", params: { nodeId: page.id } }, "delete-page");
-  if (ui.expandedPageId === page.id) ui.expandedPageId = docStore.doc.rootIds[0] ?? null;
-  hooks.requestRedraw();
+  deletePageAction(page.id);
+}
+
+/** 页面行右键：与画布上右键页面同一套菜单 */
+function onPageMenu(page: DocNode, e: MouseEvent) {
+  e.preventDefault();
+  openPageMenu(page.id, { x: e.clientX, y: e.clientY });
+}
+
+/** 图层行右键：与画布上右键元素同一套菜单 */
+function onNodeMenu(node: DocNode, e: MouseEvent) {
+  e.preventDefault();
+  openNodeMenu(node.id, { x: e.clientX, y: e.clientY });
 }
 
 /* ---------- 图层操作 ---------- */
@@ -332,8 +317,15 @@ function onLayerDelete(id: NodeId) {
           class="page-row"
           :class="{ active: ui.expandedPageId === page.id, 'active-page': ui.mode === 'edit' && ui.activePageId === page.id }"
           @click="togglePage(page.id)"
+          @contextmenu.prevent.stop="onPageMenu(page, $event)"
         >
-          <Icon name="chevron" :size="12" class="caret" :class="{ open: ui.expandedPageId === page.id }" />
+          <button
+            class="caret-btn"
+            :title="ui.expandedPageId === page.id ? '收起图层' : '展开图层'"
+            @click.stop="toggleLayers(page.id)"
+          >
+            <Icon name="chevron" :size="12" class="caret" :class="{ open: ui.expandedPageId === page.id }" />
+          </button>
           <input
             v-if="renamingId === page.id"
             v-model="draftName"
@@ -352,7 +344,7 @@ function onLayerDelete(id: NodeId) {
           </span>
           <span class="count">{{ layerCount(page) }}</span>
           <button
-            v-if="pages.length > 1"
+            v-if="canDeletePage()"
             class="act"
             title="删除页面"
             @click.stop="deletePage(page)"
@@ -378,6 +370,7 @@ function onLayerDelete(id: NodeId) {
             :style="{ paddingLeft: 18 + row.depth * 12 + 'px' }"
             draggable="true"
             @click="onLayerClick(row, $event)"
+            @contextmenu.prevent.stop="onNodeMenu(row.node, $event)"
             @dragstart="onDragStart(row, $event)"
             @dragover="onDragOver(row, $event)"
             @drop.prevent="onDrop(row)"
@@ -546,6 +539,22 @@ header {
   width: 2px;
   border-radius: 2px;
   background: var(--accent);
+}
+
+.caret-btn {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 18px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
+.caret-btn:hover .caret {
+  color: var(--text-dim);
 }
 
 .caret {

@@ -20,16 +20,16 @@ export function clientCommand(info: McpSetupInfo | null, client: McpClient): str
 }
 
 /** 有连接就压过安装状态：agent 已经在用了，不必再提安装 */
-export function welcomeMcpState(info: McpSetupInfo | null, clients: number): McpWelcomeState {
-  if (clients > 0) return "connected";
+export function welcomeMcpState(info: McpSetupInfo | null, clients: readonly unknown[]): McpWelcomeState {
+  if (clients.length > 0) return "connected";
   if (!info?.installed) return "not-installed";
   return "idle";
 }
 
 /** 状态行：监听状态 + 在线人数（端点路径刻意不显示，避免把内部路径当卖点） */
-export function statusLine(status: { listening: boolean; clients: number }): string {
+export function statusLine(status: { listening: boolean; clients: readonly unknown[] }): string {
   if (!status.listening) return "MCP 服务未启动";
-  if (status.clients > 0) return `MCP 服务监听中 · 已连接 ${status.clients} 个 agent`;
+  if (status.clients.length > 0) return `MCP 服务监听中 · 已连接 ${status.clients.length} 个 agent`;
   return "MCP 服务监听中 · 等待 agent 接入";
 }
 

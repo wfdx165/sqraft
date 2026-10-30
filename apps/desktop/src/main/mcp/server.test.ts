@@ -2,7 +2,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createConnection, type Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { startMcpServer, type McpRuntime } from "./server";
 import type { McpToolHost } from "./session";
 import { setMcpLogSink } from "./log";
@@ -181,5 +181,54 @@ describe.skipIf(process.platform === "win32")("MCP 本机传输", () => {
     await next();
     await next();
     expect(order).toEqual(["slow:start", "slow:end", "fast:start", "fast:end"]);
+  });
+});
+
+describe.skipIf(process.platform === "win32")("MCP 心跳", () => {
+  it("声明心跳的客户端按周期收到 ping，回 pong 后继续存活", async () => {
+    vi.useFakeTimers();
+    try {
+      const endpoint = await setup();
+      const socket = await connect(endpoint);
+      const next = reader(socket);
+      socket.write(`${JSON.stringify({ type: "hello", protocol: 1, heartbeat: true })}\n`);
+      expect(JSON.parse(await next())).toMatchObject({ type: "hello-ok" });
+
+      // 第一次 tick 只发 ping，不能因为"距 hello 已经 30s"就断开
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(JSON.parse(await next())).toEqual({ type: "ping" });
+      expect(socket.destroyed).toBe(false);
+
+      socket.write(`${JSON.stringify({ type: "pong" })}\n`);
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(JSON.parse(await next())).toEqual({ type: "ping" });
+      socket.write(`${JSON.stringify({ type: "pong" })}\n`);
+      expect(socket.destroyed).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("pong 超时后断开连接并记一条 warn", async () => {
+    vi.useFakeTimers();
+    try {
+      const endpoint = await setup();
+      const socket = await connect(endpoint);
+      const next = reader(socket);
+      socket.write(`${JSON.stringify({ type: "hello", protocol: 1, heartbeat: true })}\n`);
+      await next();
+
+      const closed = new Promise<void>((resolve) => socket.once("close", () => resolve()));
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(JSON.parse(await next())).toEqual({ type: "ping" });
+
+      // ping 之后 10s 没有 pong → 断开
+      await vi.advanceTimersByTimeAsync(10_001);
+      await closed;
+      expect(socket.destroyed).toBe(true);
+      expect(logLines.join("\n")).toContain("heartbeat timeout");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

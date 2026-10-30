@@ -11,7 +11,7 @@ import {
   type McpStatus,
   type McpToolInfo,
 } from "../../shared/ipc";
-import { logError, logInfo } from "./log";
+import { logError, logInfo, logWarn } from "./log";
 import { startMcpServer, type McpRuntime } from "./server";
 import { collectSetupInfo, installCli, writableInstallDir } from "./setup";
 
@@ -22,8 +22,16 @@ let sequence = 0;
 /** 与渲染层 `MAX_ASSET_BYTES` 对齐的读盘上限（主进程拿不到渲染层常量）。 */
 const MAX_CLIPBOARD_BYTES = 20 * 1024 * 1024;
 
-/** 节点剪贴板的自定义 MIME：只有 Sqraft 认这个类型，别的应用看到的是普通剪贴板内容。 */
-const NODES_MIME = "application/x-sqraft+nodes";
+/**
+ * 节点剪贴板的自定义类型。
+ *
+ * 不能用 W3C 风格的 `application/x-sqraft+nodes`：macOS 会把它变成
+ * `dyn.ah62d4rv4…` 这类动态 UTI，`clipboard.has()` 直接返回 false、`read()` 也拿不到内容
+ * （Electron 45 实测）。Electron 文档留的口子是平台原始类型，即
+ * `electron application/osclipboard;format="<UTI>"`；反向域名形式的 UTI 能正常往返。
+ */
+const NODES_UTI = "com.sqraft.nodes";
+const NODES_FORMAT = `electron application/osclipboard;format="${NODES_UTI}"`;
 
 interface PendingCall {
   resolve: (value: string) => void;
@@ -46,7 +54,7 @@ async function setupInfo() {
 
 /** 服务状态：`listening` 由运行时是否存在推导，渲染层据此显示"监听中 / 未启动"。 */
 function currentStatus(): McpStatus {
-  return { listening: runtime !== null, clients: runtime?.clientCount() ?? 0 };
+  return { listening: runtime !== null, clients: runtime?.clients() ?? [] };
 }
 
 function broadcastStatus(): void {
@@ -76,18 +84,49 @@ export function registerMcpChannels(): void {
 
   ipcMain.handle(CHANNELS.appClipboardText, () => clipboard.readText());
 
+  ipcMain.handle(CHANNELS.appClipboardImageWrite, async (_event, dataUrl: string) => {
+    const match = /^data:image\/png;base64,(.+)$/.exec(String(dataUrl));
+    if (!match) return false;
+    const bytes = Buffer.from(match[1], "base64");
+    if (bytes.length === 0) return false;
+    const blob = new Blob([bytes], { type: "image/png" });
+    await clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    return true;
+  });
+
   ipcMain.handle(CHANNELS.appClipboardNodesWrite, async (_event, json: string) => {
+    const text = String(json);
+    if (text.length === 0) {
+      logWarn("clipboard", "write nodes: 空载荷，已忽略");
+      return;
+    }
     // 一次 write 原子提交：载荷是 JSON 字符串，图片已经内联成 base64
-    const blob = new Blob([String(json)], { type: NODES_MIME });
-    await clipboard.write([new ClipboardItem({ [NODES_MIME]: blob })]);
+    try {
+      const blob = new Blob([text], { type: "application/octet-stream" });
+      await clipboard.write([new ClipboardItem({ [NODES_FORMAT]: blob })]);
+      logInfo("clipboard", "write nodes ok", { bytes: text.length });
+    } catch (error) {
+      logError("clipboard", "write nodes failed", { error: String(error) });
+      throw error;
+    }
   });
 
   ipcMain.handle(CHANNELS.appClipboardNodesRead, async () => {
-    if (!(await clipboard.has(NODES_MIME))) return null;
-    for (const item of await clipboard.read()) {
-      if (!item.types.includes(NODES_MIME)) continue;
-      const value = await item.getType(NODES_MIME);
-      return typeof value === "string" ? value : await (value as Blob).text();
+    // 不用 has() 提前返回：它对自定义类型不可靠，直接遍历 types 匹配更实在
+    try {
+      for (const item of await clipboard.read()) {
+        if (!item.types.includes(NODES_FORMAT)) continue;
+        const value = await item.getType(NODES_FORMAT);
+        const text = typeof value === "string" ? value : await (value as Blob).text();
+        if (!text) {
+          logWarn("clipboard", "read nodes: 类型存在但内容为空");
+          return null;
+        }
+        return text;
+      }
+    } catch (error) {
+      logError("clipboard", "read nodes failed", { error: String(error) });
+      return null;
     }
     return null;
   });
@@ -203,6 +242,7 @@ export function shutdownMcp(): void {
   runtime?.broadcastShutdown();
 }
 
+/** 当前连接数（退出守卫与日志用；列表由 `currentStatus()` 提供）。 */
 export function mcpClientCount(): number {
-  return runtime?.clientCount() ?? 0;
+  return runtime?.clients().length ?? 0;
 }

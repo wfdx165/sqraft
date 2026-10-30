@@ -134,7 +134,7 @@ Sqraft 现在能画（矩形/椭圆/多边形/直线/钢笔路径/文本/图片/
 
 ### 剪贴板
 
-- MIME：`application/x-sqraft+nodes`。`⌘V` 的优先级是 **sqraft 节点 > 图片 > 文本**（现状的图片/文本粘贴保持不变）。
+- 类型：反向域名 UTI `com.sqraft.nodes`，写剪贴板时用 Electron 的平台原始格式 `electron application/osclipboard;format="com.sqraft.nodes"`（W3C 自定义 MIME 在 macOS 上会变成动态 UTI，读不回来）。`⌘V` 的优先级是 **sqraft 节点 > 图片 > 文本**（现状的图片/文本粘贴保持不变）。
 - 载荷（JSON，版本化，为将来加字段留位）：
 
 ```jsonc
