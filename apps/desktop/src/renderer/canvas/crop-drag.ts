@@ -6,8 +6,19 @@
  */
 import { imageCropOf, type DocNode, type NodeId } from "@sqraft/core";
 import { docStore } from "../store";
+import { linkedNaturalSize } from "../linked-images";
 import { panCrop, scaleCrop, type CropCorner, type CropRect } from "./image-crop";
 import type { ResizeHandle } from "./selection";
+
+/** 原图尺寸：嵌入图直接读文档，链接图读解码缓存（抓取前为 0）。 */
+export function naturalSizeOf(node: DocNode): { width: number; height: number } {
+  const ref = node.image;
+  if (!ref) return { width: 0, height: 0 };
+  if (ref.naturalWidth > 0 && ref.naturalHeight > 0) {
+    return { width: ref.naturalWidth, height: ref.naturalHeight };
+  }
+  return linkedNaturalSize(ref.sourceUrl) ?? { width: 0, height: 0 };
+}
 
 export interface CropDragState {
   mode: "crop";
@@ -32,7 +43,7 @@ export function beginCropDrag(
     mode: "crop",
     cropId: node.id,
     cropHandle: handle,
-    cropStart: imageCropOf(node),
+    cropStart: imageCropOf(node, naturalSizeOf(node)),
     startX: world.x,
     startY: world.y,
   };
@@ -48,7 +59,9 @@ export function applyCropDrag(drag: CropDragState, world: { x: number; y: number
   const node = docStore.doc.nodes[drag.cropId];
   const ref = node?.image;
   if (!node || !ref) return false;
-  const natural = { width: ref.naturalWidth, height: ref.naturalHeight };
+  const natural = naturalSizeOf(node);
+  // 链接图还没抓到：没有原图尺寸，任何裁切都没有意义
+  if (natural.width <= 0 || natural.height <= 0) return false;
   const box = { width: node.width, height: node.height };
   const dx = world.x - drag.startX;
   const dy = world.y - drag.startY;
@@ -67,8 +80,13 @@ export function applyCropDrag(drag: CropDragState, world: { x: number; y: number
   } else {
     next = panCrop(drag.cropStart, natural, box, dx, dy);
   }
+  // 链接图首次裁切时顺手把真实尺寸写进文档：下次打开即使没抓完，裁切比例也算得出来
+  const known = ref.naturalWidth > 0 && ref.naturalHeight > 0;
+  const image = known
+    ? { ...ref, crop: next }
+    : { ...ref, naturalWidth: natural.width, naturalHeight: natural.height, crop: next };
   docStore.apply(
-    { type: "node.update", params: { nodeId: node.id, patch: { image: { ...ref, crop: next } } } },
+    { type: "node.update", params: { nodeId: node.id, patch: { image } } },
     "裁切图片",
   );
   return true;

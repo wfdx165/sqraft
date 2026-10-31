@@ -7,6 +7,7 @@ import { createEmptyDoc, firstPageId } from "@sqraft/core";
 import { docStore, ui } from "./store";
 import { parseDoc, serializeDoc } from "./fileio";
 import { allAssets, assetEntryName, loadAssets, resetAssets } from "./assets";
+import { resetLinkedImages } from "./linked-images";
 import { fontEntryName, fontTable, fontsForSave, loadFonts, registerDocFonts, resetFonts } from "./fonts";
 
 export const fileState = reactive({
@@ -82,6 +83,7 @@ async function confirmReplaceCurrent(): Promise<boolean> {
 export async function newDocument(): Promise<boolean> {
   if (!(await confirmReplaceCurrent())) return false;
   resetAssets();
+  resetLinkedImages();
   resetFonts();
   docStore.replace(createEmptyDoc());
   fileState.path = null;
@@ -102,6 +104,7 @@ export async function closeDocument(): Promise<void> {
   if (!(await confirmReplaceCurrent())) return;
   // 资源跟着文档生命周期走：回到欢迎页时位图与 object URL 都该释放
   resetAssets();
+  resetLinkedImages();
   resetFonts();
   docStore.replace(createEmptyDoc());
   fileState.path = null;
@@ -143,6 +146,7 @@ async function adoptFile(file: { path: string; name: string; mtimeMs: number; by
     const { state, files } = await parseDoc(file.bytes);
     // 先确认文件能解析，再丢弃当前文档的资源，避免打开失败后连旧图一起没了
     resetAssets();
+    resetLinkedImages();
     resetFonts();
     loadAssets(files);
     loadFonts(files);
@@ -168,52 +172,63 @@ async function adoptFile(file: { path: string; name: string; mtimeMs: number; by
 /** 保存到当前文件；没有路径时等价于另存为。返回是否真的落盘。 */
 export async function saveDocument(): Promise<boolean> {
   if (!fileState.path) return saveDocumentAs();
-  const entries = saveEntries();
-  if (!(await withinSaveLimit(entries))) return false;
-  const bytes = await serializeDoc(snapshotForSave(), entries);
-  if (bytes.length > MAX_SAVE_BYTES) {
-    await bridge.dialog.error(`文件超过 ${MAX_SAVE_BYTES / 1024 / 1024}MB，已取消保存。请减少或压缩图片后重试。`);
+  try {
+    const entries = saveEntries();
+    if (!(await withinSaveLimit(entries))) return false;
+    const bytes = await serializeDoc(snapshotForSave(), entries);
+    if (bytes.length > MAX_SAVE_BYTES) {
+      await bridge.dialog.error(`文件超过 ${MAX_SAVE_BYTES / 1024 / 1024}MB，已取消保存。请减少或压缩图片后重试。`);
+      return false;
+    }
+    const result = await bridge.file.save({
+      path: fileState.path,
+      bytes,
+      expectedMtimeMs: fileState.mtimeMs,
+    });
+    if (result.status === "ok") return markSaved(result.mtimeMs);
+    if (result.status === "error") {
+      await bridge.dialog.error(result.message);
+      return false;
+    }
+
+    const choice = await bridge.dialog.overwrite();
+    if (choice === "cancel") return false;
+    if (choice === "save-as") return saveDocumentAs();
+
+    const forced = await bridge.file.save({ path: fileState.path, bytes, expectedMtimeMs: null });
+    if (forced.status === "ok") return markSaved(forced.mtimeMs);
+    if (forced.status === "error") await bridge.dialog.error(forced.message);
+    return false;
+  } catch (error) {
+    // 序列化/写盘任何一步抛错都必须让用户看见：静默失败会让"保存"和"关窗"一起失灵
+    await bridge.dialog.error(`保存失败：${errorText(error)}`).catch(() => undefined);
     return false;
   }
-  const result = await bridge.file.save({
-    path: fileState.path,
-    bytes,
-    expectedMtimeMs: fileState.mtimeMs,
-  });
-  if (result.status === "ok") return markSaved(result.mtimeMs);
-  if (result.status === "error") {
-    await bridge.dialog.error(result.message);
-    return false;
-  }
-
-  const choice = await bridge.dialog.overwrite();
-  if (choice === "cancel") return false;
-  if (choice === "save-as") return saveDocumentAs();
-
-  const forced = await bridge.file.save({ path: fileState.path, bytes, expectedMtimeMs: null });
-  if (forced.status === "ok") return markSaved(forced.mtimeMs);
-  if (forced.status === "error") await bridge.dialog.error(forced.message);
-  return false;
 }
 
 /** 另存为：始终弹系统对话框，成功后切换当前文件。 */
 export async function saveDocumentAs(): Promise<boolean> {
-  const entries = saveEntries();
-  if (!(await withinSaveLimit(entries))) return false;
-  const bytes = await serializeDoc(snapshotForSave(), entries);
-  if (bytes.length > MAX_SAVE_BYTES) {
-    await bridge.dialog.error(`文件超过 ${MAX_SAVE_BYTES / 1024 / 1024}MB，已取消保存。请减少或压缩图片后重试。`);
+  try {
+    const entries = saveEntries();
+    if (!(await withinSaveLimit(entries))) return false;
+    const bytes = await serializeDoc(snapshotForSave(), entries);
+    if (bytes.length > MAX_SAVE_BYTES) {
+      await bridge.dialog.error(`文件超过 ${MAX_SAVE_BYTES / 1024 / 1024}MB，已取消保存。请减少或压缩图片后重试。`);
+      return false;
+    }
+    const result = await bridge.file.saveAs({ suggestedName: suggestedName(), bytes });
+    if (result.status === "canceled") return false;
+    if (result.status === "error") {
+      await bridge.dialog.error(result.message);
+      return false;
+    }
+    fileState.path = result.path;
+    fileState.name = result.name;
+    return markSaved(result.mtimeMs);
+  } catch (error) {
+    await bridge.dialog.error(`另存为失败：${errorText(error)}`).catch(() => undefined);
     return false;
   }
-  const result = await bridge.file.saveAs({ suggestedName: suggestedName(), bytes });
-  if (result.status === "canceled") return false;
-  if (result.status === "error") {
-    await bridge.dialog.error(result.message);
-    return false;
-  }
-  fileState.path = result.path;
-  fileState.name = result.name;
-  return markSaved(result.mtimeMs);
 }
 
 function markSaved(mtimeMs: number): boolean {
@@ -274,24 +289,31 @@ export function installFileSession(): void {
       }
       if (closeState.busy) return;
       closeState.busy = true;
+      let closed = false;
       try {
         if (!docStore.isDirty) {
           bridge.app.finishClose(quit);
+          closed = true;
           return;
         }
         const choice = await bridge.dialog.unsaved();
-        if (choice === "cancel") {
-          bridge.app.cancelClose();
-          return;
-        }
+        if (choice === "cancel") return;
         if (choice === "discard") {
           bridge.app.finishClose(quit);
+          closed = true;
           return;
         }
-        if (await saveDocument()) bridge.app.finishClose(quit);
-        else bridge.app.cancelClose();
+        if (await saveDocument()) {
+          bridge.app.finishClose(quit);
+          closed = true;
+        }
+      } catch (error) {
+        await bridge.dialog.error(`关闭前保存失败：${errorText(error)}`).catch(() => undefined);
       } finally {
         closeState.busy = false;
+        // 没走成也一定要回一句：主进程的挂起不解除的话，之后的关闭请求会被永久丢弃，
+        // 用户就只能强制退出（保险丝变成绊脚石）。
+        if (!closed) bridge.app.cancelClose();
       }
     }),
   );

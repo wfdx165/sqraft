@@ -7,9 +7,10 @@
  * - macOS 用 accelerator 仅做展示（registerAccelerator: false），实际按键仍由渲染层处理；
  * - Windows/Linux 不注册 accelerator，把键位拼进标签，避免和渲染层抢事件。
  */
-import { app, BrowserWindow, ipcMain, Menu, type MenuItemConstructorOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, type MenuItemConstructorOptions } from "electron";
 import { basename } from "node:path";
 import { CHANNELS } from "../shared/ipc";
+import { clearImageCache } from "./image-cache";
 
 /** 渲染层同步过来的、面向菜单的动作键位（默认值兜底）。 */
 let bindings: Record<string, string> = {};
@@ -153,6 +154,27 @@ export function buildTemplate(
       actionItem("file.save", "保存", mac),
       actionItem("file.saveAs", "另存为…", mac),
       actionItem("file.exportPng", "导出 PNG…", mac),
+      { type: "separator" },
+      {
+        // 链接图片的字节不在文件里，只能靠本机缓存：给一个手动清理入口（上限 500MB，LRU 自动淘汰）
+        label: "清除图片缓存",
+        click: () => {
+          void (async () => {
+            const bytes = await clearImageCache();
+            const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+            const options: Electron.MessageBoxOptions = {
+              type: "info",
+              buttons: ["知道了"],
+              message:
+                bytes > 0
+                  ? `已清除 ${Math.max(1, Math.round(bytes / 1024 / 1024))}MB 图片缓存`
+                  : "图片缓存已经是空的",
+            };
+            if (target) await dialog.showMessageBox(target, options);
+            else await dialog.showMessageBox(options);
+          })();
+        },
+      },
       { type: "separator" },
       {
         label: "打开最近",

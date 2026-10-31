@@ -26,6 +26,8 @@ export interface RenderContext {
   resolveColor(tokenOrValue: { token?: string; value?: string } | null | undefined): string | undefined;
   /** 按 assetId 取已解码的图片；没解码好或缺资源时返回 null（渲染占位） */
   resolveImage(assetId: string): ResolvedImage | null;
+  /** 按远程 URL 取已解码的图片；未抓取/未解码时返回 null（渲染占位） */
+  resolveLinkedImage(url: string): ResolvedImage | null;
 }
 
 /** 已解码的图片：`source` 可直接交给 drawImage，宽高是原图像素。 */

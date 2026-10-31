@@ -283,12 +283,13 @@ export const tools: ToolDefinition[] = [
         text: { type: "string", description: "kind=text 时的文案" },
         image: {
           type: "object",
-          description: "kind=image 时的位图：base64（不含 data: 前缀）+ MIME；上限 5MB",
+          description:
+            "kind=image 时二选一：data（base64，不含 data: 前缀）+ mimeType（上限 5MB），或 url（http/https 链接，字节不进文件，按需抓取并缓存在本机）",
           properties: {
             data: { type: "string" },
             mimeType: { type: "string" },
+            url: { type: "string", description: "http/https 图片地址；懒加载，断网时用本地缓存" },
           },
-          required: ["data"],
           additionalProperties: false,
         },
         closed: { type: "boolean", description: "kind=path 时是否闭合，默认 false" },
@@ -424,6 +425,10 @@ export const tools: ToolDefinition[] = [
           additionalProperties: false,
         },
         mask: { type: "boolean", description: "true = 作为蒙版，遮罩同父级上方相邻兄弟" },
+        imageUrl: {
+          type: "string",
+          description: "把图片节点换成这个 http/https 链接（字节不进文件，按需抓取）；裁切会重置为整图",
+        },
         backgroundImage: {
           type: "object",
           description: "页面背景图（仅 page）：给 data + mimeType，或直接给已有 assetId；fit 缺省 cover",
@@ -678,6 +683,7 @@ function serializeSubtree(store: DocStore, id: NodeId): string {
       ...(n.listType ? { listType: n.listType } : {}),
       ...(n.truncate ? { truncate: n.truncate } : {}),
       ...(n.type === "polygon" ? { sides: n.sides ?? 3 } : {}),
+      ...(n.image ? { image: n.image } : {}),
       ...(n.vector ? { vector: n.vector } : {}),
       ...(n.componentId ? { componentId: n.componentId } : {}),
       ...(n.mainId ? { mainId: n.mainId } : {}),
@@ -863,6 +869,19 @@ export const MUTATING_TOOLS: ReadonlySet<string> = new Set([
   "arrange_nodes",
   "duplicate_node",
 ]);
+
+/** 远程图片地址只能是 http/https；完整的网络校验（大小/超时/重定向）由主进程抓取时做。 */
+function assertImageUrl(url: string): void {
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    throw new Error(`图片地址不是合法的 URL：${url}`);
+  }
+  if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+    throw new Error("图片地址只支持 http/https");
+  }
+}
 
 /** 报错里最多列几个节点，其余用数量收口 */
 const TOKEN_REF_PREVIEW = 5;
@@ -1140,21 +1159,31 @@ export function makeExecutor(
 
         let imageRef: DocNode["image"];
         if (isImage) {
-          if (!documentHost?.addImage) throw new Error("当前宿主不支持插入图片");
-          const spec = args.image as { data?: unknown; mimeType?: unknown } | undefined;
+          const spec = args.image as { data?: unknown; mimeType?: unknown; url?: unknown } | undefined;
+          const url = typeof spec?.url === "string" ? spec.url.trim() : "";
           const data = typeof spec?.data === "string" ? spec.data : "";
-          if (!data) throw new Error("kind=image 必须提供 image.data（base64）");
-          // base64 长度换算出字节数：5MB 上限，避免把一条 JSON-RPC 撑爆
-          if (Math.ceil((data.length * 3) / 4) > 5 * 1024 * 1024) {
-            throw new Error("图片超过 5MB 上限（GUI 拖入可到 20MB）");
+          if (url && data) throw new Error("image 的 data 与 url 只能给一个");
+          if (!url && !data) {
+            throw new Error("kind=image 需要 image.data（base64）或 image.url（http/https 链接）");
           }
-          const asset = await documentHost.addImage(data, String(spec?.mimeType ?? "image/png"));
-          imageRef = {
-            assetId: asset.assetId,
-            naturalWidth: asset.width,
-            naturalHeight: asset.height,
-            crop: { x: 0, y: 0, width: asset.width, height: asset.height },
-          };
+          if (url) {
+            assertImageUrl(url);
+            // 链接图懒加载：尺寸未知，抓到时由渲染层用实际尺寸补齐
+            imageRef = { sourceUrl: url, naturalWidth: 0, naturalHeight: 0 };
+          } else {
+            if (!documentHost?.addImage) throw new Error("当前宿主不支持插入图片");
+            // base64 长度换算出字节数：5MB 上限，避免把一条 JSON-RPC 撑爆
+            if (Math.ceil((data.length * 3) / 4) > 5 * 1024 * 1024) {
+              throw new Error("图片超过 5MB 上限（GUI 拖入可到 20MB）");
+            }
+            const asset = await documentHost.addImage(data, String(spec?.mimeType ?? "image/png"));
+            imageRef = {
+              assetId: asset.assetId,
+              naturalWidth: asset.width,
+              naturalHeight: asset.height,
+              crop: { x: 0, y: 0, width: asset.width, height: asset.height },
+            };
+          }
         }
 
         const node = createNode(kind, {
@@ -1162,8 +1191,8 @@ export function makeExecutor(
           // 路径的 points 是父容器坐标：先放在 0,0，由 store 归一化并推导节点框
           x: isPath ? 0 : ((args.x as number) ?? defaultPosition.x),
           y: isPath ? 0 : ((args.y as number) ?? defaultPosition.y),
-          width: isPath ? 1 : ((args.width as number) ?? imageRef?.naturalWidth ?? 100),
-          height: isPath ? 1 : ((args.height as number) ?? imageRef?.naturalHeight ?? 100),
+          width: isPath ? 1 : ((args.width as number) ?? (imageRef?.naturalWidth || 100)),
+          height: isPath ? 1 : ((args.height as number) ?? (imageRef?.naturalHeight || 100)),
           text: args.text as string | undefined,
           vector: isPath ? { closed, anchors: points! } : undefined,
           sides: isPolygon ? clampSides(args.sides as number) : undefined,
@@ -1313,8 +1342,16 @@ export function makeExecutor(
         if (args.mask !== undefined) patch.isMask = Boolean(args.mask);
         if (args.crop !== undefined) {
           if (node.type !== "image" || !node.image) throw new Error("crop 仅适用于图片节点");
+          if (!(node.image.naturalWidth > 0) || !(node.image.naturalHeight > 0)) {
+            throw new Error("这张链接图还没加载完，暂时无法裁切；先让它显示出来再改 crop");
+          }
           const raw = args.crop as { x?: unknown; y?: unknown; width?: unknown; height?: unknown };
-          const current = node.image.crop;
+          const current = node.image.crop ?? {
+            x: 0,
+            y: 0,
+            width: node.image.naturalWidth,
+            height: node.image.naturalHeight,
+          };
           patch.image = {
             ...node.image,
             crop: {
@@ -1324,6 +1361,15 @@ export function makeExecutor(
               height: Number(raw.height ?? current.height),
             },
           };
+        }
+        // 放在 crop 之后：换源会整体替换 image（裁切与尺寸都作废），不能被上一步覆盖回去
+        if (args.imageUrl !== undefined) {
+          if (node.type !== "image") throw new Error("imageUrl 仅适用于图片节点");
+          const raw = typeof args.imageUrl === "string" ? args.imageUrl.trim() : "";
+          if (!raw) throw new Error("imageUrl 不能为空");
+          assertImageUrl(raw);
+          // 换源：尺寸与原图裁切都作废，抓到后由渲染层按实际尺寸铺满
+          patch.image = { sourceUrl: raw, naturalWidth: 0, naturalHeight: 0 };
         }
 
         const points = readPoints(args.points);

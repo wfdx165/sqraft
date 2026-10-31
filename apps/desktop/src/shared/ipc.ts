@@ -99,6 +99,11 @@ export interface McpToolInfo {
   inputSchema: Record<string, unknown>;
 }
 
+/** 主进程抓一张链接图片的结果；失败时 `reason` 直接给用户看。 */
+export type FetchImageResult =
+  | { ok: true; bytes: Uint8Array; contentType: string; /** 用的是上一次缓存（断网/404/超时） */ stale: boolean }
+  | { ok: false; reason: string };
+
 export interface McpCallRequest {
   id: number;
   name: string;
@@ -171,6 +176,14 @@ export interface SqraftApi {
      * 不返回 mime：真实格式由渲染层按 magic bytes 判定（扩展名/声明都不可信）。
      */
     readClipboardImage(): Promise<Uint8Array | null>;
+    /**
+     * 抓一张链接（远程）图片：主进程负责校验地址、限大小/超时、读写本地缓存。
+     * 渲染层拿不到网络（CSP `connect-src 'self'`），只能经这里。
+     * `force` = 用户点了「重新抓取」：跳过本会话的缓存直读，重新请求一次。
+     */
+    fetchImage(url: string, options?: { force?: boolean }): Promise<FetchImageResult>;
+    /** 清空链接图片的本地缓存；返回释放的字节数 */
+    clearImageCache(): Promise<{ bytes: number }>;
     /** 把 PNG data URL 写进系统剪贴板（复制为图片） */
     writeClipboardImage(dataUrl: string): Promise<boolean>;
     /** 把节点载荷写进系统剪贴板的 sqraft 自定义 MIME（JSON 字符串） */
@@ -212,6 +225,8 @@ export const CHANNELS = {
   mcpSetup: "mcp:setup",
   mcpSetPort: "mcp:set-port",
   appCopyText: "app:copy-text",
+  appFetchImage: "app:fetch-image",
+  appClearImageCache: "app:clear-image-cache",
   appClipboardImage: "app:clipboard-image",
   appClipboardText: "app:clipboard-text",
   appClipboardImageWrite: "app:clipboard-image-write",

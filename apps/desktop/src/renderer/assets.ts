@@ -92,7 +92,7 @@ export function assetEntryName(asset: AssetRecord): string {
 }
 
 /** 位图释放：ImageBitmap 有 close()，SVG 的 <img> 没有。 */
-function releaseImage(image: ResolvedImage | undefined): void {
+export function releaseImage(image: ResolvedImage | undefined): void {
   const source = image?.source as ImageBitmap | undefined;
   if (source && typeof source.close === "function") source.close();
 }
@@ -134,14 +134,21 @@ function dropRecord(record: AssetRecord): void {
 }
 
 async function decode(record: AssetRecord): Promise<ResolvedImage> {
-  if (record.mime === "image/svg+xml") {
-    // createImageBitmap 对 SVG 支持不稳，用 <img> 解码再交给 drawImage
+  return decodeImageBytes(record.bytes, record.mime, record.url);
+}
+
+/**
+ * 字节 → 可直接绘制的图。`url` 是这些字节的 object URL（SVG 必须经 `<img>` 解码，
+ * 因为 createImageBitmap 对 SVG 支持不稳）。
+ */
+export async function decodeImageBytes(bytes: Uint8Array, mime: string, url: string): Promise<ResolvedImage> {
+  if (mime === "image/svg+xml") {
     const image = new Image();
-    image.src = record.url;
+    image.src = url;
     await image.decode();
     return { source: image, width: image.naturalWidth || 1, height: image.naturalHeight || 1 };
   }
-  const bitmap = await createImageBitmap(new Blob([toBuffer(record.bytes)], { type: record.mime }), {
+  const bitmap = await createImageBitmap(new Blob([toBuffer(bytes)], { type: mime }), {
     imageOrientation: "from-image",
   });
   return { source: bitmap, width: bitmap.width, height: bitmap.height };

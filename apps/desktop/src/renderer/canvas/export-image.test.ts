@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocWithPage, createNode, type DocState } from "@sqraft/core";
-import { exportBounds } from "./export-image";
+import { exportBounds, preloadImages } from "./export-image";
 
 function setup() {
   const doc: DocState = createDocWithPage();
@@ -43,6 +43,58 @@ describe("PNG 导出区域", () => {
   it("节点不存在时退回 null", () => {
     const { doc, pageId } = setup();
     expect(exportBounds(doc, { pageId, nodeIds: ["missing"] })).toBeNull();
+  });
+});
+
+describe("导出前的图片预载", () => {
+  function addImage(doc: DocState, pageId: string, image: ReturnType<typeof createNode>["image"]) {
+    const node = createNode("image", { parentId: pageId, x: 0, y: 0, width: 10, height: 10, image });
+    doc.nodes[node.id] = node;
+    doc.nodes[pageId].children.push(node.id);
+    return node;
+  }
+
+  it("没有预载入口时不抛错（之前会踩 undefined.catch）", async () => {
+    const { doc, pageId, add } = setup();
+    add(0, 0, 10, 10);
+    await expect(preloadImages(doc, { pageId })).resolves.toBeUndefined();
+  });
+
+  it("嵌入图与链接图分别交给各自的预载入口", async () => {
+    const doc = createDocWithPage();
+    const pageId = doc.rootIds[0];
+    addImage(doc, pageId, { assetId: "a1", naturalWidth: 10, naturalHeight: 10 });
+    addImage(doc, pageId, { sourceUrl: "https://a/b.png", naturalWidth: 0, naturalHeight: 0 });
+
+    const assets: string[] = [];
+    const urls: string[] = [];
+    await preloadImages(doc, {
+      pageId,
+      ensureImage: async (id) => {
+        assets.push(id);
+        return null;
+      },
+      ensureLinkedImage: async (url) => {
+        urls.push(url);
+        return null;
+      },
+    });
+    expect(assets).toEqual(["a1"]);
+    expect(urls).toEqual(["https://a/b.png"]);
+  });
+
+  it("预载失败不阻断导出", async () => {
+    const doc = createDocWithPage();
+    const pageId = doc.rootIds[0];
+    addImage(doc, pageId, { sourceUrl: "https://a/b.png", naturalWidth: 0, naturalHeight: 0 });
+    await expect(
+      preloadImages(doc, {
+        pageId,
+        ensureLinkedImage: async () => {
+          throw new Error("断网");
+        },
+      }),
+    ).resolves.toBeUndefined();
   });
 });
 

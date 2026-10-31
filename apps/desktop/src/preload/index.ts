@@ -3,6 +3,7 @@ import {
   CHANNELS,
   type AppInfo,
   type CloseRequest,
+  type FetchImageResult,
   type McpCallRequest,
   type McpCallResult,
   type McpSetupInfo,
@@ -69,6 +70,9 @@ const api: SqraftApi = {
     info: () => ipcRenderer.invoke(CHANNELS.appInfo) as Promise<AppInfo>,
     copyText: (text: string) => ipcRenderer.send(CHANNELS.appCopyText, text),
     readClipboardImage: () => ipcRenderer.invoke(CHANNELS.appClipboardImage) as Promise<Uint8Array | null>,
+    fetchImage: (url: string, options?: { force?: boolean }) =>
+      ipcRenderer.invoke(CHANNELS.appFetchImage, url, options) as Promise<FetchImageResult>,
+    clearImageCache: () => ipcRenderer.invoke(CHANNELS.appClearImageCache) as Promise<{ bytes: number }>,
     writeClipboardImage: (dataUrl: string) =>
       ipcRenderer.invoke(CHANNELS.appClipboardImageWrite, dataUrl) as Promise<boolean>,
     writeClipboardNodes: (json: string) =>

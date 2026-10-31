@@ -3,6 +3,7 @@ import { createEmptyDoc, createNode, firstPageId } from "@sqraft/core";
 import type { UnsavedChoice } from "../shared/ipc";
 
 // file-session 在模块顶层读 window.sqraft，所以先装一个最小桥，再动态导入
+let closeHandler: ((request: { quit: boolean }) => Promise<void>) | null = null;
 const bridge = {
   platform: "darwin",
   file: {
@@ -31,7 +32,10 @@ const bridge = {
     signalReady: vi.fn(),
     onOpenRequest: () => () => {},
     setDirty: vi.fn(),
-    onCloseRequest: () => () => {},
+    onCloseRequest: (handler: (request: { quit: boolean }) => Promise<void>) => {
+      closeHandler = handler;
+      return () => {};
+    },
     finishClose: vi.fn(),
     cancelClose: vi.fn(),
   },
@@ -144,5 +148,43 @@ describe("未保存标记跟着保存点走", () => {
     bridge.dialog.unsaved.mockResolvedValueOnce("discard");
     await expect(newDocument()).resolves.toBe(true);
     expect(fileState.dirty).toBe(false);
+  });
+});
+
+/**
+ * 曾经的事故：文档里混进不可克隆的值（Vue 代理）→ `structuredClone` 抛错 →
+ * 保存静默失败；关闭流程里 `saveDocument()` 抛错 → 既不 finishClose 也不 cancelClose →
+ * 主进程的挂起永久不解除，之后所有关闭请求都被丢弃。
+ */
+describe("保存失败必须可见", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    docStore.replace(createEmptyDoc());
+    ui.docOpen = false;
+    fileState.path = "/tmp/测试.sqraft";
+    fileState.mtimeMs = 0;
+    installFileSession();
+  });
+
+  /** 造一个无法 JSON 序列化的文档（循环引用），模拟"保存抛出"而不是"返回 false"。 */
+  function poisonDocument(): void {
+    const nodeId = makeDirtyDocument();
+    (docStore.doc.nodes[nodeId] as unknown as { self: unknown }).self = docStore.doc.nodes[nodeId];
+  }
+
+  it("序列化抛错时报错并返回 false，不会悄悄吞掉", async () => {
+    poisonDocument();
+    await expect(saveDocument()).resolves.toBe(false);
+    expect(bridge.dialog.error).toHaveBeenCalledWith(expect.stringContaining("保存失败"));
+  });
+
+  it("关闭时保存失败也要解除主进程的挂起，否则窗口永远关不掉", async () => {
+    poisonDocument();
+    bridge.dialog.unsaved.mockResolvedValueOnce("save");
+
+    await closeHandler?.({ quit: false });
+
+    expect(bridge.app.finishClose).not.toHaveBeenCalled();
+    expect(bridge.app.cancelClose).toHaveBeenCalledTimes(1);
   });
 });

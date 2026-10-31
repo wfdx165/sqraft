@@ -181,7 +181,7 @@ export function remapNode(src: DocNode, idMap: Record<NodeId, NodeId>): DocNode 
     }
     clone.overrides = overrides;
   }
-  if (src.image) clone.image = { ...src.image, crop: { ...src.image.crop } };
+  if (src.image) clone.image = { ...src.image, ...(src.image.crop ? { crop: { ...src.image.crop } } : {}) };
   if (src.vector) {
     clone.vector = { closed: src.vector.closed, anchors: src.vector.anchors.map((a) => ({ ...a })) };
   }

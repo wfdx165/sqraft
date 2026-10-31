@@ -110,6 +110,8 @@ export function migrateDoc(state: DocState, fromVersion = state.formatVersion ??
   if (version < 4) version = 4;
   // 5：页面新增可选的 `backgroundImage`。缺省即"没有背景图"，不需要改数据。
   if (version < 5) version = 5;
+  // 6：图片新增可选的 `sourceUrl`（链接图），`crop` 变为可选。缺省即嵌入图，不需要改数据。
+  if (version < 6) version = 6;
   state.formatVersion = CURRENT_FORMAT_VERSION;
   return state;
 }

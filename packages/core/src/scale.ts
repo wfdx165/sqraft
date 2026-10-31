@@ -4,7 +4,7 @@
  * 世界坐标下的锚点 + 比例：位置、尺寸、圆角、字号、描边宽、效果半径、图片裁切一起变。
  * 分组没有自己的绘制内容，缩放组 = 递归缩放它的子节点。
  */
-import { worldRect, type DocState, type NodeId, type NodeStyle, type Rect } from "./model";
+import { worldRect, type DocState, type ImageRef, type NodeId, type NodeStyle, type Rect } from "./model";
 import type { Command } from "./store";
 import { topLevelIds } from "./duplicate";
 import { movableIds } from "./arrange";
@@ -48,7 +48,7 @@ export function expandScale(doc: DocState, params: ScaleParams): Command[] {
           width: Math.max(MIN_SIZE, box.width * sx),
           height: Math.max(MIN_SIZE, box.height * sy),
           style: scaleStyle(node.style, sx, sy),
-          ...(node.image ? { image: { ...node.image, crop: scaleCrop(node.image.crop, node.image, sx, sy) } } : {}),
+          ...(node.image ? { image: scaleImage(node.image, sx, sy) } : {}),
         },
       },
     });
@@ -80,7 +80,7 @@ function scaleChildren(doc: DocState, parentId: NodeId, sx: number, sy: number):
           width: Math.max(1, child.width * sx),
           height: Math.max(1, child.height * sy),
           style: scaleStyle(child.style, sx, sy),
-          ...(child.image ? { image: { ...child.image, crop: scaleCrop(child.image.crop, child.image, sx, sy) } } : {}),
+          ...(child.image ? { image: scaleImage(child.image, sx, sy) } : {}),
         },
       },
     });
@@ -124,6 +124,12 @@ function scaleStyle(style: NodeStyle, sx: number, sy: number): NodeStyle {
     });
   }
   return next;
+}
+
+/** 缩放图片：裁切跟随，缺省裁切（整图）与尺寸未知的链接图都不需要改写。 */
+function scaleImage(image: ImageRef, sx: number, sy: number): ImageRef {
+  if (!image.crop || image.naturalWidth <= 0 || image.naturalHeight <= 0) return { ...image };
+  return { ...image, crop: scaleCrop(image.crop, image, sx, sy) };
 }
 
 /** 裁切区域随框一起缩放，并夹回原图范围。 */

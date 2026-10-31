@@ -10,7 +10,7 @@ import { effectPadding } from "./effects";
 export type NodeId = string;
 
 /** 当前文件格式版本：新增字段时 +1，并在 migrate 里补一段迁移。 */
-export const CURRENT_FORMAT_VERSION = 5;
+export const CURRENT_FORMAT_VERSION = 6;
 
 export type NodeType =
   | "page" | "frame" | "group" | "rect" | "ellipse" | "line"
@@ -118,14 +118,26 @@ export type ListType = "none" | "bulleted" | "numbered";
 export type NodeOverride = Omit<Partial<DocNode>, "style"> & { style?: Partial<NodeStyle> };
 
 /**
- * 图片引用：位图字节存在 `.sqraft` 的 `assets/` 里（按内容哈希命名），
- * 文档只记 id 与原图尺寸；`crop` 是**原图像素坐标**下的可见区域，缺省等于整张图。
+ * 图片引用，两种来源：
+ *
+ * - `assetId`：位图字节存在 `.sqraft` 的 `assets/` 里（按内容哈希命名），文件自包含；
+ * - `sourceUrl`：远程地址，字节**不进文件**，按 URL 缓存在本机（ADR-0027）。
+ *   抓取是懒的，因此首次加载前 `naturalWidth / naturalHeight` 为 0（尺寸未知，
+ *   渲染时用解码结果补齐），`crop` 缺省表示整张图。
+ *
+ * `crop` 是**原图像素坐标**下的可见区域，缺省等于整张图。
  */
 export interface ImageRef {
-  assetId: string;
+  assetId?: string;
+  sourceUrl?: string;
   naturalWidth: number;
   naturalHeight: number;
-  crop: Rect;
+  crop?: Rect;
+}
+
+/** 是否为链接（远程）图片：字节不在文件里。 */
+export function isLinkedImage(ref: ImageRef | undefined): boolean {
+  return Boolean(ref?.sourceUrl);
 }
 
 export interface DocNode {
@@ -533,12 +545,19 @@ export function maskPlan(children: readonly NodeId[], isMask: (id: NodeId) => bo
 /**
  * 图片节点当前的裁切区域：缺省等于整图，越界/过小时夹回图片范围。
  * 渲染与命中都用它，避免历史文档里的脏值把图拉到画布外。
+ *
+ * 链接图在首次抓取前不知道原始尺寸（`naturalWidth = 0`），此时若调用方给了
+ * 已解码的图（`resolved`），就用它的真实尺寸作为整图范围；两者都没有才退化成 1×1。
  */
-export function imageCropOf(node: DocNode): Rect {
+export function imageCropOf(node: DocNode, resolved?: { width: number; height: number }): Rect {
   const ref = node.image;
   if (!ref) return { x: 0, y: 0, width: 1, height: 1 };
-  const full = fullImageCrop(ref);
+  const known = ref.naturalWidth > 0 && ref.naturalHeight > 0;
+  const full = known || !resolved
+    ? fullImageCrop(ref)
+    : { x: 0, y: 0, width: Math.max(1, resolved.width), height: Math.max(1, resolved.height) };
   const crop = ref.crop ?? full;
+
   const width = Math.max(1, Math.min(crop.width, full.width));
   const height = Math.max(1, Math.min(crop.height, full.height));
   return {

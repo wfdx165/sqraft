@@ -60,7 +60,8 @@ import { flushNudge, nudgeSelection } from "../canvas/nudge";
 import { marqueeHits } from "../canvas/marquee";
 import { boundsHandlePoints, selectionBounds as boundsOfSelection } from "../canvas/selection-bounds";
 import { renderPngAsync } from "../canvas/export-image";
-import { imageAssetIds } from "../canvas/image-assets";
+import { imageRefsOf } from "../canvas/image-assets";
+import { ensureLinkedImage, linkedImage } from "../linked-images";
 import { RULER_SIZE, drawGuidesOverlay, drawRulers, guideAt } from "../canvas/rulers";
 import {
   abortMultiScale,
@@ -412,6 +413,7 @@ function draw() {
     geometryPreview: insertPreview?.boxes,
     dimPageIds,
     resolveImage: (assetId) => imageFor(assetId),
+    resolveLinkedImage: (url) => linkedImage(url),
   });
   backend.endFrame();
 
@@ -759,7 +761,9 @@ async function copySelectionAsPng(): Promise<void> {
     nodeIds: ids.length > 0 ? ids : undefined,
     scale: 2,
     resolveImage: (assetId) => imageFor(assetId),
+    resolveLinkedImage: (url) => linkedImage(url),
     ensureImage: ensureAssetDecoded,
+    ensureLinkedImage,
   });
   if (!dataUrl) return;
   await window.sqraft.app.writeClipboardImage(dataUrl);
@@ -2240,14 +2244,19 @@ onMounted(() => {
     // 截图只覆盖视口（或给定 region）：先把相交的位图解码好，再交给同步渲染。
     // 不传 resolveImage 的话 drawDocument 会把所有图片画成占位灰叉。
     const viewportRegion = { x: vp.x, y: vp.y, width: vp.width / vp.zoom, height: vp.height / vp.zoom };
-    const ids = imageAssetIds(docStore.doc, { region: region ?? viewportRegion });
-    await Promise.all(ids.map((id) => ensureAssetDecoded(id).catch(() => null)));
+    const refs = imageRefsOf(docStore.doc, { region: region ?? viewportRegion });
+    await Promise.all(refs.assetIds.map((id) => ensureAssetDecoded(id).catch(() => null)));
+    // 链接图抓不到也不阻断截图：画成占位即可（与"断网用旧缓存"的约定一致）
+    await Promise.all(refs.urls.map((url) => ensureLinkedImage(url).catch(() => null)));
     // 字体同理：刚导入字体就截图时，别落成回退字体
     await document.fonts.ready;
 
     const offBackend = new Canvas2DBackend(offCtx);
     offBackend.beginFrame(vp);
-    drawDocument(offBackend, docStore.doc, { resolveImage: (assetId) => imageFor(assetId) });
+    drawDocument(offBackend, docStore.doc, {
+      resolveImage: (assetId) => imageFor(assetId),
+      resolveLinkedImage: (url) => linkedImage(url),
+    });
     offBackend.endFrame();
     if (!region) return off.toDataURL("image/png");
 
@@ -2288,7 +2297,9 @@ onMounted(() => {
       nodeIds,
       scale: request.scale,
       resolveImage: (assetId) => imageFor(assetId),
+      resolveLinkedImage: (url) => linkedImage(url),
       ensureImage: ensureAssetDecoded,
+      ensureLinkedImage,
     });
   };
   hooks.startRenameOf = (id) => {

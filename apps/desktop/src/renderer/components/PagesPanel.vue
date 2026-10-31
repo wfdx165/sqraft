@@ -19,6 +19,7 @@ import { planLayerDrop, type DropPosition } from "../canvas/layer-drag";
 import { canExpand, isLayerExpanded } from "../canvas/layer-tree";
 import Icon from "./Icon.vue";
 import { assetUrl } from "../assets";
+import { linkedPreviewUrl, linkedVersion } from "../linked-images";
 
 interface Row {
   node: DocNode;
@@ -125,9 +126,12 @@ const iconOf: Record<string, string> = {
   slot: "slot",
 };
 
-/** 图片图层用缩略图代替类型图标；资源缺失时退回图标。 */
+/** 图片图层用缩略图代替类型图标；资源缺失（或链接图还没加载）时退回图标。 */
 function thumbOf(n: DocNode): string | null {
-  return n.image ? assetUrl(n.image.assetId) : null;
+  if (!n.image) return null;
+  if (n.image.assetId) return assetUrl(n.image.assetId);
+  void linkedVersion.value;
+  return linkedPreviewUrl(n.image.sourceUrl);
 }
 
 function toggleLayerLock(n: DocNode): void {

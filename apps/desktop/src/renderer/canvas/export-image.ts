@@ -6,7 +6,7 @@
  */
 import { subtreeWorldBounds, worldRect, type DocState, type NodeId, type Rect } from "@sqraft/core";
 import { Canvas2DBackend, drawDocument, type ResolvedImage, type Viewport } from "@sqraft/render";
-import { imageAssetIds } from "./image-assets";
+import { imageRefsOf } from "./image-assets";
 
 export interface ExportRequest {
   /** 要导出的页面；只导出主组件（根节点）时省略 */
@@ -16,8 +16,30 @@ export interface ExportRequest {
   /** 倍率：1 / 2 / 3 */
   scale: number;
   resolveImage: (assetId: string) => ResolvedImage | null;
+  /** 链接（远程）图的解码入口；缺省视为未加载（画占位） */
+  resolveLinkedImage?: (url: string) => ResolvedImage | null;
   /** 异步解码入口（可选）：导出前把用到的图片先解码，避免落成占位 */
   ensureImage?: (assetId: string) => Promise<ResolvedImage | null>;
+  /** 链接图的异步预载入口（可选）：导出前抓取/解码，失败不阻断导出 */
+  ensureLinkedImage?: (url: string) => Promise<ResolvedImage | null>;
+}
+
+/**
+ * 导出前把用到的图都解码好。链接图抓不到也继续导出（画空框），
+ * 与"断网时用旧缓存、没有缓存也不报错"的约定一致。
+ */
+export async function preloadImages(doc: DocState, request: Pick<ExportRequest, "pageId" | "nodeIds" | "ensureImage" | "ensureLinkedImage">): Promise<void> {
+  const refs = imageRefsOf(doc, { pageId: request.pageId, nodeIds: request.nodeIds });
+  const tasks: Promise<unknown>[] = [];
+  if (request.ensureImage) {
+    const ensure = request.ensureImage;
+    tasks.push(...refs.assetIds.map((id) => ensure(id).catch(() => null)));
+  }
+  if (request.ensureLinkedImage) {
+    const ensure = request.ensureLinkedImage;
+    tasks.push(...refs.urls.map((url) => ensure(url).catch(() => null)));
+  }
+  await Promise.all(tasks);
 }
 
 /**
@@ -46,11 +68,7 @@ export function exportBounds(doc: DocState, request: Pick<ExportRequest, "pageId
  * 直接 `renderPng` 会画成占位图。
  */
 export async function renderPngAsync(doc: DocState, request: ExportRequest): Promise<string> {
-  if (request.ensureImage) {
-    const ensure = request.ensureImage;
-    const ids = imageAssetIds(doc, { pageId: request.pageId, nodeIds: request.nodeIds });
-    await Promise.all(ids.map((id) => ensure(id).catch(() => null)));
-  }
+  await preloadImages(doc, request);
   return renderPng(doc, request);
 }
 
@@ -75,6 +93,7 @@ export function renderPng(doc: DocState, request: ExportRequest): string {
   backend.beginFrame(viewport);
   drawDocument(backend, doc, {
     resolveImage: request.resolveImage,
+    resolveLinkedImage: request.resolveLinkedImage,
     // 选区导出：只画子树（透明底）；页面导出：只画这一页，且不带根级母版
     onlyRootIds: request.nodeIds?.length ? request.nodeIds : undefined,
     onlyPageIds: request.nodeIds?.length ? undefined : request.pageId ? [request.pageId] : undefined,

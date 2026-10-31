@@ -55,9 +55,17 @@ function drawSelf(
       backend.drawPolygon(node, polygonPoints(node.sides, node.width, node.height), fill, stroke, node.style.strokeWidth ?? 1);
       break;
     case "image": {
-      const resolved = node.image ? ctx.resolveImage(node.image.assetId) : null;
-      if (resolved && node.image) {
-        backend.drawImage(node, resolved, imageCropOf(node), cornerRadiusOf(node.style));
+      const ref = node.image;
+      const resolved = ref
+        ? ref.assetId
+          ? ctx.resolveImage(ref.assetId)
+          : ref.sourceUrl
+            ? ctx.resolveLinkedImage(ref.sourceUrl)
+            : null
+        : null;
+      if (resolved && ref) {
+        // 链接图首次抓取前 `naturalWidth` 为 0：用解码尺寸当整图范围，别把图裁成 1×1
+        backend.drawImage(node, resolved, imageCropOf(node, resolved), cornerRadiusOf(node.style));
       } else {
         // 资源没带过来或还没解码完：画占位，别让画布出现"什么都没有"的空洞
         backend.drawImagePlaceholder(node, cornerRadiusOf(node.style));
@@ -206,8 +214,15 @@ export interface DrawOptions {
   geometryPreview?: ReadonlyMap<NodeId, { x: number; y: number; width: number; height: number }>;
   /** 需要淡化的页面（编辑模式下的非活动页）。 */
   dimPageIds?: readonly NodeId[];
-  /** 图片解码缓存入口（渲染层注入；缺省视为全部缺失） */
+  /**
+   * 图片解码缓存入口（渲染层注入；缺省视为全部缺失）
+   */
   resolveImage?: (assetId: string) => ResolvedImage | null;
+  /**
+   * 链接（远程）图片的解码缓存入口（渲染层注入；缺省视为全部未加载）。
+   * 与 `resolveImage` 分开：嵌入图按内容哈希取，链接图按 URL 取。
+   */
+  resolveLinkedImage?: (url: string) => ResolvedImage | null;
   /**
    * 只画这些子树（导出选区用）：不画页面底，按各自的世界位置摆放。
    * 与 `dimPageIds` 互斥——导出时不需要页面淡化。
@@ -250,6 +265,7 @@ export function drawDocument(backend: RenderBackend, doc: DocState, options: Dra
     doc,
     resolveColor: (p) => resolvePaint(doc, p),
     resolveImage: options.resolveImage ?? (() => null),
+    resolveLinkedImage: options.resolveLinkedImage ?? (() => null),
   };
   // 导出选区：只画选中的子树，按世界位置摆放，不画页面底
   if (options.onlyRootIds) {

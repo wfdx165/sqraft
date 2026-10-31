@@ -1493,7 +1493,15 @@ export class DocStore {
     }
   }
 
+  /**
+   * 文档快照（保存用）。
+   *
+   * 用 JSON 深拷贝而不是 `structuredClone`：文档格式本来就只有 JSON 值，
+   * 而 `structuredClone` 遇到 Vue reactive 代理 / 函数 / DOM 对象会抛 `DataCloneError`。
+   * 只要 UI 层不小心把 `ref(...).value` 或 `reactive(...)` 塞进过一次命令参数，
+   * 文档里就会永久留下代理，之后每次保存都会静默失败（这条路径没有 try/catch）。
+   */
   snapshot(): DocState {
-    return structuredClone(this.state);
+    return JSON.parse(JSON.stringify(this.state)) as DocState;
   }
 }

@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { dataDirOf, prepareDataDir } from "./data-dir";
 import { attachCloseGuard, registerCloseChannels } from "./close-guard";
 import { registerFileChannels } from "./ipc";
+import { registerImageCacheChannels } from "./image-cache";
 import { registerMcpChannels, shutdownMcp, startMcp } from "./mcp";
 import { logError, logInfo } from "./mcp/log";
 import { removeStaleCliLink } from "./mcp/setup";
@@ -171,6 +172,7 @@ function createWindow(): void {
 app.whenReady().then(async () => {
   if (!isDev) applyContentSecurityPolicy();
   registerFileChannels();
+  registerImageCacheChannels();
   registerCloseChannels();
   registerMenuChannels();
   rebuildMenu();

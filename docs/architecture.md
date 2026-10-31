@@ -253,7 +253,7 @@ ops.ndjson         快照之后的增量命令流
 assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 ```
 
-- 图片节点只记 `assetId` 与原图尺寸，字节在 `assets/`；同一张图多处使用只存一份（ADR-0022）。
+- 图片节点两种来源：嵌入图只记 `assetId` 与原图尺寸，字节在 `assets/`（同一张图多处使用只存一份，ADR-0022）；**链接图只记 `sourceUrl`**，字节不进文件、按 URL 缓存在 `~/.sqraft/cache/images/`（ADR-0027）。链接图的 `naturalWidth/Height` 在首次抓取前为 0，`crop` 缺省表示整图。
 
 - 打开文件 = 载入快照 + 重放增量（确定性命令保证重放安全）；
 - 保存时若增量超过阈值则折叠为新快照；
@@ -294,8 +294,8 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 | `rename_token` | 写 | 重命名 Token，fill / stroke / 阴影颜色引用随动 |
 | `delete_token` | 写 | 删除 Token。仍被节点引用时默认拒绝；`detach=true` 把引用冻结成当前取值的字面量再删（视觉不变，一条撤销） |
 | `create_page` | 写 | 新建页面（省略名字按「页面 N」编号；位置默认接在最右侧） |
-| `create_node` | 写 | 建节点（颜色可引用 Token，也可给字面量）；`kind=component` 不接受 `parentId`，省略坐标自动排到组件区 |
-| `update_node` | 写 | 改属性与名字（页面 / 图层 / 组件；颜色规则同上） |
+| `create_node` | 写 | 建节点（颜色可引用 Token，也可给字面量）；`kind=component` 不接受 `parentId`，省略坐标自动排到组件区；`kind=image` 给 `image.data`（base64，≤5MB）或 `image.url`（http/https 链接，字节不进文件） |
+| `update_node` | 写 | 改属性与名字（页面 / 图层 / 组件；颜色规则同上）；图片可用 `crop` 改可见区域、`imageUrl` 换远程链接 |
 | `delete_node` | 写 | 删除节点 |
 | `duplicate_node` / `group_nodes` / `arrange_nodes` | 写 | 复制、分组/解组、对齐/分布 |
 | `move_node` | 写 | 换父级（等价画布拖动，世界坐标不变；自动布局容器默认进流） |

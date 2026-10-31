@@ -806,6 +806,61 @@ describe("图片工具", () => {
     const rect = await call(run, "create_node", { kind: "rect" });
     await expect(call(run, "update_node", { nodeId: rect.nodeId, crop: { x: 0, y: 0 } })).rejects.toThrow(/图片节点/);
   });
+
+  it("kind=image 支持远程链接：只存 URL，不调宿主、不落资源", async () => {
+    const store = new DocStore(createDocWithPage());
+    const calls: string[] = [];
+    const run = makeExecutor(store, async () => "", undefined, undefined, host(calls));
+    const created = await call(run, "create_node", {
+      kind: "image",
+      image: { url: "https://cdn.example.com/banner.png" },
+    });
+    const node = store.doc.nodes[created.nodeId as string];
+    expect(node.image).toEqual({
+      sourceUrl: "https://cdn.example.com/banner.png",
+      naturalWidth: 0,
+      naturalHeight: 0,
+    });
+    // 懒加载：尺寸未知时给个可用默认框，抓取后由 GUI 的「适应原尺寸」调整
+    expect(node.width).toBe(100);
+    expect(node.height).toBe(100);
+    expect(calls).toEqual([]);
+  });
+
+  it("image 的 data 与 url 只能给一个，非 http(s) 地址拒绝", async () => {
+    const store = new DocStore(createDocWithPage());
+    const run = makeExecutor(store, async () => "");
+    await expect(
+      call(run, "create_node", { kind: "image", image: { data: PNG_BASE64, url: "https://a/b.png" } }),
+    ).rejects.toThrow(/只能给一个/);
+    await expect(call(run, "create_node", { kind: "image", image: { url: "file:///etc/passwd" } })).rejects.toThrow(
+      /http/,
+    );
+    await expect(call(run, "create_node", { kind: "image", image: { url: "不是地址" } })).rejects.toThrow(/URL/);
+  });
+
+  it("update_node imageUrl 换源后裁切作废、尺寸归零", async () => {
+    const store = new DocStore(createDocWithPage());
+    const calls: string[] = [];
+    const run = makeExecutor(store, async () => "", undefined, undefined, host(calls));
+    const created = await call(run, "create_node", { kind: "image", image: { data: PNG_BASE64 } });
+    const nodeId = created.nodeId as string;
+    await call(run, "update_node", { nodeId, crop: { x: 10, y: 20, width: 100, height: 80 }, imageUrl: "https://a/b.jpg" });
+    expect(store.doc.nodes[nodeId].image).toEqual({
+      sourceUrl: "https://a/b.jpg",
+      naturalWidth: 0,
+      naturalHeight: 0,
+    });
+  });
+
+  it("链接图未加载时改 crop 给出可读错误", async () => {
+    const store = new DocStore(createDocWithPage());
+    const run = makeExecutor(store, async () => "");
+    const created = await call(run, "create_node", { kind: "image", image: { url: "https://a/b.png" } });
+    await expect(
+      call(run, "update_node", { nodeId: created.nodeId, crop: { x: 0, y: 0, width: 10, height: 10 } }),
+    ).rejects.toThrow(/还没加载/);
+  });
 });
 
 describe("AI 工具：分组 / 排列 / 复制", () => {
