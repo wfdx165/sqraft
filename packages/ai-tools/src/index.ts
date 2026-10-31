@@ -3,7 +3,16 @@
  * 纪律：颜色优先引用 Token，也可以直接用字面量（ADR-0024）。
  */
 
-import type { Command, DocNode, DocStore, Effect, NodeId, NodeStyle, VectorAnchor } from "@sqraft/core";
+import type {
+  Command,
+  DocNode,
+  DocState,
+  DocStore,
+  Effect,
+  NodeId,
+  NodeStyle,
+  VectorAnchor,
+} from "@sqraft/core";
 import {
   DEFAULT_PAGE_HEIGHT,
   DEFAULT_PAGE_WIDTH,
@@ -24,6 +33,7 @@ import {
   type DistributeAxis,
   type ReorderAction,
   nextComponentName,
+  planTokenDelete,
   validateVector,
   tokenColorOf,
   tokenNumberOf,
@@ -223,6 +233,23 @@ export const tools: ToolDefinition[] = [
         to: { type: "string", description: "新路径" },
       },
       required: ["from", "to"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "delete_token",
+    description:
+      "删除一个设计 Token。仍被节点引用时默认拒绝；detach=true 会把引用冻结成当前取值的字面量再删除（视觉不变，可撤销）。",
+    input_schema: {
+      type: "object",
+      properties: {
+        path: { type: "string", description: "Token 路径，如 color/primary" },
+        detach: {
+          type: "boolean",
+          description: "仍有引用时是否把它们冻结为字面量；省略或 false 时有引用直接报错",
+        },
+      },
+      required: ["path"],
       additionalProperties: false,
     },
   },
@@ -820,6 +847,7 @@ function applyNodeArgs(args: Record<string, unknown>): Partial<DocNode> {
 export const MUTATING_TOOLS: ReadonlySet<string> = new Set([
   "define_token",
   "rename_token",
+  "delete_token",
   "create_page",
   "create_node",
   "create_instance",
@@ -835,6 +863,24 @@ export const MUTATING_TOOLS: ReadonlySet<string> = new Set([
   "arrange_nodes",
   "duplicate_node",
 ]);
+
+/** 报错里最多列几个节点，其余用数量收口 */
+const TOKEN_REF_PREVIEW = 5;
+/** 节点名截断长度：名字是用户随手起的，可能很长 */
+const REF_NAME_MAX = 24;
+
+/** 被引用时拒绝删除：给 agent 明确的下一步（detach 会冻结成什么值），并带节点名便于核对 */
+function blockedDeleteMessage(doc: DocState, path: string, refs: NodeId[], value: string): string {
+  const preview = refs
+    .slice(0, TOKEN_REF_PREVIEW)
+    .map((id) => `${(doc.nodes[id]?.name ?? "未命名").slice(0, REF_NAME_MAX)}(${id})`)
+    .join("、");
+  const rest = refs.length > TOKEN_REF_PREVIEW ? `，另有 ${refs.length - TOKEN_REF_PREVIEW} 个` : "";
+  return (
+    `Token "${path}" 仍被 ${refs.length} 个节点引用：${preview}${rest}` +
+    `；传 detach=true 会把它们冻结为 ${value} 后删除（完整名单见 read_document）`
+  );
+}
 
 /** 空文档没有页面：先建第一页（与人工"新建页面"同一套命令，仍在这一条事务里）。 */
 function ensurePage(store: DocStore): NodeId {
@@ -972,6 +1018,27 @@ export function makeExecutor(
         if (store.doc.tokens[to]) throw new Error(`Token "${to}" 已存在，不能重命名`);
         store.apply({ type: "token.rename", params: { from, to } }, "ai:rename_token");
         return JSON.stringify({ ok: true, from, to });
+      }
+      case "delete_token": {
+        const path = tokenPathOf(args.path);
+        if (!path) throw new Error(`Token 路径 "${String(args.path ?? "")}" 不合法：至少形如 color/primary`);
+
+        // 宽容解析：部分客户端会把布尔写成字符串；"false" / 缺省仍按拒绝处理（安全侧不放松）
+        const detach = args.detach === true || args.detach === "true";
+        const plan = planTokenDelete(store.doc, path, detach);
+        if (plan.status === "missing") throw new Error(`Token "${path}" 不存在`);
+        if (plan.status === "blocked") throw new Error(blockedDeleteMessage(store.doc, path, plan.refs, plan.value));
+
+        try {
+          for (const cmd of plan.commands) store.apply(cmd, "ai:delete_token");
+        } catch (error) {
+          // 引用里含锁定节点时，core 只会说「节点「X」已锁定」：补上是谁在做哪件事
+          throw new Error(
+            `删除 Token "${path}" 失败：${error instanceof Error ? error.message : String(error)}` +
+              "（引用含锁定节点时需先解锁）",
+          );
+        }
+        return JSON.stringify({ ok: true, path, detached: plan.refs.length });
       }
       case "create_page": {
         const position = nextPagePosition(store.doc);

@@ -6,6 +6,7 @@
  */
 import type { DocState, NodeId } from "./model";
 import type { Command } from "./store";
+import { mapOverridePaints, mapTokenPaints } from "./token-refs";
 
 export type TokenCommand = Extract<Command, { type: "token.define" | "token.delete" | "token.rename" }>;
 
@@ -46,26 +47,13 @@ export function applyTokenCommand(state: DocState, cmd: TokenCommand, changed: S
 
       // 引用随动：填充、描边与阴影颜色（效果里的 Paint）都要跟着改
       for (const node of Object.values(state.nodes)) {
-        const style = node.style;
-        let next: typeof style | null = null;
-        if (style.fill?.token === from) next = { ...style, fill: { ...style.fill, token: to } };
-        if (style.stroke?.token === from) next = { ...(next ?? style), stroke: { ...style.stroke, token: to } };
-        const effects = style.effects;
-        if (effects?.some((e) => (e.type === "drop-shadow" || e.type === "inner-shadow") && e.color.token === from)) {
-          const base = next ?? style;
-          next = {
-            ...base,
-            effects: (base.effects ?? []).map((effect) => {
-              if (effect.type !== "drop-shadow" && effect.type !== "inner-shadow") return effect;
-              if (effect.color.token !== from) return effect;
-              return { ...effect, color: { ...effect.color, token: to } };
-            }),
-          };
-        }
+        const next = mapTokenPaints(node.style, from, (paint) => ({ ...paint, token: to }));
         if (next) {
           node.style = next;
           changed.add(node.id);
         }
+        // 实例覆盖是另一份持久化差异：漏了它，下一次组件同步会把旧路径写回克隆节点
+        if (mapOverridePaints(node, from, (paint) => ({ ...paint, token: to }))) changed.add(node.id);
       }
       changed.add("__doc__" as NodeId);
       return { cmd: { type: "token.rename", params: { from: to, to: from } } };

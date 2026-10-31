@@ -1077,6 +1077,49 @@ describe("AI 工具：设计 Token", () => {
     expect(store.doc.tokens["color/two"]).toBeUndefined();
     expect(store.doc.tokens["color/one"]).toBeDefined();
   });
+
+  it("delete_token 删除无引用的 Token", async () => {
+    const { store, run } = setup();
+    await run("define_token", { path: "color/brand", type: "color", value: "#3366ff" });
+
+    const res = await call(run, "delete_token", { path: "color/brand" });
+    expect(res).toMatchObject({ ok: true, path: "color/brand", detached: 0 });
+    expect(store.doc.tokens["color/brand"]).toBeUndefined();
+  });
+
+  it("delete_token 有引用时默认拒绝，且文档不变", async () => {
+    const { store, run } = setup();
+    await run("define_token", { path: "color/brand", type: "color", value: "#3366ff" });
+    const created = await call(run, "create_node", { kind: "rect", fillToken: "color/brand" });
+    const nodeId = created.nodeId as string;
+
+    await expect(run("delete_token", { path: "color/brand" })).rejects.toThrow(/仍被 1 个节点引用/);
+    await expect(run("delete_token", { path: "color/brand" })).rejects.toThrow(/detach=true/);
+    expect(store.doc.tokens["color/brand"]).toEqual({ type: "color", value: "#3366ff" });
+    expect(store.doc.nodes[nodeId].style.fill).toEqual({ token: "color/brand" });
+  });
+
+  it("delete_token detach=true 冻结引用为字面量，一条撤销整体还原", async () => {
+    const { store, run } = setup();
+    await run("define_token", { path: "color/brand", type: "color", value: "#3366ff" });
+    const created = await call(run, "create_node", { kind: "rect", fillToken: "color/brand" });
+    const nodeId = created.nodeId as string;
+
+    const res = await call(run, "delete_token", { path: "color/brand", detach: true });
+    expect(res).toMatchObject({ ok: true, detached: 1 });
+    expect(store.doc.tokens["color/brand"]).toBeUndefined();
+    expect(store.doc.nodes[nodeId].style.fill).toEqual({ value: "#3366ff" });
+
+    store.undo();
+    expect(store.doc.tokens["color/brand"]).toEqual({ type: "color", value: "#3366ff" });
+    expect(store.doc.nodes[nodeId].style.fill).toEqual({ token: "color/brand" });
+  });
+
+  it("delete_token 拒绝不存在的路径与非法路径", async () => {
+    const { run } = setup();
+    await expect(run("delete_token", { path: "color/missing" })).rejects.toThrow(/不存在/);
+    await expect(run("delete_token", { path: "brand" })).rejects.toThrow(/路径/);
+  });
 });
 
 describe("AI 工具：选区", () => {

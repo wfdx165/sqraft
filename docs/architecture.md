@@ -185,7 +185,7 @@ interface RenderBackend {
 - **左栏 tab**：`页面 | 组件 | 设计系统`，默认停在页面；tab 不持久化。
 - **图层树**：所有有子元素的容器（画板 / 分组 / 组件 / 实例 / 插槽）都可折叠——单击整行 = 选中 + 切换折叠（`⇧` 多选只选中不切换），行首小三角展开时朝下、折叠时朝右；默认实例折叠、其它容器展开，状态存在 `ui.expandedLayers`（纯 UI，不进文档/撤销/磁盘），折叠不改变选区与画布选中框。
 - **页面面板**：页面列表可搜索（忽略大小写子串 + 命中片段高亮 + 「命中 / 总数」徽标），过滤不改变手风琴与展开状态；`⌘F` 从任意位置切到页面 tab 并聚焦搜索框（全局动作，已在框内则全选）。点页面行 = 切页 + 适配该页（再点当前页也会重新适配）；行首小三角单独控制该页图层的展开/折叠。
-- **设计系统面板**：按路径前缀分组列出 `DocState.tokens`（可折叠、可过滤）；颜色行用色块 + 完整路径 + hex（色块点开系统取色器），数字行给数值输入；**改值 / 新增 / 双击改名都走命令**（`token.define` / `token.rename`，可撤销，引用随动）。v1 不支持删除、不统计引用。
+- **设计系统面板**：按路径前缀分组列出 `DocState.tokens`（可折叠、可过滤）；颜色行用色块 + 完整路径 + hex（色块点开系统取色器），数字行给数值输入；**改值 / 新增 / 双击改名 / 删除都走命令**（`token.define` / `token.rename` / `token.delete`，可撤销，引用随动）。删除仍被引用的 Token 会先要求确认，确认后把引用冻结成当前取值的字面量，与删除包成同一条撤销——不做"删了就变洋红"的悬空引用；平时不统计引用数，只在这个确认动作里算一次。
 - **快捷键注册表**（`apps/desktop/src/renderer/shortcuts.ts`）：动作表 + 默认键位 + `localStorage` 覆盖（只存差异）+ 冲突校验 + 全局分发。tooltip、面板、画布全部从 `keyOf()` 读取，禁止硬编码键位文案（见 ADR-0011）。
 - **快捷键面板**是居中对话框（遮罩 + 对话框），点行就地录制；`Esc` / 点遮罩 / `⌘/` 关闭；冲突与浏览器保留键当场拒绝；「恢复默认」需 3 秒内二次确认。
 - 单键快捷键在输入框（input / textarea / select / contentEditable）内一律让位；文件类命令（`⌘O / ⌘S`）与页面搜索（`⌘F`）除外。
@@ -228,7 +228,8 @@ interface RenderBackend {
 
 - Token：`{ path: "color/primary", type: "color", value: "#3366ff" }` —— 单一取值，不引入模式/主题维度（见 ADR-0006）；
 - 节点样式存**Token 引用** `{ token: "color/primary" }`，渲染前解析为具体值（每次解析，暂无缓存）；
-- **改名是原子命令**（`token.rename from → to`）：一次 apply 内搬条目并重写所有节点的 `style.fill.token` / `style.stroke.token`，只占一步撤销；源不存在或目标重名直接抛错，不做静默 no-op。**删除**暂无命令（v1 范围外），删除会留下悬空引用，需连带迁移策略再做；
+- **改名是原子命令**（`token.rename from → to`）：一次 apply 内搬条目并重写所有节点的 `style.fill.token` / `style.stroke.token`，**同时改写实例覆盖表**（`instance.overrides[key].style`——它是另一份持久化差异，漏掉的话下一次组件同步会把旧路径写回克隆节点），只占一步撤销；源不存在或目标重名直接抛错，不做静默 no-op；
+- **删除**（`token.delete`，MCP 侧是 `delete_token` 的 `detach`）：有引用时先把引用冻结成当前取值的字面量再删，仍是同一条撤销；实例覆盖由 `recordOverrides` 按克隆节点的新 style 重算，天然自愈；
 - 导出：W3C DTCG 格式 JSON + 一键生成 CSS 变量；
 - **Agent 纪律**：工具 schema 中样式参数只接受 Token 引用，字面量色值在工具层直接拒绝——这是让 AI 产出可控、可维护的核心手段。
 
@@ -291,6 +292,7 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 | `get_tokens` | 读 | Token 集合与取值；没有 Token 时返回空表 |
 | `define_token` | 写 | 新增/覆盖 Token（颜色接受 #hex 3/6/8 位、rgb/rgba；不能改类型） |
 | `rename_token` | 写 | 重命名 Token，fill / stroke / 阴影颜色引用随动 |
+| `delete_token` | 写 | 删除 Token。仍被节点引用时默认拒绝；`detach=true` 把引用冻结成当前取值的字面量再删（视觉不变，一条撤销） |
 | `create_page` | 写 | 新建页面（省略名字按「页面 N」编号；位置默认接在最右侧） |
 | `create_node` | 写 | 建节点（颜色可引用 Token，也可给字面量）；`kind=component` 不接受 `parentId`，省略坐标自动排到组件区 |
 | `update_node` | 写 | 改属性与名字（页面 / 图层 / 组件；颜色规则同上） |
