@@ -7,20 +7,29 @@ import { computed, onMounted, ref } from "vue";
 import { newDocument, openDocument, openDocumentPath } from "../file-session";
 import { MCP_TOOL_COUNT, mcpUi } from "../mcp-host";
 import { mcpSetup } from "../mcp-setup";
-import { actionText, clientCommand, statusLine, welcomeMcpState, type McpClient } from "../mcp-welcome";
+import {
+  MCP_CLIENTS,
+  actionText,
+  clientSnippet,
+  statusLine,
+  welcomeMcpState,
+  type McpClient,
+} from "../mcp-welcome";
 
 const emit = defineEmits<{ "open-mcp-setup": [] }>();
 
 const recent = ref<{ path: string; name: string }[]>([]);
 const info = mcpSetup.info;
 const copied = ref(false);
-const installing = ref(false);
 const message = ref("");
 const client = ref<McpClient>("claude");
 
 const state = computed(() => welcomeMcpState(info.value, mcpUi.clients));
 const statusText = computed(() => (mcpUi.busy ? "agent 正在修改文档…" : statusLine(mcpUi)));
-const command = computed(() => clientCommand(info.value, client.value));
+const snippet = computed(() => clientSnippet(info.value, client.value));
+const driftText = computed(() =>
+  mcpUi.driftFrom ? `端口 ${mcpUi.driftFrom} 被占用，已改用 ${mcpUi.port}；请更新已配置的客户端。` : "",
+);
 
 async function refreshRecent(): Promise<void> {
   recent.value = (await window.sqraft.recent.list()).slice(0, 4);
@@ -28,9 +37,9 @@ async function refreshRecent(): Promise<void> {
 
 onMounted(() => {
   void refreshRecent();
-  // 与配置面板共用同一份配置：面板里装完会直接反映到这里
+  // 与配置面板共用同一份配置：面板里改完端口会直接反映到这里
   void mcpSetup.ensure().then((next) => {
-    if (!next) message.value = "读取接入配置失败，可以打开配置面板重试。";
+    if (!next) message.value = "读取接入配置失败，可以打开端口设置重试。";
   });
 });
 
@@ -40,36 +49,22 @@ async function openRecent(path: string): Promise<void> {
   await refreshRecent();
 }
 
-function copyCommand(): void {
-  if (!command.value) return;
-  window.sqraft.app.copyText(command.value);
+function copySnippet(): void {
+  if (!snippet.value) return;
+  window.sqraft.app.copyText(snippet.value);
   copied.value = true;
   window.setTimeout(() => {
     if (copied.value) copied.value = false;
   }, 1400);
 }
 
-async function install(): Promise<void> {
-  installing.value = true;
-  message.value = "";
-  try {
-    const result = await window.sqraft.mcp.installCli();
-    message.value = result.message;
-    mcpSetup.set(result.info);
-  } catch (error) {
-    message.value = `安装失败：${error instanceof Error ? error.message : String(error)}`;
-  } finally {
-    installing.value = false;
-  }
-}
-
-/** 三态主按钮：没装就装，装了没连就复制命令，已连接则没有动作 */
+/** 三态主按钮：服务没起来去查端口，没人连就复制片段，已连接则没有动作 */
 function runPrimary(): void {
-  if (state.value === "not-installed") void install();
-  else if (state.value === "idle") copyCommand();
+  if (state.value === "offline") emit("open-mcp-setup");
+  else if (state.value === "idle") copySnippet();
 }
 
-/** 切换客户端预设：命令不同，但指向同一个 CLI */
+/** 切换客户端预设：外壳不同，指向同一个端点 */
 function switchClient(next: McpClient): void {
   if (client.value === next) return;
   client.value = next;
@@ -97,48 +92,34 @@ function switchClient(next: McpClient): void {
 
         <div class="clients" role="tablist" aria-label="客户端">
           <button
+            v-for="item in MCP_CLIENTS"
+            :key="item.id"
             class="client"
-            :class="{ on: client === 'claude' }"
+            :class="{ on: client === item.id }"
             role="tab"
-            :aria-selected="client === 'claude'"
+            :aria-selected="client === item.id"
             type="button"
-            @click="switchClient('claude')"
+            @click="switchClient(item.id)"
           >
-            Claude Code
-          </button>
-          <button
-            class="client"
-            :class="{ on: client === 'opencode' }"
-            role="tab"
-            :aria-selected="client === 'opencode'"
-            type="button"
-            @click="switchClient('opencode')"
-          >
-            OpenCode
+            {{ item.label }}
           </button>
         </div>
 
         <div class="command">
-          <code :title="command">{{ command }}</code>
-          <button class="copy" type="button" :disabled="!command" @click="copyCommand">
+          <code :title="snippet">{{ snippet }}</code>
+          <button class="copy" type="button" :disabled="!snippet" @click="copySnippet">
             {{ copied ? "已复制" : "复制" }}
           </button>
         </div>
 
+        <p v-if="driftText" class="warn">{{ driftText }}</p>
+
         <div class="mcp-actions">
-          <button
-            v-if="state !== 'connected'"
-            class="install"
-            type="button"
-            :disabled="installing"
-            @click="runPrimary"
-          >
-            {{ installing ? "安装中…" : actionText(state) }}
+          <button v-if="state !== 'connected'" class="install" type="button" @click="runPrimary">
+            {{ actionText(state) }}
           </button>
           <span v-else class="ready">agent 已接入，可以直接下指令</span>
-          <button class="link" type="button" @click="emit('open-mcp-setup')">
-            其他客户端 / 安装到 PATH
-          </button>
+          <button class="link" type="button" @click="emit('open-mcp-setup')">端口设置 / 全部客户端</button>
         </div>
 
         <p v-if="message" class="message">{{ message }}</p>
@@ -379,6 +360,12 @@ function switchClient(next: McpClient): void {
   margin: 0;
   font-size: 11.5px;
   color: var(--text-dim);
+}
+
+.warn {
+  margin: 0;
+  font-size: 11.5px;
+  color: var(--warning, #a8641a);
 }
 
 .divider {

@@ -1,8 +1,6 @@
 /**
  * 接入配置的渲染层 store：欢迎页与配置面板共用同一份 `McpSetupInfo`。
- *
- * 之前两个组件各自 `ref` 一份，于是在面板里装完 CLI、关掉面板，欢迎页仍显示
- * "安装命令行工具"（那份 info 还是挂载时读到的旧值）。写操作一律经 `set` 广播。
+ * 端口写操作也经这里广播，避免两个界面各读各的旧值。
  */
 import { ref } from "vue";
 import type { McpSetupInfo } from "../shared/ipc";
@@ -17,7 +15,7 @@ export const mcpSetup = {
 
   /**
    * 读一次配置。失败返回 null（调用方决定怎么提示），且不清空已经拿到的值。
-   * `force` 给配置面板用：每次打开都重新核对磁盘上的软链状态。
+   * `force` 给配置面板用：每次打开都重新取一次主进程的最新状态。
    */
   ensure(force = false): Promise<McpSetupInfo | null> {
     if (!force && info.value) return Promise.resolve(info.value);
@@ -35,8 +33,15 @@ export const mcpSetup = {
     return pending;
   },
 
-  /** 安装等写操作拿到新配置后写回，欢迎页与面板一起更新 */
+  /** 端口改动后写回，欢迎页与面板一起更新 */
   set(next: McpSetupInfo): void {
     info.value = next;
+  },
+
+  /** 改端口：null = 自动（7331 起、被占顺延）；数字 = 严格使用，占用即报错 */
+  async savePort(port: number | null): Promise<McpSetupInfo> {
+    const next = await window.sqraft.mcp.setPort(port);
+    info.value = next;
+    return next;
   },
 };

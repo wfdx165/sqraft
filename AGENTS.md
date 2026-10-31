@@ -74,24 +74,24 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 - `apps/desktop/out/` 是 electron-vite 的产物（main / preload / renderer 三份），不要手改；改源码后要重新构建才会进 App
 - `sandbox: true` 下 preload 只能用 `electron` 等少数模块，不能用 Node 内置模块；需要文件/网络等能力一律回调主进程
 - Electron 二进制在首次 `pnpm dev` 时才下载（`electron` 包没有 postinstall），首次启动会慢
-- 打包时 CLI 必须在 asar 外（`extraResources`），子进程不能从 asar 里执行；未签名构建要用 `CSC_IDENTITY_AUTO_DISCOVERY=false`
+- 打包不需要把任何可执行文件放到 asar 外（旧 CLI 已删除）；未签名构建要用 `CSC_IDENTITY_AUTO_DISCOVERY=false`
 - `electron-builder.yml` 里 `npmRebuild: false` 与 `electronDist: node_modules/electron/dist` 是提速项：项目没有原生模块，且复用已解压的 Electron。加原生依赖时必须去掉 `npmRebuild: false`
 - macOS 用 `hiddenInset` 标题栏：左栏顶部为红绿灯让出 58px，左上 340×46 是拖拽区（`-webkit-app-region: drag`），改布局时别把这块盖住（标题栏只留拖拽，不放控件）。当前文件名与「回欢迎页」是工具栏品牌名右侧的两个胶囊（`Toolbar.vue`）
-- 数据目录：`~/.sqraft/`（偏好、最近文件、`mcp.sock`），启动时由 `data-dir.ts` 从旧 `userData` 迁移一次偏好
-- MCP 端点：`~/.sqraft/mcp.sock`（Unix）或 `\\.\pipe\sqraft-mcp`（Windows）；CLI 里有一份等价路径规则，改路径要两边同步
+- 数据目录：`~/.sqraft/`（偏好、最近文件、排障用的 `mcp.json`），启动时由 `data-dir.ts` 从旧 `userData` 迁移一次偏好
+- MCP 端点：`http://127.0.0.1:<port>/mcp`（Streamable HTTP，ADR-0026）。只绑 loopback、拒绝带 `Origin` 的请求、无 token；默认端口 7331，显式端口被占即报错，自动模式才顺延。应用必须保持运行，没有 CLI 拉起
 - 菜单里**别用 `role: "close"`**：它自带 `CmdOrCtrl+W` 并直接注册，会在渲染层之前吃掉 ⌘W，而 ⌘W 是"关闭文档回欢迎页"（渲染层注册表）。关闭窗口用显式的 ⇧⌘W
 - `CloseGuard` 的放行状态必须随窗口重建复位（`attach()`）：macOS 关窗后从 Dock 重开，留着的 `allow` 会让守卫永久失效、静默丢稿
 - 窗口**启动铺满工作区**（`ready-to-show` 里 `setBounds(display.workArea)`）：不是 macOS 全屏模式、也不进系统「最大化」，所以手动缩放的尺寸不跨启动保留；`preferences.json` 里的 `maximized` 字段目前不参与恢复，别以为它还有用
-- dev 热更新会**重新执行渲染层模块**：注册 IPC 监听必须配套 `import.meta.hot?.dispose(...)` 清理（`file-session.ts` 已这么做）。漏了的话，一次关闭会被多个模块实例各弹一次"保存 / 不保存 / 取消"，看起来像 bug
+- dev 热更新会**重新执行渲染层模块**：注册 IPC 监听必须配套 `import.meta.hot?.dispose(...)` 清理。`mcp-host.ts` 把 disposer 挂到 `globalThis` 并在安装前先摘旧监听（同一条 `tools/call` 只执行一次，否则 `create_node` 会落两个节点）；`file-session.ts` 用模块级 `disposers` 数组 + HMR dispose。漏了的话，一次关闭会被多个模块实例各弹一次"保存 / 不保存 / 取消"
 - 图片资源在 `.sqraft` 的 `assets/` 里按内容哈希命名，`doc.json` 只记 `assetId`；**不要**在保存时按"当前文档引用"清理资源——撤销栈里的节点还引用着它，清掉会让"保存后撤销"变破图（ADR-0022）
-- CLI 改过名（`sqraft-mcp.js` → `sqraft-mcp`）：`setup.ts` 的 `inspectEntry()` 必须把指向本应用 `bin` 下旧文件的软链判成 `stale` 并替换；否则老用户升级后 agent 断链，UI 还会因为"不是本应用创建"拒绝覆盖
+- 旧 CLI 软链迁移：`setup.ts` 的 `removeStaleCliLink()` 启动时只删指向本应用旧 `bin` 的 `current` / `stale` 链接，`foreign` 一律不碰；删之前必须走 `inspectEntry()`，直接 `unlink` 有误删用户文件的先例
 - MCP 操作日志只打终端、不落文件，打包版从 Finder 启动看不见；写法与截断规则见上面「日志」一节
 
 ## 验证
 
 - 代码改动：`pnpm test && pnpm build`
 - 交互改动：dev 在跑且显式开了 `SQRAFT_DEBUG_PORT` 时用调试端口做只读检查（截图 + 读 DOM，不重启实例）；dev 没在跑就只跑 `pnpm test && pnpm build`，把下面的手点清单交给用户
-- 桌面能力（无自动化回归，必须手点）：欢迎页 → 新建 → 改 → 保存 → 关窗 → 重开；MCP 连入 → 建节点 → 截图 → 一次撤销全撤（终端里应能看到对应的 `[mcp]` 行：连接、`tools/call`、耗时）；拖到副屏再拖回
+- 桌面能力（无自动化回归，必须手点）：欢迎页 → 新建 → 改 → 保存 → 关窗 → 重开；MCP 配好 URL → 建节点 → 截图 → 一次撤销全撤（终端里应能看到对应的 `[mcp]` 行：会话、`tools/call`、耗时）；改端口后确认旧会话断开、新地址可用；拖到副屏再拖回
 - 文件相关：新建/画一个矩形 → `⌘S`（首次弹另存为）→ `⌘W`（不应直接关闭）→ 重开 App 打开该文件，内容一致；外部改动该文件后再保存应出现"覆盖 / 另存为"
 
 ## Agent skills

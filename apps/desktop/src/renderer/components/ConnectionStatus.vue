@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from "vue";
+import { visibleClients } from "../connection-status";
 import { mcpUi, refreshMcpStatus } from "../mcp-host";
 
 const open = ref(false);
@@ -7,6 +8,8 @@ const now = ref(Date.now());
 let timer: ReturnType<typeof setInterval> | null = null;
 
 const count = computed(() => mcpUi.clients.length);
+/** 浮层最多列 5 行，其余只报数量 */
+const visible = computed(() => visibleClients(mcpUi.clients));
 
 /** 连接时长：只在浮层打开时刷新，避免常驻定时器 */
 function durationOf(connectedAt: number): string {
@@ -52,11 +55,12 @@ onBeforeUnmount(() => {
     </button>
 
     <div v-if="open" class="conn-list glass">
-      <div v-for="client in mcpUi.clients" :key="client.id" class="conn-row">
+      <div v-for="client in visible.rows" :key="client.id" class="conn-row">
         <span class="conn-label">{{ client.label }}</span>
         <span class="conn-meta">已连接 {{ durationOf(client.connectedAt) }}</span>
         <span class="conn-tool">{{ toolLabel(client) }}</span>
       </div>
+      <div v-if="visible.more > 0" class="conn-more">还有 {{ visible.more }} 个</div>
     </div>
   </div>
 </template>
@@ -149,6 +153,13 @@ onBeforeUnmount(() => {
 .conn-tool {
   grid-column: 1 / -1;
   color: var(--text-dim);
+  font-size: 10.5px;
+}
+
+.conn-more {
+  padding: 6px 8px;
+  border-top: 1px solid var(--hairline);
+  color: var(--text-faint);
   font-size: 10.5px;
 }
 

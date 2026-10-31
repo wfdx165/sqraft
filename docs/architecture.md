@@ -267,23 +267,27 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 
 ## 12. AI 层
 
-**单插槽：MCP**（见 ADR-0004）。应用把 `packages/ai-tools` 的工具定义挂在 MCP 协议上，外部 agent（Claude Code、Cursor 等）通过本机 IPC 接入并驱动 Sqraft；应用自身不调用模型、不保存密钥。
+**单插槽：MCP**（见 ADR-0004）。应用把 `packages/ai-tools` 的工具定义挂在 MCP 协议上，外部 agent（Claude Code、Cursor 等）通过**本机 HTTP** 接入并驱动 Sqraft；应用自身不调用模型、不保存密钥。
 
-接入链路：
+接入链路（ADR-0026）：
 
-- 主进程跑 MCP server（自实现的最小协议层，不引 SDK），端点：macOS/Linux 为 `userData/mcp.sock`，Windows 为命名管道 `\\.\pipe\sqraft-mcp`；
-- 随应用分发一个薄 CLI：它只做 `stdio ↔ 本机 IPC` 的双向管道；连不上时先拉起应用（带 `--mcp`，应用跳过欢迎页直接建空稿），再 attach。agent 杀掉 CLI 只影响管道，不影响应用与文档；
-- 连接建立先做 hello 握手（协议版本 + 应用版本），不兼容直接返回可读错误；
-- 多客户端并存，所有工具调用进同一队列串行执行；单次调用 30s 超时；连接断开时排队中的调用直接丢弃；应用退出前向所有客户端广播关闭通知；
+- 主进程跑 MCP server（自实现的最小协议层，不引 SDK），端点为 `http://127.0.0.1:<port>/mcp`，走规范 **Streamable HTTP**：`POST` 收 JSON-RPC，`initialize` 下发 `Mcp-Session-Id`，`DELETE` 结束会话；支持 `2025-11-25` / `2025-06-18` / `2025-03-26`，更老的版本按规范回落到最新受支持版本；
+- 不提供 SSE：`GET /mcp` 返回 `405`，`POST` 直接回 `application/json`；应用退出时不广播通知；
+- 会话空闲 30 分钟过期；界面上"在线"= 最近 2 分钟有请求的会话（HTTP 没有连接，只能按活动推断），详情最多列 5 条、其余只报数量；标签取 `initialize.params.clientInfo`；应用必须保持运行，没有 CLI 负责拉起；
+- 端口默认 `7331`：显式填写的端口严格遵守（占用即报错），自动模式被占时向上顺延并持久化实际端口，界面显性告警；
+- 安全：只绑 `127.0.0.1`，拒绝带 `Origin` 的请求，`Host` 只接受本机；**无 token**——同机其他用户也能连，这是相对 Unix socket 的显式取舍；
+- 多客户端并存，所有工具调用进同一队列串行执行；单次调用 30s 超时；会话结束（`DELETE` / 过期）时排队中的调用直接丢弃；
+- **一次工具调用只执行一次**：渲染层的监听宿主登记在 `globalThis` 上，重复安装先摘掉旧监听，并按主进程分配的调用号去重（同号的重复投递静默丢弃）。dev 热更新会重新执行渲染层模块，少了这一层，旧实例的监听会和新实例一起处理同一条调用——`create_node` 会落两个节点（返回 id 之外多一个没有子节点的副本）；
 - 工具清单与执行器都在渲染进程（`@sqraft/ai-tools` 的唯一真源），主进程只转发；截图只取文档层画布，不含编辑器叠加层。
 
-**操作日志**：连接、握手、`tools/list`、每次 `tools/call` 的耗时与错误都以 `[mcp]` 单行写到终端（info/warn → stdout，error → stderr），不落文件、不经 `console`。参数只记摘要——长字符串截断、`data:image` 折叠成类型与体积，规则单点在 `src/main/mcp/log.ts`。连接身份由 CLI 在 hello 里附带（`pid` / 父进程名），旧 CLI 不带也能连。打包版从 Finder 启动时 stdout 没有出口，看日志要从终端启动。
+**操作日志**：会话创建、`tools/list`、每次 `tools/call` 的耗时与错误都以 `[mcp]` 单行写到终端（info/warn → stdout，error → stderr），不落文件、不经 `console`。参数只记摘要——长字符串截断、`data:image` 折叠成类型与体积，规则单点在 `src/main/mcp/log.ts`。身份来自客户端 `initialize` 的 `clientInfo`（如 `c1 claude-code/2.1`）。排障用的端口与进程信息写在 `~/.sqraft/mcp.json`（0600），那不是客户端发现机制。打包版从 Finder 启动时 stdout 没有出口，看日志要从终端启动。
 
 工具清单（v1）：
 
 | 工具 | 读/写 | 说明 |
 |---|---|---|
 | `read_document` | 读 | 返回页面/节点树的紧凑摘要；根级主组件放在 `components`（与会话树分开），`includeComponentTrees=true` 才附母版子树 |
+| `get_selection` | 读 | 画布当前选区：`activePageId`（当前活动页，不代表选区所属页面）+ 每个选中节点的 id / 名字 / 类型 / 世界坐标 / 尺寸；空选区给 hint。改还是走显式 `nodeId` |
 | `get_tokens` | 读 | Token 集合与取值；没有 Token 时返回空表 |
 | `define_token` | 写 | 新增/覆盖 Token（颜色接受 #hex 3/6/8 位、rgb/rgba；不能改类型） |
 | `rename_token` | 写 | 重命名 Token，fill / stroke / 阴影颜色引用随动 |
@@ -340,7 +344,7 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 - **IPC**：通道名与请求/响应类型集中在 `shared/ipc`，preload 只暴露 `window.sqraft` 一个对象；渲染层拿不到 `require` 与任意 IPC。安全基线见 ADR-0019。
 - **文件**：主进程负责系统对话框、字节搬运、原子写与 mtime 比对；`.sqraft` 的序列化/解析/迁移只在渲染层。全手动保存，无自动写回、无崩溃恢复。
 - **窗口**：单窗口两态（欢迎页 / 一个文档）；**每次启动把窗口铺满它上次所在那块屏的工作区**（不是 macOS 全屏模式，菜单栏与 Dock 仍在）；`⌘W` 关闭文档回欢迎页，`⌘Q` 退出；单实例转发打开请求；窗口位置与最近列表存 `userData/preferences.json`。
-- **欢迎页**：以 MCP 接入为主位——服务状态（监听中 / 在线人数）、能力一行（工具数动态取自 `@sqraft/ai-tools`）、可复制的接入命令，然后才是新建/打开与最近 4 条。三态（未安装 / 已安装未连接 / 已连接）只改状态行与主按钮，见 ADR-0021。
+- **欢迎页**：以 MCP 接入为主位——服务状态（监听中 / 在线会话数）、能力一行（工具数动态取自 `@sqraft/ai-tools`）、可复制的接入片段（Claude Code / OpenCode / Cursor / 通用），然后才是新建/打开与最近 4 条。三态（未启动 / 等待接入 / 已连接）只改状态行与主按钮，见 ADR-0021 与 ADR-0026。
 - **菜单与快捷键**：系统级动作走菜单 role；文档编辑类动作仍由渲染层注册表独占，菜单点击只发送同一个动作 id（ADR-0011 的桌面补充）。
-- **MCP**：主进程协议层 + 本机 IPC + 薄 CLI，详见 ADR-0020 与 §12。
-- **打包**：electron-builder，`appId com.yjsoft.sqraft`；asar 打包，CLI 走 `extraResources` 放在 asar 外；macOS 出 arm64 dmg，Windows/Linux 配置齐备但未验证。
+- **MCP**：主进程协议层 + 本机 Streamable HTTP（`127.0.0.1:<port>`），详见 ADR-0026 与 §12。
+- **打包**：electron-builder，`appId com.yjsoft.sqraft`；asar 打包，没有需要放到 asar 外的可执行文件；macOS 出 arm64 dmg，Windows/Linux 配置齐备但未验证。

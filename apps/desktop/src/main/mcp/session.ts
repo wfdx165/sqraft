@@ -37,7 +37,16 @@ export interface JsonRpcFailure {
 
 export type JsonRpcResponse = JsonRpcSuccess | JsonRpcFailure;
 
-const DEFAULT_PROTOCOL = "2024-11-05";
+/** 支持的规范版本：三者都定义了 Streamable HTTP（2025-11-25 只是增量修订）。 */
+export const SUPPORTED_PROTOCOLS = ["2025-11-25", "2025-06-18", "2025-03-26"] as const;
+export type ProtocolVersion = (typeof SUPPORTED_PROTOCOLS)[number];
+/** 协商失败时的兜底版本：请求里没带 `MCP-Protocol-Version` 头按 2025-03-26 处理。 */
+export const FALLBACK_PROTOCOL: ProtocolVersion = "2025-03-26";
+export const LATEST_PROTOCOL: ProtocolVersion = "2025-11-25";
+
+export function isSupportedProtocol(value: unknown): value is ProtocolVersion {
+  return typeof value === "string" && (SUPPORTED_PROTOCOLS as readonly string[]).includes(value);
+}
 
 function textContent(text: string): Array<Record<string, unknown>> {
   return [{ type: "text", text }];
@@ -85,12 +94,19 @@ export async function handleRpc(
   switch (message.method) {
     case "initialize": {
       const requested = (message.params as { protocolVersion?: unknown } | undefined)?.protocolVersion;
-      logInfo(tag, "initialize", { protocol: typeof requested === "string" ? requested : DEFAULT_PROTOCOL });
+      // 规范：支持请求的版本就回同一个；否则回自己支持的最新版本，由客户端决定是否继续
+      const supported = isSupportedProtocol(requested);
+      const version = supported ? requested : LATEST_PROTOCOL;
+      if (requested !== undefined && !supported) {
+        logWarn(tag, "protocol downgraded", { requested: String(requested), negotiated: version });
+      } else {
+        logInfo(tag, "initialize", { protocol: version });
+      }
       return {
         jsonrpc: "2.0",
         id,
         result: {
-          protocolVersion: typeof requested === "string" ? requested : DEFAULT_PROTOCOL,
+          protocolVersion: version,
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: "sqraft", version: options.version },
         },

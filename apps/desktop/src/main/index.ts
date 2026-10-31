@@ -3,10 +3,10 @@ import { homedir } from "node:os";
 import { join } from "node:path";
 import { dataDirOf, prepareDataDir } from "./data-dir";
 import { attachCloseGuard, registerCloseChannels } from "./close-guard";
-import { registerFileChannels, requestNewDocumentOnReady } from "./ipc";
-import { mcpEndpoint } from "./mcp/endpoint";
+import { registerFileChannels } from "./ipc";
 import { registerMcpChannels, shutdownMcp, startMcp } from "./mcp";
-import { logError } from "./mcp/log";
+import { logError, logInfo } from "./mcp/log";
+import { removeStaleCliLink } from "./mcp/setup";
 import { rebuildMenu, registerMenuChannels } from "./menu";
 import { currentPreferences, initRecentFiles, requestOpen, saveWindowBounds } from "./recent-state";
 import { restoreBounds } from "./window-state";
@@ -177,21 +177,25 @@ app.whenReady().then(async () => {
   registerMcpChannels();
   await prepareDataDir(legacyUserData);
   await initRecentFiles();
-  const endpoint = mcpEndpoint(app.getPath("userData"));
-  void startMcp(endpoint, app.getVersion()).catch((error: unknown) => {
-    logError(null, "server start failed", {
-      endpoint,
+  // 旧版本装过 sqraft-mcp 软链：升级后目标文件已删，能确认是本应用留下的就清掉
+  void removeStaleCliLink({
+    packaged: app.isPackaged,
+    resourcesPath: process.resourcesPath,
+    appPath: app.getAppPath(),
+  }).then((removed) => {
+    if (removed.length > 0) logInfo(null, "legacy cli link removed", { paths: removed.join(", ") });
+  }).catch((error: unknown) => {
+    logError(null, "legacy cli cleanup failed", {
       error: error instanceof Error ? error.message : String(error),
     });
   });
+  void startMcp(app.getVersion());
   // 摄像头、麦克风、通知、定位等一律拒绝：本期没有任何一项需要
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
 
   createWindow();
   const initial = pathFromArgs(process.argv);
   if (initial) requestOpen(initial);
-  // 由 CLI 拉起时跳过欢迎页（07）
-  if (process.argv.includes("--mcp")) requestNewDocumentOnReady();
 
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow();

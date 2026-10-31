@@ -6,37 +6,63 @@ const emit = defineEmits<{ close: [] }>();
 
 const info = mcpSetup.info;
 const message = ref("");
-const installing = ref(false);
-const copied = ref<"claude" | "opencode" | "json" | "opencodeJson" | null>(null);
+const saving = ref(false);
+const portInput = ref("");
+const copied = ref<"claude" | "opencode" | "cursor" | "generic" | null>(null);
 
-const commandLine = computed(() => info.value?.commandLine ?? "");
-const opencodeCommand = computed(() => info.value?.opencodeCommand ?? "");
-const json = computed(() => info.value?.json ?? "");
-const opencodeJson = computed(() => info.value?.opencodeJson ?? "");
+const statusText = computed(() => {
+  if (!info.value) return "读取配置中…";
+  if (info.value.listening) return `监听中 · ${info.value.url}`;
+  return info.value.error ? `未启动 · ${info.value.error}` : "未启动";
+});
 
-const texts = computed<Record<"claude" | "opencode" | "json" | "opencodeJson", string>>(() => ({
-  claude: commandLine.value,
-  opencode: opencodeCommand.value,
-  json: json.value,
-  opencodeJson: opencodeJson.value,
+const driftText = computed(() => {
+  if (!info.value?.driftFrom) return "";
+  return `端口 ${info.value.driftFrom} 被占用，已改用 ${info.value.port}；已配置的客户端需要更新地址。`;
+});
+
+const texts = computed<Record<"claude" | "opencode" | "cursor" | "generic", string>>(() => ({
+  claude: info.value?.commandLine ?? "",
+  opencode: info.value?.opencodeJson ?? "",
+  cursor: info.value?.cursorJson ?? "",
+  generic: info.value?.url ?? "",
 }));
 
-async function install(): Promise<void> {
-  installing.value = true;
+const portDirty = computed(() => {
+  if (!info.value) return false;
+  const current = info.value.explicitPort;
+  const raw = portInput.value.trim();
+  if (raw === "") return current !== null;
+  return Number(raw) !== current;
+});
+
+async function load(): Promise<void> {
+  const next = await mcpSetup.ensure(true);
+  message.value = next ? "" : "读取配置失败";
+  portInput.value = next?.explicitPort === null || next?.explicitPort === undefined ? "" : String(next.explicitPort);
+}
+
+async function applyPort(): Promise<void> {
+  const raw = portInput.value.trim();
+  const port = raw === "" ? null : Number(raw);
+  if (port !== null && (!Number.isInteger(port) || port < 1024 || port > 65535)) {
+    message.value = "端口必须是 1024–65535 的整数";
+    return;
+  }
+  saving.value = true;
   message.value = "";
   try {
-    const result = await window.sqraft.mcp.installCli();
-    message.value = result.message;
-    // 写回共享 store：关掉面板后欢迎页的 CTA 立刻变成"复制接入命令"
-    mcpSetup.set(result.info);
+    const next = await mcpSetup.savePort(port);
+    portInput.value = next.explicitPort === null ? "" : String(next.explicitPort);
+    message.value = next.listening ? "已应用，现有 agent 会话已断开" : (next.error ?? "端口已保存，但服务没有启动");
   } catch (error) {
-    message.value = `安装失败：${error instanceof Error ? error.message : String(error)}`;
+    message.value = error instanceof Error ? error.message : String(error);
   } finally {
-    installing.value = false;
+    saving.value = false;
   }
 }
 
-function copy(kind: "claude" | "opencode" | "json" | "opencodeJson"): void {
+function copy(kind: "claude" | "opencode" | "cursor" | "generic"): void {
   const text = texts.value[kind];
   if (!text) return;
   window.sqraft.app.copyText(text);
@@ -51,8 +77,7 @@ function onKey(event: KeyboardEvent): void {
 }
 
 onMounted(() => {
-  // 面板每次打开都重新核对磁盘上的软链（force）：CLI 可能被外部删掉或换过路径
-  void mcpSetup.ensure(true);
+  void load();
   window.addEventListener("keydown", onKey);
 });
 onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
@@ -67,17 +92,34 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
       </header>
 
       <p class="lede">
-        外部 agent（OpenCode、Claude Code、Cursor 等）通过下面的命令连上 Sqraft。应用没在运行时，客户端会自动把它拉起来。
+        外部 agent（Claude Code、OpenCode、Cursor 等）通过本机 HTTP 端点连上 Sqraft。应用需要保持运行。
       </p>
 
-      <section>
-        <div class="label">
-          <span>OpenCode</span>
-          <button class="copy" @click="copy('opencode')">
-            {{ copied === "opencode" ? "已复制" : "复制" }}
+      <section class="endpoint">
+        <div class="label"><span>端点</span></div>
+        <pre>{{ info?.url ?? "—" }}</pre>
+        <p class="hint">只监听 127.0.0.1，没有凭据；不要把这个地址转发到其他机器。</p>
+        <p class="status">{{ statusText }}</p>
+        <p v-if="driftText" class="warn">{{ driftText }}</p>
+      </section>
+
+      <section class="port">
+        <div class="label"><span>端口</span></div>
+        <div class="port-row">
+          <input
+            v-model="portInput"
+            inputmode="numeric"
+            placeholder="留空 = 自动（7331 起）"
+            spellcheck="false"
+          />
+          <button class="primary" :disabled="saving || !portDirty" @click="applyPort">
+            {{ saving ? "应用中…" : "应用" }}
           </button>
         </div>
-        <pre>{{ opencodeCommand }}</pre>
+        <p class="hint">
+          留空时从 7331 起，被占用会向上顺延并记住新端口；填 1024–65535 则严格使用，被占直接报错。改端口会断开现有
+          agent 会话。
+        </p>
       </section>
 
       <section>
@@ -87,47 +129,40 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
             {{ copied === "claude" ? "已复制" : "复制" }}
           </button>
         </div>
-        <pre>{{ commandLine }}</pre>
+        <pre>{{ texts.claude }}</pre>
       </section>
 
       <section>
         <div class="label">
-          <span>JSON · OpenCode（mcp.servers）</span>
-          <button class="copy" @click="copy('opencodeJson')">
-            {{ copied === "opencodeJson" ? "已复制" : "复制" }}
+          <span>OpenCode</span>
+          <button class="copy" @click="copy('opencode')">
+            {{ copied === "opencode" ? "已复制" : "复制" }}
           </button>
         </div>
-        <pre>{{ opencodeJson }}</pre>
+        <pre>{{ texts.opencode }}</pre>
       </section>
 
       <section>
         <div class="label">
-          <span>JSON · Claude / 通用（mcpServers）</span>
-          <button class="copy" @click="copy('json')">
-            {{ copied === "json" ? "已复制" : "复制" }}
+          <span>Cursor（~/.cursor/mcp.json）</span>
+          <button class="copy" @click="copy('cursor')">
+            {{ copied === "cursor" ? "已复制" : "复制" }}
           </button>
         </div>
-        <pre>{{ json }}</pre>
+        <pre>{{ texts.cursor }}</pre>
       </section>
 
-      <section class="install">
-        <div>
-          <div class="label"><span>命令行工具</span></div>
-          <p class="hint">
-            {{
-              info?.installed
-                ? `已安装：${info.installedPath}`
-                : `可以把 sqraft-mcp 装进 ${info?.targetDir ?? "PATH"}，配置里就不用写绝对路径。`
-            }}
-          </p>
+      <section>
+        <div class="label">
+          <span>通用 URL</span>
+          <button class="copy" @click="copy('generic')">
+            {{ copied === "generic" ? "已复制" : "复制" }}
+          </button>
         </div>
-        <button class="primary" :disabled="installing || info?.installed" @click="install">
-          {{ info?.installed ? "已安装" : installing ? "安装中…" : "安装到 PATH" }}
-        </button>
+        <pre>{{ texts.generic }}</pre>
       </section>
 
       <p v-if="message" class="message">{{ message }}</p>
-      <p class="foot">需要让应用保持运行，或直接让 agent 拉起它。</p>
     </div>
   </div>
 </template>
@@ -230,18 +265,44 @@ pre {
   word-break: break-all;
 }
 
-.install {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-}
-
 .hint {
-  margin: 0;
+  margin: 6px 0 0;
   font-size: 11.5px;
   color: var(--text-dim);
-  word-break: break-all;
+  line-height: 1.5;
+}
+
+.status {
+  margin: 8px 0 0;
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+
+.warn {
+  margin: 6px 0 0;
+  font-size: 11.5px;
+  color: var(--warning, #a8641a);
+}
+
+.port-row {
+  display: flex;
+  gap: 8px;
+}
+
+.port-row input {
+  flex: 1;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  padding: 7px 10px;
+  background: var(--tint-4);
+  color: var(--text);
+  font-family: var(--mono);
+  font-size: 12px;
+  outline: none;
+}
+
+.port-row input:focus {
+  border-color: var(--hairline-strong);
 }
 
 .primary {
@@ -265,11 +326,5 @@ pre {
   margin: 0;
   font-size: 11.5px;
   color: var(--text-dim);
-}
-
-.foot {
-  margin: 0;
-  font-size: 11px;
-  color: var(--text-faint);
 }
 </style>

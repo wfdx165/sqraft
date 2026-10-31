@@ -21,7 +21,6 @@ const bridge = {
     respond: vi.fn(),
     setTools: vi.fn(),
     setup: vi.fn(),
-    installCli: vi.fn(),
     onStatus: () => () => {},
   },
   recent: { list: vi.fn(async () => []) },
@@ -29,7 +28,6 @@ const bridge = {
   app: {
     info: vi.fn(),
     copyText: vi.fn(),
-    onNewDocumentRequest: () => () => {},
     signalReady: vi.fn(),
     onOpenRequest: () => () => {},
     setDirty: vi.fn(),

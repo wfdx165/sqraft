@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { addRecent, loadPreferences, removeRecent, savePreferences } from "./preferences";
+import { isValidPort } from "./mcp/port";
 
 const dirs: string[] = [];
 
@@ -56,5 +57,27 @@ describe("偏好读写", () => {
     const file = join(await tempDir(), "odd.json");
     await writeFile(file, JSON.stringify({ recentFiles: ["/a", 42, null] }));
     expect(await loadPreferences(file)).toEqual({ recentFiles: ["/a"] });
+  });
+});
+
+describe("MCP 端口偏好", () => {
+  it("只接受 1024–65535 的整数端口", () => {
+    expect(isValidPort(7331)).toBe(true);
+    expect(isValidPort(1024)).toBe(true);
+    expect(isValidPort(65535)).toBe(true);
+    expect(isValidPort(80)).toBe(false);
+    expect(isValidPort(65536)).toBe(false);
+    expect(isValidPort(7331.5)).toBe(false);
+    expect(isValidPort("7331")).toBe(false);
+    expect(isValidPort(null)).toBe(false);
+  });
+
+  it("显式端口与自动端口分开保存，读回时过滤非法值", async () => {
+    const file = join(await tempDir(), "preferences.json");
+    await savePreferences(file, { recentFiles: [], mcp: { port: 7400, autoPort: 7332 } });
+    expect((await loadPreferences(file)).mcp).toEqual({ port: 7400, autoPort: 7332 });
+
+    await writeFile(file, JSON.stringify({ recentFiles: [], mcp: { port: 80, autoPort: "x" } }));
+    expect((await loadPreferences(file)).mcp).toBeUndefined();
   });
 });

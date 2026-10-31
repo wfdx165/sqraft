@@ -1078,3 +1078,71 @@ describe("AI 工具：设计 Token", () => {
     expect(store.doc.tokens["color/one"]).toBeDefined();
   });
 });
+
+describe("AI 工具：选区", () => {
+  /** 页面 → 卡片(100,120) → 按钮(10,20)：按钮的世界坐标应是 110,140。 */
+  function withSelection() {
+    const store = new DocStore(createDocWithPage());
+    const pageId = firstPageId(store.doc)!;
+    const frame = createNode("frame", { name: "卡片", x: 100, y: 120, width: 300, height: 200 });
+    store.apply({ type: "node.create", params: { nodes: [frame], parentId: pageId } });
+    const rect = createNode("rect", { name: "按钮", x: 10, y: 20, width: 80, height: 40 });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: frame.id } });
+    const selection = [rect.id, frame.id];
+    const run = makeExecutor(store, async () => "", () => pageId, undefined, undefined, () => selection);
+    return { store, run, pageId, frame, rect };
+  }
+
+  it("返回选区摘要，坐标是世界坐标（嵌套也一样）", async () => {
+    const { run, pageId, frame, rect } = withSelection();
+    const res = await call(run, "get_selection");
+    expect(res.activePageId).toBe(pageId);
+    expect(res.nodeIds).toEqual([rect.id, frame.id]);
+    const nodes = res.nodes as Record<string, unknown>[];
+    expect(nodes[0]).toMatchObject({
+      id: rect.id,
+      name: "按钮",
+      type: "rect",
+      parentId: frame.id,
+      x: 110,
+      y: 140,
+      width: 80,
+      height: 40,
+      locked: false,
+      visible: true,
+    });
+    expect(nodes[1]).toMatchObject({ id: frame.id, x: 100, y: 120, parentId: pageId });
+    // 有选中时不该带"空选区"提示
+    expect(res.hint).toBeUndefined();
+  });
+
+  it("空选区给 hint；宿主不注入读选区能力时也不抛错", async () => {
+    const store = new DocStore(createDocWithPage());
+    const pageId = firstPageId(store.doc)!;
+
+    const empty = makeExecutor(store, async () => "", () => pageId, undefined, undefined, () => []);
+    const res = await call(empty, "get_selection");
+    expect(res.activePageId).toBe(pageId);
+    expect(res.nodeIds).toEqual([]);
+    expect(res.nodes).toEqual([]);
+    expect(res.hint).toBeTruthy();
+
+    // 老宿主（没传 getSelection）：返回空表而不是 undefined / 抛错
+    const fallback = makeExecutor(store, async () => "", () => pageId);
+    const res2 = await call(fallback, "get_selection");
+    expect(res2.nodeIds).toEqual([]);
+  });
+
+  it("选区里已被删除的 id 自动忽略", async () => {
+    const store = new DocStore(createDocWithPage());
+    const pageId = firstPageId(store.doc)!;
+    const rect = createNode("rect", { name: "临时", x: 0, y: 0, width: 10, height: 10 });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+    const run = makeExecutor(store, async () => "", () => pageId, undefined, undefined, () => [rect.id]);
+    store.apply({ type: "node.delete", params: { nodeId: rect.id } });
+
+    const res = await call(run, "get_selection");
+    expect(res.nodeIds).toEqual([]);
+    expect(res.hint).toBeTruthy();
+  });
+});

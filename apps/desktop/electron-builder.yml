@@ -11,10 +11,6 @@ asar: true
 npmRebuild: false
 # 复用 node_modules 里已解压的 Electron，避免每次从缓存重新解压
 electronDist: node_modules/electron/dist
-# 命令行工具不能从 asar 里执行，必须放在包外
-extraResources:
-  - from: resources/bin
-    to: bin
 mac:
   icon: build/icon.icns
   category: public.app-category.design

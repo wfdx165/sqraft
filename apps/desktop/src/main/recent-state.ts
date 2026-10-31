@@ -10,6 +10,7 @@ import {
   loadPreferences,
   removeRecent,
   savePreferences,
+  type McpPreferences,
   type Preferences,
   type WindowBounds,
 } from "./preferences";
@@ -31,6 +32,23 @@ export async function initRecentFiles(): Promise<void> {
 
 export function currentPreferences(): Preferences {
   return preferences;
+}
+
+/**
+ * 更新 MCP 端口偏好：`null` 表示删除该字段。
+ * 显式端口与自动模式记住的端口分开存，互不覆盖。
+ */
+export async function updateMcpPreferences(patch: {
+  port?: number | null;
+  autoPort?: number | null;
+}): Promise<void> {
+  const next: McpPreferences = { ...(preferences.mcp ?? {}) };
+  if (patch.port === null) delete next.port;
+  else if (patch.port !== undefined) next.port = patch.port;
+  if (patch.autoPort === null) delete next.autoPort;
+  else if (patch.autoPort !== undefined) next.autoPort = patch.autoPort;
+  preferences = { ...preferences, mcp: next };
+  await savePreferences(preferencesFile(), preferences);
 }
 
 export async function saveWindowBounds(bounds: WindowBounds): Promise<void> {

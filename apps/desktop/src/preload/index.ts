@@ -5,7 +5,6 @@ import {
   type CloseRequest,
   type McpCallRequest,
   type McpCallResult,
-  type McpInstallResult,
   type McpSetupInfo,
   type McpStatus,
   type McpToolInfo,
@@ -47,7 +46,7 @@ const api: SqraftApi = {
     respond: (result: McpCallResult) => ipcRenderer.send(CHANNELS.mcpRespond, result),
     setTools: (tools: McpToolInfo[]) => ipcRenderer.send(CHANNELS.mcpSetTools, tools),
     setup: () => ipcRenderer.invoke(CHANNELS.mcpSetup) as Promise<McpSetupInfo>,
-    installCli: () => ipcRenderer.invoke(CHANNELS.mcpInstallCli) as Promise<McpInstallResult>,
+    setPort: (port: number | null) => ipcRenderer.invoke(CHANNELS.mcpSetPort, port) as Promise<McpSetupInfo>,
     onStatus: (handler: (status: McpStatus) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, status: McpStatus) => handler(status);
       ipcRenderer.on(CHANNELS.mcpStatus, listener);
@@ -76,11 +75,6 @@ const api: SqraftApi = {
       ipcRenderer.invoke(CHANNELS.appClipboardNodesWrite, json) as Promise<void>,
     readClipboardNodes: () => ipcRenderer.invoke(CHANNELS.appClipboardNodesRead) as Promise<string | null>,
     readClipboardText: () => ipcRenderer.invoke(CHANNELS.appClipboardText) as Promise<string>,
-    onNewDocumentRequest: (handler: () => void) => {
-      const listener = () => handler();
-      ipcRenderer.on(CHANNELS.appNewDocument, listener);
-      return () => ipcRenderer.removeListener(CHANNELS.appNewDocument, listener);
-    },
     signalReady: () => ipcRenderer.send(CHANNELS.appRendererReady),
     onOpenRequest: (handler: (path: string) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, path: string) => handler(path);

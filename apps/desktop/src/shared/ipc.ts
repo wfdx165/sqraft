@@ -51,24 +51,29 @@ export interface AppInfo {
 }
 
 export interface McpSetupInfo {
-  cliPath: string;
-  installed: boolean;
-  installedPath: string | null;
-  targetDir: string;
-  /** Claude Code：`claude mcp add …` */
+  /** 当前端点（服务没起来时是按偏好算出来的地址） */
+  url: string;
+  /** 实际监听端口；没起来时为 null */
+  port: number | null;
+  /** 用户显式指定的端口；null = 自动模式（7331 起，被占向上顺延） */
+  explicitPort: number | null;
+  /** 自动模式下因端口被占而顺延：原来想用的端口；没漂移时为 null */
+  driftFrom: number | null;
+  listening: boolean;
+  /** 启动失败原因（端口被占、权限不足等）；正常时为 null */
+  error: string | null;
+  /** Claude Code：`claude mcp add --transport http …` */
   commandLine: string;
-  /** OpenCode V2：`opencode mcp add …` */
-  opencodeCommand: string;
-  /** Claude Desktop / 通用 `mcpServers` 形状 */
-  json: string;
-  /** OpenCode V2 形状（`mcp.servers`） */
+  /** OpenCode V2 形状（`mcp.servers`，type = remote） */
   opencodeJson: string;
+  /** Cursor / 通用 `mcpServers` 形状 */
+  cursorJson: string;
 }
 
-/** 一条 agent 连接：只读展示用（身份、连接时间、最近一次工具调用）。 */
+/** 一条 agent 会话：只读展示用（身份、连接时间、最近一次工具调用）。 */
 export interface McpClientInfo {
   id: string;
-  /** 身份标签，如 `c1 claude(8123)` */
+  /** 身份标签，如 `c1 claude-code/2.1` */
   label: string;
   connectedAt: number;
   lastToolAt?: number;
@@ -78,14 +83,14 @@ export interface McpClientInfo {
 export interface McpStatus {
   /** 服务是否在监听（端口占用等原因启动失败时为 false） */
   listening: boolean;
-  /** 已连接的 agent 客户端（数量 = 列表长度） */
+  port: number | null;
+  url: string | null;
+  /** 活跃会话（数量 = 列表长度） */
   clients: McpClientInfo[];
-}
-
-export interface McpInstallResult {
-  ok: boolean;
-  message: string;
-  info: McpSetupInfo;
+  /** 启动失败原因 */
+  error: string | null;
+  /** 自动模式下发生漂移时，原来的端口 */
+  driftFrom: number | null;
 }
 
 export interface McpToolInfo {
@@ -138,9 +143,10 @@ export interface SqraftApi {
     onStatus(handler: (status: McpStatus) => void): () => void;
     /** 当前状态（渲染层挂载时主动取一次：服务可能比页面先就绪） */
     status(): Promise<McpStatus>;
-    /** 接入配置（路径由主进程计算） */
+    /** 接入配置（地址、端口与各客户端片段） */
     setup(): Promise<McpSetupInfo>;
-    installCli(): Promise<McpInstallResult>;
+    /** 改端口：null = 自动（7331 起、被占顺延）；数字 = 严格使用，占用即报错 */
+    setPort(port: number | null): Promise<McpSetupInfo>;
   };
   recent: {
     list(): Promise<{ path: string; name: string }[]>;
@@ -168,8 +174,6 @@ export interface SqraftApi {
     readClipboardNodes(): Promise<string | null>;
     /** 读剪贴板纯文本（输入框里的粘贴用它，因为 ⌘V 的菜单 role 会让位） */
     readClipboardText(): Promise<string>;
-    /** 主进程要求"跳过欢迎页直接建空稿"（MCP 自动拉起） */
-    onNewDocumentRequest(handler: () => void): () => void;
     /** 渲染层装好监听后通知主进程：可以补发积压的打开请求了 */
     signalReady(): void;
     /** 主进程请求打开某个文件（recent / 拖拽 / 文件关联 / 第二实例） */
@@ -201,7 +205,7 @@ export const CHANNELS = {
   mcpStatus: "mcp:status",
   mcpStatusQuery: "mcp:status:query",
   mcpSetup: "mcp:setup",
-  mcpInstallCli: "mcp:install-cli",
+  mcpSetPort: "mcp:set-port",
   appCopyText: "app:copy-text",
   appClipboardImage: "app:clipboard-image",
   appClipboardText: "app:clipboard-text",
@@ -209,7 +213,6 @@ export const CHANNELS = {
   appClipboardNodesWrite: "app:clipboard-nodes-write",
   appClipboardNodesRead: "app:clipboard-nodes-read",
   appInfo: "app:info",
-  appNewDocument: "app:new-document",
   recentList: "recent:list",
   menuCommand: "menu:command",
   menuSetBindings: "menu:set-bindings",

@@ -33,7 +33,7 @@ export class ClientGoneError extends Error {
 export interface QueueOptions {
   timeoutMs?: number;
   isAlive?: () => boolean;
-  /** 日志用的连接标签（`c1 claude(8123)`）；缺省时不带来源。 */
+  /** 日志用的会话标签（`c1 claude-code/2.1`）；缺省时不带来源。 */
   tag?: string;
   /** 排队告警阈值；测试用小值，生产用默认。 */
   queueWarnMs?: number;

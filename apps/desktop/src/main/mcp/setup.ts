@@ -1,24 +1,24 @@
 /**
- * MCP 接入配置：算出 CLI 的真实路径、生成可直接粘贴的配置、把 CLI 装进 PATH。
- * 路径全部由主进程计算，渲染层只负责展示与复制。
+ * MCP 接入配置：把端点翻译成各客户端的片段，并在升级时清掉旧版 CLI 的软链。
+ *
+ * 传输已经是本机 HTTP（ADR-0026），不再有需要安装的命令行工具：
+ * 客户端配置里只放一个 URL。这里保留 `inspectEntry()` 的唯一用途是**迁移**——
+ * 老版本往 PATH 里装过 `sqraft-mcp` 软链，打包后它指向的文件已经不存在。
  */
-import { chmod, lstat, mkdir, readlink, symlink, unlink } from "node:fs/promises";
+import { lstat, readlink, unlink } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, dirname, join, resolve } from "node:path";
 
 import type { McpSetupInfo } from "../../shared/ipc";
 
-export type { McpSetupInfo };
+/** 旧 CLI 的文件名（ADR-0020 时期）；现在只用于识别并清理残留软链。 */
+export const LEGACY_CLI_NAME = "sqraft-mcp";
 
-/**
- * CLI 文件名就是 `sqraft-mcp`（没有扩展名）：装进 PATH 后 agent 配置里直接写这个命令，
- * 和软链名、`claude mcp add` 里的命令名三者一致，不会被误写成 `sqraft-mcp.js`。
- * 文件自带 shebang，未安装时用 `node <绝对路径>` 也能跑。
- */
-export function cliScriptPath(options: { packaged: boolean; resourcesPath: string; appPath: string }): string {
+/** 旧版本装 CLI 的位置。 */
+export function legacyCliPath(options: { packaged: boolean; resourcesPath: string; appPath: string }): string {
   return options.packaged
-    ? join(options.resourcesPath, "bin", "sqraft-mcp")
-    : resolve(options.appPath, "resources/bin/sqraft-mcp");
+    ? join(options.resourcesPath, "bin", LEGACY_CLI_NAME)
+    : resolve(options.appPath, "resources/bin", LEGACY_CLI_NAME);
 }
 
 const CANDIDATE_DIRS = ["/usr/local/bin", join(homedir(), ".local", "bin")];
@@ -28,41 +28,16 @@ export function installTargetDir(platform: NodeJS.Platform = process.platform): 
   return CANDIDATE_DIRS[0];
 }
 
-/** 依次尝试候选目录，返回第一个可写的；都不可写时返回首选目录（由调用方处理失败）。 */
-export async function writableInstallDir(
-  candidates: string[] = CANDIDATE_DIRS,
-): Promise<{ dir: string; writable: boolean }> {
-  for (const dir of candidates) {
-    try {
-      await mkdir(dir, { recursive: true });
-      const probe = join(dir, `.sqraft-probe-${process.pid}`);
-      await symlink("/", probe);
-      await unlink(probe).catch(() => {});
-      return { dir, writable: true };
-    } catch {
-      continue;
-    }
-  }
-  return { dir: candidates[0], writable: false };
-}
-
-export interface InstallResult {
-  ok: boolean;
-  path?: string;
-  message: string;
-}
-
 /** 目标目录里 `sqraft-mcp` 的现状。 */
 export type EntryState =
   | "absent" // 没装
-  | "current" // 已指向当前 CLI
-  | "stale" // 指向本应用 bin 目录里的旧文件（改名前的 sqraft-mcp.js）
+  | "current" // 指向本应用的旧 CLI 文件（升级后该文件已删，属于残留）
+  | "stale" // 指向本应用 bin 目录里的旧文件名（改名前的 sqraft-mcp.js）
   | "foreign"; // 指向别处，或是普通文件/目录
 
 /**
- * 判定 `entry` 指向谁。`stale` 是 CLI 改名留下的历史链接：
- * 升级后它指向的 `sqraft-mcp.js` 已经不存在，必须能识别并替换，否则老用户的
- * agent 会断链，而 UI 又因为"不是本应用创建"拒绝修复。
+ * 判定 `entry` 指向谁。只有 `current` / `stale` 是本应用留下的，
+ * `foreign` 一律不碰——直接 unlink 有误删用户自己文件的先例。
  */
 export async function inspectEntry(entry: string, cliPath: string): Promise<EntryState> {
   const existing = await lstat(entry).catch(() => null);
@@ -85,72 +60,59 @@ export async function inspectEntry(entry: string, cliPath: string): Promise<Entr
 }
 
 /**
- * 在目标目录建立 `sqraft-mcp` 软链。
- * 已指向同一脚本时视为成功；指向本应用旧文件名的链接会被替换；其余一律拒绝覆盖。
+ * 一次性迁移：删掉指向本应用旧 CLI 的软链。返回被删掉的路径（日志用）。
+ * 权限不足或目标不存在都静默跳过——迁移失败不应影响启动。
  */
-export async function installCli(cliPath: string, dir: string): Promise<InstallResult> {
-  const entry = join(dir, "sqraft-mcp");
-  try {
-    await mkdir(dir, { recursive: true });
-    await chmod(cliPath, 0o755).catch(() => {});
-    const state = await inspectEntry(entry, cliPath);
-
-    if (state === "current") return { ok: true, path: entry, message: `已经安装：${entry}` };
-    if (state === "foreign") {
-      return { ok: false, message: `${entry} 已存在且不是本应用创建的（或指向别的文件），未覆盖。可以手动删除后重试。` };
-    }
-
-    // stale：改名前的链接，先摘掉再建新的
-    if (state === "stale") await unlink(entry);
-    await symlink(cliPath, entry);
-    return {
-      ok: true,
-      path: entry,
-      message: state === "stale" ? `已更新：${entry} → ${cliPath}` : `已安装到 ${entry}`,
-    };
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : String(error);
-    return { ok: false, message: `安装失败：${reason}。可以把下面的命令直接粘进 agent 配置。` };
-  }
-}
-
-export async function collectSetupInfo(options: {
+export async function removeStaleCliLink(options: {
   packaged: boolean;
   resourcesPath: string;
   appPath: string;
+  dirs?: string[];
   platform?: NodeJS.Platform;
-  /** 覆盖安装目录（测试用；默认按平台算） */
-  targetDir?: string;
-}): Promise<McpSetupInfo> {
-  const cliPath = cliScriptPath(options);
-  const targetDir = options.targetDir ?? installTargetDir(options.platform);
-  const entry = join(targetDir, "sqraft-mcp");
+}): Promise<string[]> {
+  const oldPath = legacyCliPath(options);
+  const platform = options.platform ?? process.platform;
+  const dirs = options.dirs ?? (platform === "win32" ? [installTargetDir(platform)] : CANDIDATE_DIRS);
+  const removed: string[] = [];
+  for (const dir of dirs) {
+    const entry = join(dir, LEGACY_CLI_NAME);
+    if ((await inspectEntry(entry, oldPath)) === "foreign") continue;
+    try {
+      await unlink(entry);
+      removed.push(entry);
+    } catch {
+      /* 不存在 / 没权限：跳过 */
+    }
+  }
+  return removed;
+}
 
-  const installed = (await inspectEntry(entry, cliPath)) === "current";
-
-  // 未安装时直接用 node 跑脚本，不依赖文件的可执行位
-  const command = installed ? "sqraft-mcp" : `node ${cliPath}`;
+/**
+ * 生成接入片段。URL 就是全部凭据（本地 loopback，无 token），
+ * 所以四个预设在内容上只差外壳。
+ */
+export function collectSetupInfo(options: {
+  url: string;
+  listening: boolean;
+  port: number | null;
+  explicitPort: number | null;
+  driftFrom: number | null;
+  error: string | null;
+}): McpSetupInfo {
+  const url = options.url;
   return {
-    cliPath,
-    installed,
-    installedPath: installed ? entry : null,
-    targetDir,
-    commandLine: `claude mcp add sqraft -- ${command}`,
-    // OpenCode V2：本地 server 的命令写在 `--` 之后，`--global` 写进全局配置
-    opencodeCommand: `opencode mcp add sqraft --global -- ${command}`,
-    json: JSON.stringify(
-      { mcpServers: { sqraft: { command: "node", args: [cliPath] } } },
-      null,
-      2,
-    ),
-    // OpenCode V2 的形状：服务器在 mcp.servers 下，type 必须为 local
+    ...options,
+    commandLine: `claude mcp add --transport http sqraft ${url}`,
+    // OpenCode V2：服务器在 mcp.servers 下，远程类型是 remote
     opencodeJson: JSON.stringify(
       {
         $schema: "https://opencode.ai/config.json",
-        mcp: { servers: { sqraft: { type: "local", command: ["node", cliPath] } } },
+        mcp: { servers: { sqraft: { type: "remote", url } } },
       },
       null,
       2,
     ),
+    // Cursor 与 Claude Desktop 的 mcpServers 形状一致，分开两栏只是给用户指路径
+    cursorJson: JSON.stringify({ mcpServers: { sqraft: { url } } }, null, 2),
   };
 }

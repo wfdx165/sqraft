@@ -1,42 +1,59 @@
 /**
- * 欢迎页的 MCP 区块：三态推导与文案都放在这里（纯函数，便于单测）。
+ * 欢迎页的 MCP 区块：状态推导与客户端片段（纯函数，便于单测）。
  *
- * 三态：
- * - `not-installed`：还没把 CLI 装进 PATH —— 主按钮就是"装"
- * - `idle`：装好了但当前没有 agent 连着 —— 主按钮是"复制接入命令"
- * - `connected`：有 agent 在线 —— 不再给动作，只报人数
+ * 传输换成 HTTP 之后没有"装命令行工具"这一步了（ADR-0026）：
+ * 状态只剩三种——服务没起来 / 起来了但没人连 / 有 agent 在线。
+ * 片段按客户端外壳不同，内容都是同一个 URL。
  */
 import type { McpSetupInfo } from "../shared/ipc";
 
-export type McpWelcomeState = "not-installed" | "idle" | "connected";
+export type McpWelcomeState = "offline" | "idle" | "connected";
 
-/** 欢迎页上可切换的客户端预设：命令形态不同，指向的是同一个 CLI */
-export type McpClient = "claude" | "opencode";
+/** 欢迎页上可切换的客户端预设：外壳不同，指向的是同一个端点 */
+export type McpClient = "claude" | "opencode" | "cursor" | "generic";
 
-/** 某个客户端的接入命令；配置还没读到时返回空串（按钮据此禁用） */
-export function clientCommand(info: McpSetupInfo | null, client: McpClient): string {
+export const MCP_CLIENTS: ReadonlyArray<{ id: McpClient; label: string }> = [
+  { id: "claude", label: "Claude Code" },
+  { id: "opencode", label: "OpenCode" },
+  { id: "cursor", label: "Cursor" },
+  { id: "generic", label: "通用" },
+];
+
+/** 某个客户端的接入片段；配置还没读到时返回空串（按钮据此禁用） */
+export function clientSnippet(info: McpSetupInfo | null, client: McpClient): string {
   if (!info) return "";
-  return client === "opencode" ? info.opencodeCommand : info.commandLine;
+  switch (client) {
+    case "claude":
+      return info.commandLine;
+    case "opencode":
+      return info.opencodeJson;
+    case "cursor":
+      return info.cursorJson;
+    case "generic":
+      return info.url;
+  }
 }
 
-/** 有连接就压过安装状态：agent 已经在用了，不必再提安装 */
+/** 有会话就压过服务状态：agent 已经在用了，不必再提怎么接 */
 export function welcomeMcpState(info: McpSetupInfo | null, clients: readonly unknown[]): McpWelcomeState {
   if (clients.length > 0) return "connected";
-  if (!info?.installed) return "not-installed";
+  if (info && !info.listening) return "offline";
   return "idle";
 }
 
-/** 状态行：监听状态 + 在线人数（端点路径刻意不显示，避免把内部路径当卖点） */
-export function statusLine(status: { listening: boolean; clients: readonly unknown[] }): string {
-  if (!status.listening) return "MCP 服务未启动";
+/** 状态行：监听状态 + 在线人数；启动失败时带原因（端口被占最常见） */
+export function statusLine(status: { listening: boolean; clients: readonly unknown[]; error?: string | null }): string {
+  if (!status.listening) {
+    return status.error ? `MCP 服务未启动 · ${status.error}` : "MCP 服务未启动";
+  }
   if (status.clients.length > 0) return `MCP 服务监听中 · 已连接 ${status.clients.length} 个 agent`;
   return "MCP 服务监听中 · 等待 agent 接入";
 }
 
 export function actionText(state: McpWelcomeState): string {
   switch (state) {
-    case "not-installed":
-      return "安装命令行工具";
+    case "offline":
+      return "检查端口";
     case "idle":
       return "复制接入命令";
     case "connected":

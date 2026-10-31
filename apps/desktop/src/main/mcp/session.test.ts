@@ -18,16 +18,39 @@ const host: McpToolHost = {
 const options = { version: "0.0.1" };
 
 describe("MCP 协议处理", () => {
-  it("initialize 回显协议版本与服务器信息", async () => {
+  it("initialize 协商到请求的受支持版本", async () => {
     const response = await handleRpc(
-      { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } },
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-03-26" } },
       host,
       options,
     );
     expect(response).toMatchObject({
       id: 1,
-      result: { protocolVersion: "2024-11-05", serverInfo: { name: "sqraft", version: "0.0.1" } },
+      result: { protocolVersion: "2025-03-26", serverInfo: { name: "sqraft", version: "0.0.1" } },
     });
+  });
+
+  it("initialize 不带版本时给最新版", async () => {
+    const response = await handleRpc({ jsonrpc: "2.0", id: 1, method: "initialize" }, host, options);
+    expect(response).toMatchObject({ result: { protocolVersion: "2025-11-25" } });
+  });
+
+  it("不支持的协议版本回落到最新受支持版本，而不是报错", async () => {
+    const response = await handleRpc(
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2024-11-05" } },
+      host,
+      options,
+    );
+    expect(response).toMatchObject({ result: { protocolVersion: "2025-11-25" } });
+  });
+
+  it("2025-11-25 原样协商", async () => {
+    const response = await handleRpc(
+      { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-11-25" } },
+      host,
+      options,
+    );
+    expect(response).toMatchObject({ result: { protocolVersion: "2025-11-25" } });
   });
 
   it("tools/list 返回宿主提供的清单", async () => {

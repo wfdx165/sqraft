@@ -3,26 +3,28 @@ import type { McpSetupInfo } from "../shared/ipc";
 
 function makeInfo(overrides: Partial<McpSetupInfo> = {}): McpSetupInfo {
   return {
-    cliPath: "/App/Resources/bin/sqraft-mcp",
-    installed: false,
-    installedPath: null,
-    targetDir: "/usr/local/bin",
-    commandLine: "claude mcp add sqraft -- node /App/Resources/bin/sqraft-mcp",
-    opencodeCommand: "opencode mcp add sqraft --global -- node /App/Resources/bin/sqraft-mcp",
-    json: "{}",
+    url: "http://127.0.0.1:7331/mcp",
+    port: 7331,
+    explicitPort: null,
+    driftFrom: null,
+    listening: true,
+    error: null,
+    commandLine: "claude mcp add --transport http sqraft http://127.0.0.1:7331/mcp",
     opencodeJson: "{}",
+    cursorJson: "{}",
     ...overrides,
   };
 }
 
 const setupMock = vi.fn();
+const setPortMock = vi.fn();
 
 let mcpSetup: typeof import("./mcp-setup").mcpSetup;
 
 beforeEach(async () => {
   vi.clearAllMocks();
   vi.resetModules();
-  vi.stubGlobal("window", { sqraft: { mcp: { setup: setupMock } } });
+  vi.stubGlobal("window", { sqraft: { mcp: { setup: setupMock, setPort: setPortMock } } });
   ({ mcpSetup } = await import("./mcp-setup"));
 });
 
@@ -37,21 +39,23 @@ describe("接入配置 store", () => {
     expect(b).toBe(info);
   });
 
-  it("有缓存时不再请求，force 会重新读盘", async () => {
+  it("有缓存时不再请求，force 会重新读一次", async () => {
     setupMock.mockResolvedValue(makeInfo());
     await mcpSetup.ensure();
     await mcpSetup.ensure();
     expect(setupMock).toHaveBeenCalledTimes(1);
 
-    setupMock.mockResolvedValue(makeInfo({ installed: true }));
+    setupMock.mockResolvedValue(makeInfo({ port: 7332 }));
     const forced = await mcpSetup.ensure(true);
     expect(setupMock).toHaveBeenCalledTimes(2);
-    expect(forced?.installed).toBe(true);
+    expect(forced?.port).toBe(7332);
   });
 
-  it("set 之后两个界面读到同一份新配置", () => {
-    const next = makeInfo({ installed: true, installedPath: "/usr/local/bin/sqraft-mcp" });
-    mcpSetup.set(next);
+  it("改端口后两个界面读到同一份新配置", async () => {
+    const next = makeInfo({ port: 7400, explicitPort: 7400 });
+    setPortMock.mockResolvedValue(next);
+    await mcpSetup.savePort(7400);
+    expect(setPortMock).toHaveBeenCalledWith(7400);
     expect(mcpSetup.info.value).toEqual(next);
   });
 

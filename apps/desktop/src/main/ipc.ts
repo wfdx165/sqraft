@@ -24,13 +24,6 @@ function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-let newDocumentOnReady = false;
-
-/** MCP 自动拉起时用：渲染层就绪后跳过欢迎页，直接建空稿。 */
-export function requestNewDocumentOnReady(): void {
-  newDocumentOnReady = true;
-}
-
 /** 正在进行中的"未保存"对话框（并发请求共享同一个结果） */
 let unsavedDialog: Promise<UnsavedChoice> | null = null;
 
@@ -70,12 +63,8 @@ export function registerFileChannels(): void {
     dataPath: app.getPath("userData"),
   }));
 
-  ipcMain.on(CHANNELS.appRendererReady, (event) => {
+  ipcMain.on(CHANNELS.appRendererReady, () => {
     flushPendingOpen();
-    if (newDocumentOnReady) {
-      newDocumentOnReady = false;
-      event.sender.send(CHANNELS.appNewDocument);
-    }
   });
 
   ipcMain.handle(CHANNELS.recentList, async () =>

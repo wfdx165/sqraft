@@ -3,8 +3,6 @@
  *
  * 以前是 Electron 默认的 `userData`（macOS 的 `~/Library/Application Support/Sqraft`），
  * 用户找不到、也不好备份。首次启动时把旧目录里的偏好复制过来，旧目录保留不删。
- *
- * CLI（`resources/bin/sqraft-mcp`）里有一份等价的路径规则，改动时两边必须同步。
  */
 import { copyFile, mkdir, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";

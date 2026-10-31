@@ -4,11 +4,9 @@ import {
   logError,
   logInfo,
   logWarn,
-  formatClientIdentity,
   formatFields,
   formatLine,
   setMcpLogSink,
-  singleLine,
   summarizeString,
   type McpLogLevel,
 } from "./log";
@@ -72,16 +70,6 @@ describe("MCP 日志行", () => {
     expect(line).not.toContain("\u001b");
   });
 
-  it("身份里的换行与控制字符同样被转义", () => {
-    const identity = formatClientIdentity({ name: "evil\nname", pid: "1\u001b[2J" });
-    expect(identity).toBe("evil\\nname(1\\u001b[2J)");
-    expect(singleLine(identity)).toBe(identity);
-  });
-
-  it("超长身份截断，不能靠自报名字把行撑爆", () => {
-    expect(formatClientIdentity({ name: "n".repeat(60) })).toBe(`${"n".repeat(40)}…(+20 chars)`);
-  });
-
   it("整行超过上限时兜底截断", () => {
     const fields = Object.fromEntries(Array.from({ length: 10 }, (_, i) => [`k${i}`, "y".repeat(190)]));
     const line = formatLine("info", at, "c1", "tools/call x", fields);
@@ -89,13 +77,6 @@ describe("MCP 日志行", () => {
     expect(line.length).toBeLessThan(LINE_LIMIT + 40);
     expect(line).toContain("…(+");
     expect(line.endsWith("chars)")).toBe(true);
-  });
-
-  it("身份标签按可用字段降级", () => {
-    expect(formatClientIdentity({ name: "claude", pid: 8123 })).toBe("claude(8123)");
-    expect(formatClientIdentity({ name: "claude" })).toBe("claude");
-    expect(formatClientIdentity({ pid: 8123 })).toBe("pid=8123");
-    expect(formatClientIdentity({})).toBe("");
   });
 });
 

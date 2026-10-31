@@ -184,6 +184,13 @@ export const tools: ToolDefinition[] = [
     },
   },
   {
+    name: "get_selection",
+    description:
+      "读取画布当前选区（用户正在选中的节点），返回活动页 id 与每个选中节点的摘要：id / name / type / parentId / 世界坐标 x,y / width / height / locked / visible，实例还带 componentId、实例子孙带 mainId。想对「用户选的东西」动手时先调它，再把 nodeId 显式传给 update_node / arrange_nodes 等工具。选区为空时给空数组与 hint。只读。",
+    readonly: true,
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
     name: "get_tokens",
     description:
       "读取设计 Token 集合与取值；没有 Token 时返回空表。样式可以引用 Token（fillToken / strokeToken），也可以直接给 fill / stroke 字面量。",
@@ -850,6 +857,8 @@ export function makeExecutor(
   getActivePageId?: () => NodeId | null,
   measureText?: (node: DocNode, style: NodeStyle, text: string) => { width: number; height: number },
   documentHost?: DocumentHost,
+  /** 画布当前选区（UI 状态，不进文档）；宿主不提供时 `get_selection` 返回空数组。 */
+  getSelection?: () => NodeId[],
 ): ToolExecutor {
   return async (name, args) => {
     const run = async (): Promise<string> => {
@@ -886,6 +895,37 @@ export function makeExecutor(
           ...(withTrees ? { subtree: serializeSubtree(store, c.id) } : {}),
         }));
         return JSON.stringify({ pages, components });
+      }
+      case "get_selection": {
+        const ids = getSelection?.() ?? [];
+        const nodes = ids
+          .map((id) => store.doc.nodes[id])
+          .filter((node): node is DocNode => Boolean(node))
+          .map((node) => {
+            const box = worldRect(store.doc, node.id);
+            return {
+              id: node.id,
+              name: node.name,
+              type: node.type,
+              parentId: node.parentId,
+              x: Math.round((box?.x ?? 0) * 100) / 100,
+              y: Math.round((box?.y ?? 0) * 100) / 100,
+              width: node.width,
+              height: node.height,
+              locked: node.locked,
+              visible: node.visible,
+              // 实例指回主组件；实例子孙指回母版里对应的那个节点
+              ...(node.type === "instance" ? { componentId: node.componentId } : {}),
+              ...(node.mainId ? { mainId: node.mainId } : {}),
+            };
+          });
+        return JSON.stringify({
+          // 明确叫 activePageId：根级主组件被选中时它仍然指向当前页面，不代表选区所属页面
+          activePageId: getActivePageId?.() ?? null,
+          nodeIds: nodes.map((node) => node.id),
+          nodes,
+          ...(nodes.length === 0 ? { hint: "画布上没有选中对象" } : {}),
+        });
       }
       case "get_tokens": {
         const tokens = store.doc.tokens;

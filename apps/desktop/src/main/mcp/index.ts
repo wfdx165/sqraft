@@ -3,19 +3,28 @@
  * 工具清单与执行器都在渲染层（@sqraft/ai-tools 的真源），这里只转发。
  */
 import { app, BrowserWindow, ClipboardItem, clipboard, ipcMain } from "electron";
-import { readFile, stat } from "node:fs/promises";
+import { chmod, readFile, stat, writeFile } from "node:fs/promises";
+import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CHANNELS,
   type McpCallResult,
+  type McpSetupInfo,
   type McpStatus,
   type McpToolInfo,
 } from "../../shared/ipc";
+import { currentPreferences, updateMcpPreferences } from "../recent-state";
 import { logError, logInfo, logWarn } from "./log";
+import { isValidPort, MCP_DEFAULT_PORT, MCP_FALLBACK_STEPS } from "./port";
 import { startMcpServer, type McpRuntime } from "./server";
-import { collectSetupInfo, installCli, writableInstallDir } from "./setup";
+import { collectSetupInfo } from "./setup";
 
 let runtime: McpRuntime | null = null;
+/** 启动失败原因（端口被占等）；成功时为 null */
+let startError: string | null = null;
+/** 自动模式下发生漂移时原来想用的端口 */
+let driftFrom: number | null = null;
+let appVersion = "0.0.0";
 let tools: McpToolInfo[] = [];
 let sequence = 0;
 
@@ -44,17 +53,36 @@ const pending = new Map<number, PendingCall>();
 /** 比队列的 30s 稍长：队列负责给客户端回超时，这里只负责清理挂起表。 */
 const PENDING_TTL_MS = 35_000;
 
-async function setupInfo() {
+/** 首选端口：显式偏好优先，其次自动模式上次成功的端口。 */
+function preferredPort(): { port: number; explicit: boolean } {
+  const prefs = currentPreferences().mcp ?? {};
+  if (prefs.port !== undefined) return { port: prefs.port, explicit: true };
+  return { port: prefs.autoPort ?? MCP_DEFAULT_PORT, explicit: false };
+}
+
+function setupInfo(): McpSetupInfo {
+  const { port, explicit } = preferredPort();
+  const shownPort = runtime?.port ?? port;
   return collectSetupInfo({
-    packaged: app.isPackaged,
-    resourcesPath: process.resourcesPath,
-    appPath: app.getAppPath(),
+    url: `http://127.0.0.1:${shownPort}/mcp`,
+    listening: runtime !== null,
+    port: runtime?.port ?? null,
+    explicitPort: explicit ? port : null,
+    driftFrom: runtime === null ? null : driftFrom,
+    error: startError,
   });
 }
 
 /** 服务状态：`listening` 由运行时是否存在推导，渲染层据此显示"监听中 / 未启动"。 */
 function currentStatus(): McpStatus {
-  return { listening: runtime !== null, clients: runtime?.clients() ?? [] };
+  return {
+    listening: runtime !== null,
+    port: runtime?.port ?? null,
+    url: runtime?.url ?? null,
+    clients: runtime?.clients() ?? [],
+    error: startError,
+    driftFrom,
+  };
 }
 
 function broadcastStatus(): void {
@@ -67,16 +95,7 @@ function broadcastStatus(): void {
 export function registerMcpChannels(): void {
   ipcMain.handle(CHANNELS.mcpSetup, () => setupInfo());
   ipcMain.handle(CHANNELS.mcpStatusQuery, () => currentStatus());
-
-  ipcMain.handle(CHANNELS.mcpInstallCli, async () => {
-    const { dir } = await writableInstallDir();
-    const info = await setupInfo();
-    const result = await installCli(info.cliPath, dir);
-    const fields = { ok: result.ok, path: result.path, message: result.message };
-    if (result.ok) logInfo(null, "cli install", fields);
-    else logError(null, "cli install failed", fields);
-    return { ok: result.ok, message: result.message, info: await setupInfo() };
-  });
+  ipcMain.handle(CHANNELS.mcpSetPort, (_event, port: unknown) => setMcpPort(port));
 
   ipcMain.on(CHANNELS.appCopyText, (_event, text: string) => {
     clipboard.writeText(String(text));
@@ -166,18 +185,100 @@ export function registerMcpChannels(): void {
   });
 }
 
-export async function startMcp(endpoint: string, appVersion: string): Promise<void> {
-  runtime = await startMcpServer({
-    endpoint,
-    appVersion,
-    onClientChange: () => broadcastStatus(),
-    host: {
-      list: () => tools,
-      call: (name, args) => callRenderer(name, args),
-    },
-  });
+/** 写一份只读的运行信息供排障（`~/.sqraft/mcp.json`）；客户端发现机制不用它。 */
+async function writeRuntimeInfo(): Promise<void> {
+  const file = join(app.getPath("userData"), "mcp.json");
+  const payload = {
+    port: runtime?.port ?? null,
+    url: runtime?.url ?? null,
+    pid: process.pid,
+    updatedAt: new Date().toISOString(),
+    error: startError,
+  };
+  await writeFile(file, JSON.stringify(payload, null, 2), { mode: 0o600 }).catch(() => {});
+  // 写已存在的文件时 mode 不生效，权限单独收敛一次
+  await chmod(file, 0o600).catch(() => {});
+}
+
+/**
+ * 启动（或重启）HTTP 服务。端口规则：
+ * - 显式端口（偏好里手填的）严格执行，被占就失败、不顺延；
+ * - 自动模式从 7331 / 上次成功的端口起，被占向上顺延，并把实际端口写回偏好。
+ */
+async function startServer(): Promise<void> {
+  const { port, explicit } = preferredPort();
+  const previousAuto = currentPreferences().mcp?.autoPort;
+
+  let next: McpRuntime;
+  try {
+    next = await startMcpServer({
+      bindHost: "127.0.0.1",
+      port,
+      fallbackSteps: explicit ? 0 : MCP_FALLBACK_STEPS,
+      appVersion,
+      onClientChange: () => broadcastStatus(),
+      host: {
+        list: () => tools,
+        call: (name, args) => callRenderer(name, args),
+      },
+    });
+  } catch (error) {
+    runtime = null;
+    driftFrom = null;
+    startError = error instanceof Error ? error.message : String(error);
+    logError(null, "server start failed", { port, error: startError });
+    await writeRuntimeInfo();
+    broadcastStatus();
+    return;
+  }
+
+  runtime = next;
+  startError = null;
+  driftFrom = !explicit && next.port !== port ? port : null;
+
+  // 持久化失败不该推翻已经跑起来的服务：只记一条 warn，端口下次再收敛
+  if (!explicit && next.port !== previousAuto) {
+    try {
+      await updateMcpPreferences({ autoPort: next.port });
+    } catch (error) {
+      logWarn(null, "persist mcp port failed", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+  if (driftFrom !== null) {
+    logWarn(null, "port drifted", { from: driftFrom, to: next.port, clients: 0 });
+  }
+  await writeRuntimeInfo();
   // 服务可能在页面挂载之后才就绪：主动推一次，欢迎页不必轮询
   broadcastStatus();
+}
+
+export async function startMcp(version: string): Promise<void> {
+  appVersion = version;
+  await startServer();
+}
+
+/** 改端口：null = 自动模式；数字 = 严格使用。会重启服务并断开所有现有会话。 */
+export async function setMcpPort(port: unknown): Promise<McpSetupInfo> {
+  if (port !== null && !isValidPort(port)) {
+    throw new Error("端口必须是 1024–65535 的整数");
+  }
+  const previousPort = runtime?.port ?? null;
+  if (runtime) {
+    await runtime.close();
+    runtime = null;
+    broadcastStatus();
+  }
+  if (port === null) {
+    // 回到自动模式：优先沿用刚才的端口，避免无谓漂移
+    await updateMcpPreferences({ port: null, autoPort: previousPort });
+  } else {
+    await updateMcpPreferences({ port, autoPort: null });
+  }
+  logInfo(null, "port preference changed", { port: port ?? "auto", previous: previousPort });
+  await startServer();
+  return setupInfo();
 }
 
 function callRenderer(name: string, args: Record<string, unknown>): Promise<string> {
@@ -237,12 +338,10 @@ async function clipboardFileImage(): Promise<Uint8Array | null> {
   return null;
 }
 
-/** 退出前告知所有客户端，避免它们收到"连接被重置"。 */
+/** 退出前关掉监听；HTTP 没有长连接广播，客户端下次请求会发现连不上。 */
 export function shutdownMcp(): void {
-  runtime?.broadcastShutdown();
-}
-
-/** 当前连接数（退出守卫与日志用；列表由 `currentStatus()` 提供）。 */
-export function mcpClientCount(): number {
-  return runtime?.clients().length ?? 0;
+  void runtime?.close().catch((error: unknown) => {
+    logError(null, "server close failed", { error: error instanceof Error ? error.message : String(error) });
+  });
+  runtime = null;
 }

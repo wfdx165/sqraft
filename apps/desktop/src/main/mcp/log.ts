@@ -18,9 +18,6 @@ export type McpLogLevel = "info" | "warn" | "error";
 export const LINE_LIMIT = 1024;
 /** 普通字符串（文案、节点名）保留的字符数。 */
 export const STRING_LIMIT = 200;
-/** 连接身份里进程名的上限：`ps` 给的 basename 不会更长，长的多半是伪造。 */
-const IDENTITY_LIMIT = 40;
-const PID_LIMIT = 20;
 /** agent 传的参数结构不可控：限制嵌套层数与数组长度，别让日志爆掉。 */
 const DEPTH_LIMIT = 4;
 const ARRAY_LIMIT = 50;
@@ -29,13 +26,6 @@ const BASE64_FOLD_MIN = 1000;
 
 const DATA_URL = /^data:([\w.+-]+\/[\w.+-]+);base64,/;
 const BASE64_ONLY = /^[A-Za-z0-9+/]+={0,2}$/;
-
-export interface McpClientIdentity {
-  pid?: number | string;
-  ppid?: number | string;
-  /** 父进程名（agent 本体），CLI 尽力而为地取，取不到就只报 pid */
-  name?: string;
-}
 
 /** 压平换行 + 转义控制字符（含 ESC 与 C1）：一行一个事件，内容不能操纵终端。 */
 export function singleLine(value: string): string {
@@ -116,19 +106,7 @@ export function formatTime(date: Date): string {
   return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
 }
 
-/** 连接的身份标签：`claude(8123)` / `pid=8123` / 空串（旧 CLI 不发身份字段）。 */
-export function formatClientIdentity(identity: McpClientIdentity): string {
-  const rawName = identity.name?.trim() ?? "";
-  const name = rawName ? truncate(singleLine(rawName), IDENTITY_LIMIT) : "";
-  const rawPid = identity.pid === undefined || identity.pid === null ? "" : String(identity.pid);
-  const pid = rawPid ? truncate(singleLine(rawPid), PID_LIMIT) : "";
-  if (name && pid) return `${name}(${pid})`;
-  if (name) return name;
-  if (pid) return `pid=${pid}`;
-  return "";
-}
-
-/** `[mcp] 14:03:11.482 info  c1 claude(8123) tools/call document.write ok 12ms args={…}` */
+/** `[mcp] 14:03:11.482 info  c1 claude-code/2.1 tools/call document.write ok 12ms args={…}` */
 export function formatLine(
   level: McpLogLevel,
   date: Date,

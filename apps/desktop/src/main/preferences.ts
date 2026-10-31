@@ -3,6 +3,7 @@
  * 纯函数 + 显式路径，测试只需临时目录，不依赖 Electron。
  */
 import { readFile } from "node:fs/promises";
+import { isValidPort } from "./mcp/port";
 import { writeFileAtomic } from "./files";
 
 export interface WindowBounds {
@@ -16,6 +17,15 @@ export interface WindowBounds {
 export interface Preferences {
   recentFiles: string[];
   window?: WindowBounds;
+  mcp?: McpPreferences;
+}
+
+/** MCP 端口偏好：显式端口优先；自动模式记住上次成功的端口，避免每次重启重新漂移。 */
+export interface McpPreferences {
+  /** 用户显式指定的端口（1024–65535）；缺省 = 自动模式 */
+  port?: number;
+  /** 自动模式上次成功监听的端口 */
+  autoPort?: number;
 }
 
 const MAX_RECENT = 8;
@@ -38,13 +48,23 @@ export async function loadPreferences(file: string): Promise<Preferences> {
     const raw = await readFile(file, "utf8");
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object") return { ...DEFAULT_PREFERENCES };
-    const record = parsed as { recentFiles?: unknown; window?: unknown };
+    const record = parsed as { recentFiles?: unknown; window?: unknown; mcp?: unknown };
     const recent = record.recentFiles;
     const recentFiles = Array.isArray(recent) ? recent.filter((item): item is string => typeof item === "string") : [];
-    return { recentFiles: recentFiles.slice(0, MAX_RECENT), window: sanitizeWindow(record.window) };
+    const mcp = sanitizeMcp(record.mcp);
+    return { recentFiles: recentFiles.slice(0, MAX_RECENT), window: sanitizeWindow(record.window), ...(mcp ? { mcp } : {}) };
   } catch {
     return { ...DEFAULT_PREFERENCES };
   }
+}
+
+function sanitizeMcp(value: unknown): McpPreferences | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  const next: McpPreferences = {};
+  if (isValidPort(raw.port)) next.port = raw.port;
+  if (isValidPort(raw.autoPort)) next.autoPort = raw.autoPort;
+  return next.port === undefined && next.autoPort === undefined ? undefined : next;
 }
 
 function sanitizeWindow(value: unknown): WindowBounds | undefined {

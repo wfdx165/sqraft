@@ -96,7 +96,7 @@ export async function newDocument(): Promise<boolean> {
   return true;
 }
 
-/** 关闭文档回到欢迎页（MCP 自动拉起时也会走这里的新建入口，见 07）。 */
+/** 关闭文档回到欢迎页（MCP 首次调用建空稿也走这里的新建入口）。 */
 export async function closeDocument(): Promise<void> {
   if (!ui.docOpen) return;
   if (!(await confirmReplaceCurrent())) return;
@@ -260,11 +260,6 @@ export function installFileSession(): void {
   syncTitle();
 
   bridge.app.signalReady();
-  disposers.push(
-    bridge.app.onNewDocumentRequest(() => {
-      if (!ui.docOpen) void newDocument();
-    }),
-  );
 
   disposers.push(
     bridge.app.onOpenRequest((path) => {

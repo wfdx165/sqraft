@@ -45,7 +45,7 @@ sqraft/
     ├── src/main/              主进程：MCP 宿主、文件 IO、窗口/菜单
     ├── src/preload/           白名单 IPC 桥
     ├── src/renderer/          Vue 3 渲染层（画布 + 面板）
-    ├── resources/bin/         sqraft-mcp CLI（随包分发，asar 之外）
+    ├── scripts/               打包分发脚本、图标生成
     ├── scripts/               打包分发脚本、图标生成
     └── electron-builder.yml   三平台打包配置
 ```
@@ -78,22 +78,28 @@ pnpm dist:mac    # 也可显式指定；交叉打包需要 wine / docker
 
 ## 接入 MCP
 
-欢迎页就是接入口：顶部显示 MCP 服务状态与在线 agent 数，并给出一行可直接复制的接入命令（可在 `Claude Code` / `OpenCode` 之间切换）；按状态给动作（`安装命令行工具` / `复制接入命令`）。完整的客户端配置（两套命令、两套 JSON、安装到 PATH）在 `帮助 > 配置 MCP…` 面板里。
+欢迎页就是接入口：顶部显示 MCP 服务状态与在线 agent 会话数，并给出可复制的接入片段（`Claude Code` / `OpenCode` / `Cursor` / 通用 URL）；端口设置与全部片段在 `帮助 > 配置 MCP…` 面板里。
 
-- OpenCode：`opencode mcp add sqraft --global -- node <cli 路径>`，或手写配置
+- 端点：`http://127.0.0.1:7331/mcp`（规范 Streamable HTTP，支持协议版本 `2025-11-25` / `2025-06-18` / `2025-03-26`）
+- **应用需要保持运行**：没有命令行工具，也不会由客户端自动拉起
+- 端口：默认 `7331`；面板里填 `1024–65535` 则严格使用（被占直接报错），留空为自动模式（被占向上顺延并记住新端口）
+- Claude Code：`claude mcp add --transport http sqraft http://127.0.0.1:7331/mcp`
+- OpenCode（`mcp.servers`）：
   ```jsonc
   { "$schema": "https://opencode.ai/config.json",
-    "mcp": { "servers": { "sqraft": { "type": "local", "command": ["node", "<cli 路径>"] } } } }
+    "mcp": { "servers": { "sqraft": { "type": "remote", "url": "http://127.0.0.1:7331/mcp" } } } }
   ```
-- Claude Code：`claude mcp add sqraft -- node <cli 路径>`
-- 端点：`~/.sqraft/mcp.sock`（macOS / Linux）、`\\.\pipe\sqraft-mcp`（Windows）
-- 薄 CLI（`resources/bin/sqraft-mcp`，无扩展名）只做 `stdio ↔ 本机 IPC` 管道；应用没在跑时会自动拉起，并跳过欢迎页直接建空稿
-- 多客户端串行执行，单次调用 30s 超时；应用退出前广播关闭通知
-- 操作日志只进终端：运行时所在终端会打出 `[mcp]` 行（连接、工具名、耗时、参数摘要、错误）。不写文件，打包版从 Finder 启动时 stdout 没有出口、看不到——排查问题请从终端启动
+- Cursor / 通用（`mcpServers`）：
+  ```jsonc
+  { "mcpServers": { "sqraft": { "url": "http://127.0.0.1:7331/mcp" } } }
+  ```
+- 多客户端串行执行，单次调用 30s 超时；会话空闲 30 分钟过期；不提供 SSE，也没有退出广播
+- 安全：只监听 `127.0.0.1`，拒绝带 `Origin` 的请求；**没有 token**，同机其他用户/进程也能连接
+- 操作日志只进终端：运行时所在终端会打出 `[mcp]` 行（会话、工具名、耗时、参数摘要、错误）。不写文件，打包版从 Finder 启动时 stdout 没有出口、看不到——排查问题请从终端启动
 
 图片：`create_node` 的 `kind` 支持 `image`，用 base64 传位图（上限 5MB）；`update_node` 可改 `crop` 与 `mask`。
 
-工具：读 `read_document` / `get_tokens` / `inspect_layout` / `screenshot` / `export_png`；写 `define_token` / `rename_token` / `create_page` / `create_node` / `update_node` / `move_node` / `delete_node` / 组件与布局相关工具 / `import_font` / `document.*`。主组件是文档根节点（不属于任何页面），`read_document` 的 `components` 给摘要、`includeComponentTrees=true` 才带母版内部节点树。完整清单与参数以 `packages/ai-tools/src/index.ts` 的 `tools`（`toMCPManifest()`）为准，欢迎页显示实时数量。
+工具：读 `read_document` / `get_selection` / `get_tokens` / `inspect_layout` / `screenshot` / `export_png`；写 `define_token` / `rename_token` / `create_page` / `create_node` / `update_node` / `move_node` / `delete_node` / 组件与布局相关工具 / `import_font` / `document.*`。主组件是文档根节点（不属于任何页面），`read_document` 的 `components` 给摘要、`includeComponentTrees=true` 才带母版内部节点树。完整清单与参数以 `packages/ai-tools/src/index.ts` 的 `tools`（`toMCPManifest()`）为准，欢迎页显示实时数量。
 
 ## 文件格式
 
