@@ -69,16 +69,16 @@ export function hitIn(vp: Viewport, nodeId: NodeId, lx: number, ly: number): Nod
     for (let i = node.children.length - 1; i >= 0; i--) {
       const c = docStore.doc.nodes[node.children[i]];
       if (!c || !c.visible || c.locked) continue;
-      if (c.type === "instance" && ui.instanceContext.at(-1) !== c.id) return c.id;
       const local = toLocal(c, lx, ly);
       const shapeHit = hitShapeAt(c, local.x, local.y, 5 / vp.zoom);
       if (shapeHit !== null) {
         if (shapeHit) return c.id;
         continue;
       }
-      if (insideBox(c, local.x, local.y)) {
-        return hitIn(vp, c.id, local.x, local.y) ?? c.id;
-      }
+      if (!insideBox(c, local.x, local.y)) continue;
+      // 实例是原子对象：指针真的落在它矩形里才整体选中，否则会抢走同父其它元素的点击
+      if (c.type === "instance" && ui.instanceContext.at(-1) !== c.id) return c.id;
+      return hitIn(vp, c.id, local.x, local.y) ?? c.id;
     }
   }
   if (node.type === "instance" && ui.instanceContext.at(-1) === node.id) return node.id;

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { createDocWithPage, createNode, DocStore, firstPageId, type NodeId } from "@sqraft/core";
+import { createDocWithPage, createNode, DocStore, firstPageId, newId, type NodeId } from "@sqraft/core";
 import type { Viewport } from "@sqraft/render";
 import { docStore, ui } from "../store";
 import { hitTest, pageAt } from "./hit";
@@ -68,5 +68,54 @@ describe("画布命中：主组件是文档根节点", () => {
     expect(hitTest(vp, 100, 100)?.id).toBe(pageId);
     expect(pageAt(700, 90)).toBeNull();
     expect(pageAt(700, 90)).not.toBe(masterId);
+  });
+});
+
+describe("画布命中：实例不能抢走同父元素的点击", () => {
+  /**
+   * 曾经的事故：`hitIn` 在判断几何之前就对 instance 直接 `return c.id`，
+   * 于是只要容器里有一个实例（且 z 序靠后），点容器内任何地方都会选中它，
+   * 指针下的文字/画板永远轮不到。
+   */
+  function setupWithInstance(): { textId: NodeId; instanceId: NodeId } {
+    const { pageId, masterId } = setup();
+    const frame = createNode("frame", { name: "容器", x: 0, y: 0, width: 400, height: 400 });
+    docStore.apply({ type: "node.create", params: { nodes: [frame], parentId: pageId } });
+    const text = createNode("text", {
+      name: "标题",
+      x: 10,
+      y: 10,
+      width: 100,
+      height: 40,
+      text: "标题",
+    });
+    docStore.apply({ type: "node.create", params: { nodes: [text], parentId: frame.id } });
+    // 实例后创建 = z 序靠上；位置在容器下半部分，和文字不重叠
+    const instanceId = newId();
+    docStore.apply({
+      type: "instance.create",
+      params: { componentId: masterId, parentId: frame.id, nodeId: instanceId, x: 10, y: 300 },
+    });
+    return { textId: text.id, instanceId };
+  }
+
+  it("点文字时命中文字，而不是别处的实例", () => {
+    const { textId, instanceId } = setupWithInstance();
+    const hit = hitTest(vp, 60, 30);
+    expect(hit?.id).toBe(textId);
+    expect(hit?.id).not.toBe(instanceId);
+  });
+
+  it("点在实例矩形里仍然整体选中实例", () => {
+    const { instanceId } = setupWithInstance();
+    expect(hitTest(vp, 110, 350)?.id).toBe(instanceId);
+  });
+
+  it("进入实例上下文后，点实例内部不再被实例本身截走", () => {
+    const { instanceId } = setupWithInstance();
+    ui.instanceContext = [instanceId];
+    // 母版没有子节点：上下文内点到空白处仍回落到实例本身
+    expect(hitTest(vp, 110, 350)?.id).toBe(instanceId);
+    ui.instanceContext = [];
   });
 });

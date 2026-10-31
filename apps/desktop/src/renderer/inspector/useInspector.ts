@@ -766,16 +766,13 @@ function setClosed(e: Event): void {
 const copied = ref(false);
 let copyTimer = 0;
 
-async function copyId(): Promise<void> {
+function copyId(): void {
   if (!node.value) return;
-  try {
-    await navigator.clipboard.writeText(node.value.id);
-    copied.value = true;
-    window.clearTimeout(copyTimer);
-    copyTimer = window.setTimeout(() => (copied.value = false), 1200);
-  } catch {
-    /* 剪贴板不可用时静默失败 */
-  }
+  // 走主进程写剪贴板：渲染层的 navigator.clipboard 会被权限处理器拒绝（main/index.ts）
+  window.sqraft.app.copyText(node.value.id);
+  copied.value = true;
+  window.clearTimeout(copyTimer);
+  copyTimer = window.setTimeout(() => (copied.value = false), 1200);
 }
 
 /* ---------- 插槽 / 组件（沿用原有逻辑） ---------- */
