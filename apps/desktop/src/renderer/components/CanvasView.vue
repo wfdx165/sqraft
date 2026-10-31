@@ -8,6 +8,7 @@ import {
   imageCropOf,
   makeAnchor,
   scaleVector,
+  unionRects,
   worldRect,
   type Command,
   type DocNode,
@@ -88,6 +89,7 @@ import {
   type ResizeHandle,
 } from "../canvas/selection";
 import { drawPulse, drawSelectionOverlay } from "../canvas/selection-overlay";
+import { agentActivity, agentFxActive, drawAgentOverlay } from "../canvas/agent-activity";
 import { useTextEditing } from "../canvas/text-editing";
 import { drawGrid } from "../canvas/grid";
 import { FLY_MS, PULSE_MS, createViewportNav } from "../canvas/viewport-nav";
@@ -244,6 +246,7 @@ const pen = createPenState();
 const viewportNav = createViewportNav({ vp, pen, markDirty, commitEditors });
 const {
   flyTo,
+  focusBounds,
   focusRect,
   focusNode,
   focusPage,
@@ -485,6 +488,9 @@ function draw() {
     else drawPulse(ctx, vp, pulse.id, t);
   }
 
+  // agent 改动标注：文档层之上、选中框之外，短时非阻挡
+  drawAgentOverlay(ctx, vp);
+
   ctx.restore();
   drawRootLabels(ctx, vp, {
     renameId: pageRename.value?.id ?? null,
@@ -502,6 +508,9 @@ function draw() {
 }
 
 let lastTick = performance.now();
+/** 呼吸描边不需要 60fps：限到 30fps，长调用时别为了一点呼吸把整层文档重绘满帧 */
+const AGENT_FX_FPS = 30;
+let lastAgentPaint = 0;
 
 function loop() {
   const now = performance.now();
@@ -527,7 +536,9 @@ function loop() {
     if (tick.done && isEmptyTransition(insertPreview)) insertPreview = null;
   }
   const pulse = viewportNav.nav.pulse;
-  if (dirty || (pulse && now - pulse.start < PULSE_MS)) {
+  const agentFrame = agentFxActive(now, vp) && now - lastAgentPaint >= 1000 / AGENT_FX_FPS;
+  if (dirty || (pulse && now - pulse.start < PULSE_MS) || agentFrame) {
+    if (agentFrame) lastAgentPaint = now;
     dirty = false;
     draw();
   }
@@ -2307,6 +2318,15 @@ onMounted(() => {
     return pageAtViewportCenter()?.id ?? null;
   };
   hooks.insertInstance = insertInstance;
+  hooks.getViewport = () => ({ x: vp.x, y: vp.y, width: vp.width, height: vp.height, zoom: vp.zoom });
+  hooks.revealAgentActivity = () => {
+    const pageId = agentActivity.pageId;
+    const bounds = unionRects(agentActivity.rects);
+    // 跨页先切活动页：有改动范围就随后直接飞过去，没有（如 create_page）就适配整页
+    if (pageId && pageId !== ui.activePageId) activatePage(pageId, !bounds);
+    if (bounds) focusBounds(bounds, 160);
+    markDirty();
+  };
   hooks.requestRedraw = markDirty;
   unsub = docStore.subscribe(markDirty);
   stopShortcuts = registerShortcuts({

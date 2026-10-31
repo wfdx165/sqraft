@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from "vue";
+import { isCrossPage } from "../canvas/agent-activity";
 import { visibleClients } from "../connection-status";
 import { mcpUi, refreshMcpStatus } from "../mcp-host";
+import { hooks, ui } from "../store";
 
 const open = ref(false);
 const now = ref(Date.now());
@@ -10,6 +12,35 @@ let timer: ReturnType<typeof setInterval> | null = null;
 const count = computed(() => mcpUi.clients.length);
 /** 浮层最多列 5 行，其余只报数量 */
 const visible = computed(() => visibleClients(mcpUi.clients));
+
+/**
+ * 胶囊文案优先级：正在写的工具 > 正在读 > 刚改完的残留 > 连接数。
+ * 写与读共用 `busy`，靠 `activity.running` 区分（activity 只由写工具产生）。
+ */
+const summary = computed(() => {
+  const activity = mcpUi.activity;
+  if (activity?.running) return `${activity.label} · ${activity.tool}`;
+  if (mcpUi.busy) return "agent 正在读取…";
+  if (activity) {
+    if (!activity.pageId) return `${activity.label} 刚改了文档`;
+    const crossPage = isCrossPage(activity.pageId, ui.activePageId, ui.mode === "edit");
+    return crossPage ? `${activity.label} 刚改了${activity.pageName ?? "另一页"}` : `${activity.label} 刚改了此页`;
+  }
+  return `已连接 ${count.value} 个 agent`;
+});
+
+/** 改动看不见时给一个跳转入口：跨页报页面名，同页视口外只说"在视口外" */
+const jumpLabel = computed(() => {
+  const activity = mcpUi.activity;
+  if (!activity?.offscreen) return "";
+  const crossPage = isCrossPage(activity.pageId, ui.activePageId, ui.mode === "edit");
+  return crossPage ? `${activity.pageName ?? "另一页"} →` : "改动在视口外 →";
+});
+
+function reveal(): void {
+  open.value = false;
+  hooks.revealAgentActivity();
+}
 
 /** 连接时长：只在浮层打开时刷新，避免常驻定时器 */
 function durationOf(connectedAt: number): string {
@@ -47,12 +78,17 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div v-if="count > 0" class="conn-wrap">
-    <button class="conn-status glass" :class="{ open }" role="status" @click="toggle">
-      <span class="dot" :class="{ busy: mcpUi.busy }" />
-      <span class="text">{{ mcpUi.busy ? "agent 正在修改…" : `已连接 ${count} 个 agent` }}</span>
-      <span class="hint">{{ open ? "收起" : "详情" }}</span>
-    </button>
+  <div v-if="count > 0 || mcpUi.activity" class="conn-wrap">
+    <div class="conn-top">
+      <button class="conn-status glass" :class="{ open }" role="status" @click="toggle">
+        <span class="dot" :class="{ busy: mcpUi.busy }" />
+        <span class="text">{{ summary }}</span>
+        <span class="hint">{{ open ? "收起" : "详情" }}</span>
+      </button>
+      <button v-if="jumpLabel" class="conn-jump glass" :title="jumpLabel" @click="reveal">
+        {{ jumpLabel }}
+      </button>
+    </div>
 
     <div v-if="open" class="conn-list glass">
       <div v-for="client in visible.rows" :key="client.id" class="conn-row">
@@ -74,6 +110,12 @@ onBeforeUnmount(() => {
   z-index: 9;
   display: flex;
   flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.conn-top {
+  display: flex;
   align-items: center;
   gap: 6px;
 }
@@ -110,6 +152,24 @@ onBeforeUnmount(() => {
 
 .hint {
   color: var(--text-faint);
+}
+
+.conn-jump {
+  display: flex;
+  align-items: center;
+  padding: 4px 9px;
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--accent-line);
+  font-size: 11px;
+  color: var(--accent);
+  white-space: nowrap;
+  cursor: pointer;
+  background: transparent;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.conn-jump:hover {
+  background: var(--accent-soft);
 }
 
 .conn-list {

@@ -3,13 +3,40 @@
  * 没有打开文档时，第一次工具调用会先建一份空稿——agent 不该卡在欢迎页。
  */
 import { reactive } from "vue";
-import { makeExecutor, toMCPManifest } from "@sqraft/ai-tools";
+import { MUTATING_TOOLS, makeExecutor, toMCPManifest } from "@sqraft/ai-tools";
+import type { NodeId } from "@sqraft/core";
 import type { McpClientInfo, McpStatus } from "../shared/ipc";
+import {
+  beginAgentActivity,
+  endAgentActivity,
+  isCrossPage,
+  markRects,
+  outermostNodes,
+  pageOf,
+  rectInViewport,
+  resetAgentActivity,
+  setAgentTargets,
+} from "./canvas/agent-activity";
 import { docStore, hooks, ui } from "./store";
 import { newDocument, openDocument } from "./file-session";
 import { textSizeOf } from "./text-metrics";
 import { putAsset } from "./assets";
 import { putFont } from "./fonts";
+
+/** 一次写工具调用在界面上留下的痕迹（纯 UI；结束 5 秒后清空） */
+export interface McpActivity {
+  /** 客户端身份，已去掉 `cN ` 前缀；拿不到时是 `agent` */
+  label: string;
+  /** 工具名 */
+  tool: string;
+  /** 改动落在哪一页；没有改动时为 null */
+  pageId: NodeId | null;
+  pageName: string | null;
+  /** 改动不在当前视口里（跨页或同页视口外） */
+  offscreen: boolean;
+  /** 调用是否还在执行 */
+  running: boolean;
+}
 
 /** 连接状态（纯 UI，不进文档）：欢迎页的状态行与文档态的胶囊共用它 */
 export const mcpUi = reactive({
@@ -17,6 +44,8 @@ export const mcpUi = reactive({
   /** 活跃会话列表（只读展示）；计数一律取 length */
   clients: [] as McpClientInfo[],
   busy: false,
+  /** 进行中/刚结束的一次写操作；胶囊据此显示"谁在改哪里" */
+  activity: null as McpActivity | null,
   /** 实际监听端口；服务没起来时为 null */
   port: null as number | null,
   /** 端点地址 */
@@ -43,6 +72,105 @@ function applyStatus(status: McpStatus): void {
 /** 主动刷新连接列表：`lastTool` 只在主进程更新，不会主动推送，详情浮层打开时轮询用。 */
 export function refreshMcpStatus(): void {
   void window.sqraft.mcp.status().then(applyStatus);
+}
+
+/** 写工具结束后，胶囊保留多久再回落到「已连接 N 个 agent」 */
+export const ACTIVITY_RESIDUE_MS = 5000;
+
+/** 当前调用窗口内累积的改动节点；只在写工具调用期间非空 */
+let collecting: Set<NodeId> | null = null;
+/** `delete_node` 删掉的那个节点的父容器：删完就查不到归属了，只能在调用前记下来 */
+let deleteParent: NodeId | null = null;
+let activityTimer: ReturnType<typeof setTimeout> | null = null;
+
+/** `c1 claude-code/2.1` → `claude-code/2.1`：胶囊里只留身份，不留会话序号 */
+export function displayClientLabel(label: string | undefined): string {
+  if (!label) return "agent";
+  const trimmed = label.replace(/^c\d+\s+/, "").trim();
+  return trimmed || "agent";
+}
+
+/** 视口对应的世界矩形（文档坐标）；画布还没挂载时为 null。 */
+function viewportWorldRect(): { x: number; y: number; width: number; height: number } | null {
+  const vp = hooks.getViewport();
+  if (!vp || vp.zoom <= 0) return null;
+  return { x: vp.x, y: vp.y, width: vp.width / vp.zoom, height: vp.height / vp.zoom };
+}
+
+/**
+ * 用当前累积的改动刷新描边与胶囊文案。
+ * 调用期间每次文档变更都会走一次，所以描边是"边改边长出来"的，而不是结束后才出现。
+ */
+function publishAgentTargets(tool: string, label: string, running: boolean): void {
+  const doc = docStore.doc;
+  const ids = new Set<NodeId>(collecting ?? []);
+  // 删除的节点已经不在文档里，改用删除前的父容器；父容器是页面时跳过（整页虚线没有信息量）
+  if (deleteParent && doc.nodes[deleteParent]?.type !== "page") ids.add(deleteParent);
+
+  const outermost = outermostNodes(ids, doc.nodes);
+  const rects = markRects(outermost, doc);
+  // 一次调用碰了多页时只取第一处（撤销记录也只有一条，胶囊不逐个报）
+  const pageId = outermost.length > 0 ? pageOf(doc.nodes, outermost[0]) : null;
+  setAgentTargets(rects, pageId);
+
+  const view = viewportWorldRect();
+  const crossPage = isCrossPage(pageId, ui.activePageId, ui.mode === "edit");
+  // 跨页一定"看不见"；同页则看改动矩形有没有落在视口里（create_page 之类没有矩形时按看得见处理）
+  const anyVisible = view && rects.length > 0 ? rects.some((rect) => rectInViewport(rect, view)) : true;
+  mcpUi.activity = {
+    label,
+    tool,
+    pageId,
+    pageName: pageId ? (doc.nodes[pageId]?.name ?? null) : null,
+    offscreen: crossPage || !anyVisible,
+    running,
+  };
+}
+
+function clearActivityTimer(): void {
+  if (activityTimer === null) return;
+  clearTimeout(activityTimer);
+  activityTimer = null;
+}
+
+function beginAgentCall(tool: string, clientLabel: string | undefined, args: Record<string, unknown>): void {
+  clearActivityTimer();
+  collecting = new Set<NodeId>();
+  deleteParent = null;
+  const nodeId = args.nodeId;
+  if (tool === "delete_node" && typeof nodeId === "string") {
+    deleteParent = docStore.doc.nodes[nodeId]?.parentId ?? null;
+  }
+  beginAgentActivity();
+  publishAgentTargets(tool, displayClientLabel(clientLabel), true);
+  hooks.requestRedraw();
+}
+
+function finishAgentCall(ok: boolean): void {
+  // 失败的调用已经回滚：不描边、不留"刚改了…"的假信息
+  if (!ok) {
+    collecting = null;
+    deleteParent = null;
+    clearActivityTimer();
+    mcpUi.activity = null;
+    resetAgentActivity();
+    hooks.requestRedraw();
+    return;
+  }
+  const activity = mcpUi.activity;
+  // 先按最终改动刷一次（此刻 collecting 还在），再清窗口
+  if (activity) publishAgentTargets(activity.tool, activity.label, false);
+  collecting = null;
+  deleteParent = null;
+  endAgentActivity();
+  hooks.requestRedraw();
+  clearActivityTimer();
+  activityTimer = setTimeout(() => {
+    activityTimer = null;
+    mcpUi.activity = null;
+    resetAgentActivity();
+    hooks.requestRedraw();
+  }, ACTIVITY_RESIDUE_MS);
 }
 
 /**
@@ -75,6 +203,13 @@ export function installMcpHost(): void {
   const bridge = window.sqraft;
   bridge.mcp.setTools(manifest);
   const offStatus = bridge.mcp.onStatus(applyStatus);
+  // 写工具调用窗口内累积改动节点：事务内每次 apply 都带真实的 changed（提交时那次是空集合）
+  const offDoc = docStore.subscribe((_state, changed) => {
+    if (!collecting) return;
+    for (const id of changed) collecting.add(id);
+    const activity = mcpUi.activity;
+    if (activity?.running) publishAgentTargets(activity.tool, activity.label, true);
+  });
   // 服务可能比页面先就绪，也可能稍后才监听成功：挂载时主动取一次
   refreshMcpStatus();
 
@@ -110,7 +245,7 @@ export function installMcpHost(): void {
     () => [...ui.selection],
   );
 
-  const offCall = bridge.mcp.onCall(async ({ id, name, args }) => {
+  const offCall = bridge.mcp.onCall(async ({ id, name, args, clientLabel }) => {
     // 同一条调用被投递两次（旧实例漏摘的监听、主进程重复 send）：静默丢弃，
     // 主进程按第一次的 respond 收口。调用号全局唯一，不会误伤别的调用。
     if (inFlight.has(id)) return;
@@ -122,14 +257,20 @@ export function installMcpHost(): void {
         return;
       }
       mcpUi.busy = true;
+      // 只有会改文档的工具才在画布上留痕迹：只读工具没有视觉落点
+      const mutates = MUTATING_TOOLS.has(name);
+      let ok = false;
       try {
         if (!ui.docOpen) await newDocument();
+        if (mutates) beginAgentCall(name, clientLabel, args);
         const value = await executor(name, args);
+        ok = true;
         bridge.mcp.respond({ id, ok: true, value });
       } catch (error) {
         bridge.mcp.respond({ id, ok: false, error: error instanceof Error ? error.message : String(error) });
       } finally {
         mcpUi.busy = false;
+        if (mutates) finishAgentCall(ok);
       }
     } finally {
       inFlight.delete(id);
@@ -140,6 +281,11 @@ export function installMcpHost(): void {
     off: () => {
       offCall();
       offStatus();
+      offDoc();
+      collecting = null;
+      deleteParent = null;
+      clearActivityTimer();
+      resetAgentActivity();
       if (hostGlobal.__sqraftMcpHost === handle) hostGlobal.__sqraftMcpHost = undefined;
     },
   };

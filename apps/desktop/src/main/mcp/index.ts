@@ -219,7 +219,7 @@ async function startServer(): Promise<void> {
       onClientChange: () => broadcastStatus(),
       host: {
         list: () => tools,
-        call: (name, args) => callRenderer(name, args),
+        call: (name, args, origin) => callRenderer(name, args, origin?.clientLabel),
       },
     });
   } catch (error) {
@@ -281,7 +281,11 @@ export async function setMcpPort(port: unknown): Promise<McpSetupInfo> {
   return setupInfo();
 }
 
-function callRenderer(name: string, args: Record<string, unknown>): Promise<string> {
+function callRenderer(
+  name: string,
+  args: Record<string, unknown>,
+  clientLabel?: string,
+): Promise<string> {
   const window = BrowserWindow.getAllWindows()[0];
   if (!window) {
     logError(null, "call failed: no window", { tool: name });
@@ -296,7 +300,7 @@ function callRenderer(name: string, args: Record<string, unknown>): Promise<stri
       reject(new Error("渲染层没有在预期时间内返回结果"));
     }, PENDING_TTL_MS);
     pending.set(id, { resolve, reject, timer });
-    window.webContents.send(CHANNELS.mcpCall, { id, name, args });
+    window.webContents.send(CHANNELS.mcpCall, { id, name, args, clientLabel });
   });
 }
 

@@ -2,7 +2,7 @@
  * 视口导航：适配页面、切换活动页、飞行定位与脉冲标记。
  * 只改 UI 视口状态，不进文档、不进撤销。
  */
-import { firstPageId, worldRect, type DocNode, type NodeId } from "@sqraft/core";
+import { firstPageId, worldRect, type DocNode, type NodeId, type Rect } from "@sqraft/core";
 import { screenToWorld, type Viewport } from "@sqraft/render";
 import { docStore, ui } from "../store";
 import { pageAt } from "./hit";
@@ -48,14 +48,21 @@ export function createViewportNav(deps: ViewportNavDeps) {
     markDirty();
   }
 
+  function focusBounds(rect: Rect, padding = 180): void {
+    const zoom = Math.min(
+      Math.max(
+        Math.min((vp.width - padding) / Math.max(1, rect.width), (vp.height - padding) / Math.max(1, rect.height)),
+        0.1,
+      ),
+      1,
+    );
+    flyTo(rect.x + rect.width / 2, rect.y + rect.height / 2, zoom);
+  }
+
   function focusRect(id: NodeId, padding = 180): void {
     const r = worldRect(docStore.doc, id);
     if (!r) return;
-    const zoom = Math.min(
-      Math.max(Math.min((vp.width - padding) / r.width, (vp.height - padding) / r.height), 0.1),
-      1,
-    );
-    flyTo(r.x + r.width / 2, r.y + r.height / 2, zoom);
+    focusBounds(r, padding);
     nav.pulse = { id, start: performance.now() };
   }
 
@@ -108,8 +115,10 @@ export function createViewportNav(deps: ViewportNavDeps) {
    * 切页：活动页 + 左栏展开 + 适配该页。
    * 左栏点页面行、画布上点另一页、拖动模式单击页面都走这里，
    * 保证「切页」在两种模式下只有一个含义。
+   *
+   * `fit = false`：只切页、不动视口（调用方随后自己决定取景，比如飞到 agent 的改动范围）。
    */
-  function activatePage(id: NodeId): void {
+  function activatePage(id: NodeId, fit = true): void {
     const page = docStore.doc.nodes[id];
     if (!page || page.type !== "page") return;
     deps.commitEditors();
@@ -120,7 +129,8 @@ export function createViewportNav(deps: ViewportNavDeps) {
     ui.cropNodeId = null;
     pen.pathEdit = null;
     pen.vectorDrag = null;
-    fitPage(page);
+    if (fit) fitPage(page);
+    else markDirty();
   }
 
   function setActivePage(id: NodeId, focus = true): void {
@@ -199,6 +209,7 @@ export function createViewportNav(deps: ViewportNavDeps) {
     nav,
     resize,
     flyTo,
+    focusBounds,
     focusRect,
     focusNode,
     focusPage,

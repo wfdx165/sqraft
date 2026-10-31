@@ -138,6 +138,10 @@ export const hooks: {
   deleteSelectionNow: () => void;
   /** 把当前选区（或活动页）复制成 PNG 到剪贴板 */
   copySelectionPng: () => void;
+  /** 当前视口（文档坐标查询用）；画布还没挂载时返回 null */
+  getViewport: () => { x: number; y: number; width: number; height: number; zoom: number } | null;
+  /** 把视线带到 agent 刚改动的地方：必要时切页，再缩到改动包围盒（不改选区） */
+  revealAgentActivity: () => void;
   requestRedraw: () => void;
 } = {
   getScreenshot: async () => "",
@@ -154,5 +158,7 @@ export const hooks: {
   startRenameOf: () => {},
   deleteSelectionNow: () => {},
   copySelectionPng: () => {},
+  getViewport: () => null,
+  revealAgentActivity: () => {},
   requestRedraw: () => {},
 };

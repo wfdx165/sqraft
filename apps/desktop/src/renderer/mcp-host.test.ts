@@ -129,4 +129,45 @@ describe("MCP 宿主只执行一次", () => {
     expect(responses.every((entry) => entry.ok)).toBe(true);
     expect(Object.keys(docStore.doc.nodes)).toHaveLength(3);
   });
+
+  it("写工具留下活动痕迹，只读工具不留", async () => {
+    const { installMcpHost, mcpUi } = await import("./mcp-host");
+    const { agentActivity } = await import("./canvas/agent-activity");
+    installMcpHost();
+    const handle = onlyListener();
+
+    await handle({ id: 1, name: "read_document", args: {} });
+    expect(mcpUi.activity).toBeNull();
+    expect(agentActivity.rects).toHaveLength(0);
+
+    await handle({
+      id: 2,
+      name: "create_node",
+      args: { kind: "rect" },
+      clientLabel: "c1 claude-code/2.1",
+    });
+
+    // 胶囊文案的来源：去掉会话序号，只留客户端身份与工具名
+    expect(responses[1]?.error).toBeUndefined();
+    expect(mcpUi.activity?.label).toBe("claude-code/2.1");
+    expect(mcpUi.activity?.tool).toBe("create_node");
+    expect(mcpUi.activity?.running).toBe(false);
+    expect(mcpUi.activity?.pageId).not.toBeNull();
+    // 描边目标是刚建的矩形（不是自动建的页）
+    expect(agentActivity.rects).toHaveLength(1);
+  });
+
+  it("失败的写调用不留活动痕迹", async () => {
+    const { installMcpHost, mcpUi } = await import("./mcp-host");
+    const { agentActivity } = await import("./canvas/agent-activity");
+    installMcpHost();
+    const handle = onlyListener();
+
+    // 节点不存在：工具抛错，事务回滚
+    await handle({ id: 1, name: "update_node", args: { nodeId: "nope", name: "改个名" } });
+
+    expect(responses[0]?.ok).toBe(false);
+    expect(mcpUi.activity).toBeNull();
+    expect(agentActivity.rects).toHaveLength(0);
+  });
 });

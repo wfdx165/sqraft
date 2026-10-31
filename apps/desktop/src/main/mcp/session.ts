@@ -10,10 +10,15 @@ export interface McpToolInfo {
   inputSchema: Record<string, unknown>;
 }
 
+export interface McpCallOrigin {
+  /** 会话标签（`c1 claude-code/2.1`）；宿主只用来给界面标注"谁在操作" */
+  clientLabel?: string;
+}
+
 export interface McpToolHost {
   list(): McpToolInfo[];
   /** 返回工具执行器给的字符串（通常是 JSON），由这里包成 MCP content。 */
-  call(name: string, args: Record<string, unknown>): Promise<string>;
+  call(name: string, args: Record<string, unknown>, origin?: McpCallOrigin): Promise<string>;
 }
 
 export interface JsonRpcRequest {
@@ -79,7 +84,7 @@ function toContent(raw: string): Array<Record<string, unknown>> {
 export async function handleRpc(
   message: JsonRpcRequest,
   host: McpToolHost,
-  options: { version: string; tag?: string },
+  options: { version: string; tag?: string; clientLabel?: string },
 ): Promise<JsonRpcResponse | null> {
   const id = message.id ?? null;
   const isNotification = message.id === undefined;
@@ -140,7 +145,7 @@ export async function handleRpc(
       if (isNotification) return null;
       const startedAt = Date.now();
       try {
-        const raw = await host.call(name, args);
+        const raw = await host.call(name, args, { clientLabel: options.clientLabel });
         const elapsed = Date.now() - startedAt;
         // 超时之后才跑完的调用也走这里：耗时明显偏大就是"迟到完成"，能对上前面那条 warn
         logInfo(tag, `tools/call ${name} ok ${elapsed}ms`, { args });

@@ -103,6 +103,11 @@ export interface McpCallRequest {
   id: number;
   name: string;
   args: Record<string, unknown>;
+  /**
+   * 发起这次调用的客户端标签（`c1 claude-code/2.1`）。
+   * 只用于界面展示「谁在操作」，不参与命令、不进文档。
+   */
+  clientLabel?: string;
 }
 
 export interface McpCallResult {

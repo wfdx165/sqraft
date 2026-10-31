@@ -145,6 +145,35 @@ describe("MCP HTTP 传输", () => {
     expect(body.result.content[0].text).toBe("工具炸了");
   });
 
+  it("tools/call 之后 lastTool 记的是工具名，不是方法名", async () => {
+    const server = await setup();
+    const id = await sessionId();
+    await rpc(
+      { jsonrpc: "2.0", id: 7, method: "tools/call", params: { name: "read_document", arguments: {} } },
+      { "mcp-session-id": id },
+    );
+    expect(server.clients()[0].lastTool).toBe("read_document");
+  });
+
+  it("tools/call 把客户端标签透传给宿主", async () => {
+    const seen: Array<string | undefined> = [];
+    await setup({
+      host: {
+        list: () => [],
+        call: async (_name, _args, origin) => {
+          seen.push(origin?.clientLabel);
+          return "{}";
+        },
+      },
+    });
+    const id = await sessionId();
+    await rpc(
+      { jsonrpc: "2.0", id: 8, method: "tools/call", params: { name: "read_document", arguments: {} } },
+      { "mcp-session-id": id },
+    );
+    expect(seen).toEqual([expect.stringContaining("claude-code/2.1")]);
+  });
+
   it("DELETE 结束会话，之后再用该 id 返回 404", async () => {
     const server = await setup();
     const id = await sessionId();

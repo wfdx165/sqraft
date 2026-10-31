@@ -244,7 +244,8 @@ export async function startMcpServer(options: McpServerOptions): Promise<McpRunt
         return;
       }
       session.lastSeen = now();
-      session.lastTool = request.method;
+      // 详情浮层要显示"最近调用了哪个工具"：tools/call 记工具名，其它方法记方法名
+      session.lastTool = calledToolOf(request) ?? request.method;
       session.lastToolAt = now();
       emitClients();
     }
@@ -257,6 +258,7 @@ export async function startMcpServer(options: McpServerOptions): Promise<McpRunt
           handleRpc(request, options.host, {
             version: options.appVersion,
             tag: tag ?? undefined,
+            clientLabel: session?.label,
           }),
         {
           isAlive: () => !session?.closed && !res.destroyed && !res.writableEnded,
@@ -357,6 +359,13 @@ export async function startMcpServer(options: McpServerOptions): Promise<McpRunt
       await closeServer(server);
     },
   };
+}
+
+/** `tools/call` 的真实工具名；其它方法返回 null（状态栏不该显示 `tools/list` 之外的方法名）。 */
+function calledToolOf(request: JsonRpcRequest): string | null {
+  if (request.method !== "tools/call") return null;
+  const name = (request.params as { name?: unknown } | undefined)?.name;
+  return typeof name === "string" && name.length > 0 ? name : null;
 }
 
 function toClientInfo(session: Session): McpClientInfo {

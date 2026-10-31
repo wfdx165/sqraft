@@ -817,7 +817,7 @@ function applyNodeArgs(args: Record<string, unknown>): Partial<DocNode> {
 }
 
 /** 会改动文档的工具：一次调用包成一个事务，撤销时只算一步。 */
-const MUTATING_TOOLS = new Set([
+export const MUTATING_TOOLS: ReadonlySet<string> = new Set([
   "define_token",
   "rename_token",
   "create_page",
