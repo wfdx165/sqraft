@@ -6,7 +6,6 @@ import type { DocNode, NodeId } from "@sqraft/core";
 import { openContextMenu, type ContextMenuItem } from "./context-menu";
 import { copySelectionAction } from "./canvas/node-clipboard";
 import { canDeletePage, deletePage } from "./canvas/page-actions";
-import { openExportFor } from "./export-actions";
 import { keyOf } from "./shortcuts";
 import { docStore, hooks, select, ui } from "./store";
 
@@ -22,8 +21,7 @@ function pageOf(nodeId: NodeId): NodeId | null {
 
 /** 右键页面（画布上的页面本体 / 左栏页面行）。 */
 export function openPageMenu(pageId: NodeId, position: { x: number; y: number }): void {
-  const page = docStore.doc.nodes[pageId];
-  if (!page || page.type !== "page") return;
+  if (docStore.doc.nodes[pageId]?.type !== "page") return;
   ui.activePageId = pageId;
   ui.expandedPageId = pageId;
   select([pageId]);
@@ -37,9 +35,10 @@ export function openPageMenu(pageId: NodeId, position: { x: number; y: number })
       },
     },
     {
-      label: "导出 PNG…",
-      hint: keyOf("file.exportPng"),
-      run: () => openExportFor({ pageId, name: page.name }),
+      // 页面选中时没有图层选区，复制路径回退成“整页 2× 带背景”，与 ⌘⇧C 一致
+      label: "复制为 PNG",
+      hint: keyOf("edit.copyImage"),
+      run: () => hooks.copySelectionPng(),
     },
     { label: "重命名", hint: keyOf("edit.rename"), separator: true, run: () => hooks.startRenameOf(pageId) },
     {
@@ -65,18 +64,10 @@ export function openNodeMenu(nodeId: NodeId, position: { x: number; y: number })
   // 多选框里右键：保持整个选区（对整组动手）；否则右键即选中该节点
   if (!ui.selection.includes(nodeId)) select([nodeId]);
   const ids = ui.selection.filter((id) => docStore.doc.nodes[id]);
-  const targets = ids.length > 0 ? ids : [nodeId];
-  const name = targets.length > 1 ? `${targets.length} 个图层` : node.name;
-  const onlyOne = targets.length === 1;
+  const onlyOne = ids.length === 1;
   const items: ContextMenuItem[] = [
     { label: "复制", hint: keyOf("edit.copy"), run: () => void copySelectionAction() },
     { label: "复制为 PNG", hint: keyOf("edit.copyImage"), run: () => hooks.copySelectionPng() },
-    {
-      label: "导出 PNG…",
-      hint: keyOf("file.exportPng"),
-      // 主组件是文档根节点，没有所属页面：照样按选区导出（透明底）
-      run: () => openExportFor({ pageId: pageId ?? undefined, nodeIds: targets, name }),
-    },
     {
       label: "重命名",
       hint: keyOf("edit.rename"),

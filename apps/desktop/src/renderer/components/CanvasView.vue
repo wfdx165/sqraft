@@ -62,6 +62,7 @@ import { boundsHandlePoints, selectionBounds as boundsOfSelection } from "../can
 import { renderPngAsync } from "../canvas/export-image";
 import { imageRefsOf } from "../canvas/image-assets";
 import { ensureLinkedImage, linkedImage } from "../linked-images";
+import { showToast } from "../toast";
 import { RULER_SIZE, drawGuidesOverlay, drawRulers, guideAt } from "../canvas/rulers";
 import {
   abortMultiScale,
@@ -749,24 +750,35 @@ function startRenameForSelection(): void {
 /** ⌘⇧C：把选区（无选区则活动页）复制成 PNG 到剪贴板 */
 async function copySelectionAsPng(): Promise<void> {
   const pageId = ensureActivePage()?.id ?? null;
-  if (!pageId) return;
+  if (!pageId) {
+    showToast("复制失败：当前没有页面", "error");
+    return;
+  }
   const ids = ui.selection.filter((id) => {
     const node = docStore.doc.nodes[id];
     return !!node && node.type !== "page";
   });
   // 字体可能还在加载：导出前等一次，避免落成回退字体
-  await document.fonts.ready;
-  const dataUrl = await renderPngAsync(docStore.doc, {
-    pageId,
-    nodeIds: ids.length > 0 ? ids : undefined,
-    scale: 2,
-    resolveImage: (assetId) => imageFor(assetId),
-    resolveLinkedImage: (url) => linkedImage(url),
-    ensureImage: ensureAssetDecoded,
-    ensureLinkedImage,
-  });
-  if (!dataUrl) return;
-  await window.sqraft.app.writeClipboardImage(dataUrl);
+  try {
+    await document.fonts.ready;
+    const dataUrl = await renderPngAsync(docStore.doc, {
+      pageId,
+      nodeIds: ids.length > 0 ? ids : undefined,
+      scale: 2,
+      resolveImage: (assetId) => imageFor(assetId),
+      resolveLinkedImage: (url) => linkedImage(url),
+      ensureImage: ensureAssetDecoded,
+      ensureLinkedImage,
+    });
+    if (!dataUrl) {
+      showToast("复制失败：内容为空或过大", "error");
+      return;
+    }
+    const ok = await window.sqraft.app.writeClipboardImage(dataUrl);
+    showToast(ok ? "已复制 PNG 到剪贴板" : "复制失败：剪贴板不可用", ok ? "info" : "error");
+  } catch (error) {
+    showToast(`复制失败：${String(error)}`, "error");
+  }
 }
 
 /** ⌘A：全选当前层级的可见未锁定图层（实例上下文内只选当前层） */
@@ -2356,6 +2368,7 @@ onMounted(() => {
     "tool.text": () => pickTool("text"),
     "edit.undo": () => docStore.undo(),
     "edit.redo": () => docStore.redo(),
+    "edit.copyImage": () => void copySelectionAsPng(),
     "edit.group": () => groupSelection(),
     "edit.ungroup": () => ungroupSelection(),
     "edit.rename": () => startRenameForSelection(),

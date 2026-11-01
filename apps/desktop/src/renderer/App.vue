@@ -13,6 +13,7 @@ import McpSetupPanel from "./components/McpSetupPanel.vue";
 import AboutPanel from "./components/AboutPanel.vue";
 import ExportPngDialog from "./components/ExportPngDialog.vue";
 import ContextMenu from "./components/ContextMenu.vue";
+import Toast from "./components/Toast.vue";
 import { exportUi, hooks, ui } from "./store";
 import { openExportDefault } from "./export-actions";
 import { bindingRev, installShortcuts, keyOf, registerShortcuts, runAction, shortcutUi, type ActionId } from "./shortcuts";
@@ -129,6 +130,7 @@ watchEffect(() => {
     <McpSetupPanel v-if="mcpSetupOpen" @close="mcpSetupOpen = false" />
     <AboutPanel v-if="aboutOpen" @close="aboutOpen = false" />
     <ExportPngDialog v-if="exportUi.open" />
+    <Toast />
     <ContextMenu />
   </div>
 </template>

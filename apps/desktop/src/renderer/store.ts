@@ -101,13 +101,10 @@ export function select(ids: NodeId[]): void {
   ui.selection = ids;
 }
 
-/** 导出 PNG 的弹窗状态（纯 UI）：target 为空时导出"当前选择或活动页"。 */
+/** 导出 PNG 的弹窗状态（纯 UI）：导出“当前选择或活动页”。 */
 export const exportUi = reactive({
   open: false,
   scale: 2,
-  target: null as { pageId?: NodeId; nodeIds?: NodeId[] } | null,
-  /** 系统保存框里的建议文件名（右键导出按对象命名） */
-  suggestedName: "",
 });
 
 /** 由 CanvasView 注入的实现（解耦组件引用）。 */

@@ -8,8 +8,8 @@ import { pngFileName } from "../export-name";
 const busy = ref(false);
 const error = ref("");
 
-/** 右键导出按对象命名；文件菜单 / ⌘⇧E 用文档名。 */
-const suggestedName = computed(() => exportUi.suggestedName || pngFileName(fileState.name, ""));
+/** 建议文件名：文档名；系统保存框里还能改。 */
+const suggestedName = computed(() => pngFileName(fileState.name, ""));
 
 function close(): void {
   exportUi.open = false;
@@ -21,7 +21,7 @@ async function run(): Promise<void> {
   busy.value = true;
   error.value = "";
   try {
-    const dataUrl = await hooks.renderExport({ ...(exportUi.target ?? {}), scale: exportUi.scale });
+    const dataUrl = await hooks.renderExport({ scale: exportUi.scale });
     if (!dataUrl) {
       error.value = "导出失败：当前没有可导出的内容";
       return;
