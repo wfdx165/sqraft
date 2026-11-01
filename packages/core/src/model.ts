@@ -10,7 +10,7 @@ import { effectPadding } from "./effects";
 export type NodeId = string;
 
 /** 当前文件格式版本：新增字段时 +1，并在 migrate 里补一段迁移。 */
-export const CURRENT_FORMAT_VERSION = 6;
+export const CURRENT_FORMAT_VERSION = 7;
 
 export type NodeType =
   | "page" | "frame" | "group" | "rect" | "ellipse" | "line"
@@ -49,6 +49,9 @@ export const ZERO_CORNER_RADIUS: CornerRadius = {
   bottomLeft: 0,
 };
 
+/** 逐角圆角 Token 引用：只记录绑定的角，未绑定的角继续用 `cornerRadius` 字面量。 */
+export type CornerRadiusTokens = Partial<Record<keyof CornerRadius, string>>;
+
 /** 行高：auto 用 TEXT_LINE_HEIGHT；percent 以字号为基准。 */
 export type LineHeightUnit = "auto" | "px" | "percent";
 export type LetterSpacingUnit = "px" | "percent";
@@ -63,15 +66,22 @@ export interface NodeStyle {
   stroke?: Paint;
   strokeWidth?: number;
   cornerRadius?: CornerRadius;
+  /** 数值 Token 引用（读时解析；缺失/类型不对时回退到对应字面量） */
+  strokeWidthToken?: string;
+  cornerRadiusTokens?: CornerRadiusTokens;
   fontSize?: number;
+  fontSizeToken?: string;
   fontFamily?: string;
   fontWeight?: number;
   fontStyle?: FontStyle;
   lineHeight?: number;
+  lineHeightToken?: string;
   lineHeightUnit?: LineHeightUnit;
   letterSpacing?: number;
+  letterSpacingToken?: string;
   letterSpacingUnit?: LetterSpacingUnit;
   paragraphSpacing?: number;
+  paragraphSpacingToken?: string;
   textAlign?: TextAlign;
   textVerticalAlign?: TextVerticalAlign;
   textCase?: TextCase;
@@ -90,6 +100,9 @@ export interface Padding {
 
 export const ZERO_PADDING: Padding = { top: 0, right: 0, bottom: 0, left: 0 };
 
+/** 逐边内边距 Token 引用：只记录绑定的边，未绑定的边继续用 `padding` 字面量。 */
+export type PaddingTokens = Partial<Record<keyof Padding, string>>;
+
 export type MainAlign = "start" | "center" | "end" | "space-between";
 export type CrossAlign = "start" | "center" | "end" | "stretch";
 export type AlignContent = "start" | "center" | "end" | "space-between" | "stretch";
@@ -98,6 +111,10 @@ export interface LayoutSpec {
   direction: "horizontal" | "vertical";
   gap: number;
   padding: Padding;
+  /** 数值 Token 引用（读时解析；缺失时回退到 gap / crossGap / padding 字面量） */
+  gapToken?: string;
+  crossGapToken?: string;
+  paddingTokens?: PaddingTokens;
   mainAlign: MainAlign;
   crossAlign: CrossAlign;
   wrap: boolean;

@@ -3,7 +3,7 @@
  * 拖动 / 绘制 / 缩放共用同一套目标：同父兄弟 + 父容器内容区 + 父容器边界。
  * 目标几何统一用 `worldRect`（累加祖先平移的轴对齐包围盒）。
  */
-import { paddingOf, unionRects, worldRect, type DocNode, type NodeId, type Rect } from "@sqraft/core";
+import { paddingOf, resolveNumericLayout, unionRects, worldRect, type DocNode, type NodeId, type Rect } from "@sqraft/core";
 import { worldToScreen, type Viewport } from "@sqraft/render";
 import { docStore } from "../store";
 
@@ -60,7 +60,7 @@ export function contentBoxOf(parent: DocNode): Rect | null {
   const bounds = worldRect(docStore.doc, parent.id);
   if (!bounds) return null;
   if (!parent.layout) return bounds;
-  const p = paddingOf(parent.layout);
+  const p = paddingOf(resolveNumericLayout(docStore.doc, parent.layout));
   return {
     x: bounds.x + p.left,
     y: bounds.y + p.top,

@@ -9,6 +9,7 @@ import {
   fontSizeOf,
   letterSpacingPx,
   lineHeightPx,
+  resolveNumericStyle,
   worldRect,
   type DocNode,
   type ListType,
@@ -46,7 +47,7 @@ function readEditorHtml(el: HTMLElement): string {
 }
 
 function cssFor(node: DocNode, scale: number): Record<string, string> {
-  const style = node.style;
+  const style = resolveNumericStyle(docStore.doc, node.style);
   const lineHeight = lineHeightPx(style) * scale;
   const spacing = letterSpacingPx(style) * scale;
   const decoration =
@@ -84,10 +85,11 @@ export function useTextEditing(vp: Viewport, markDirty: () => void) {
     if (!ed) return;
     const node = docStore.doc.nodes[ed.id];
     if (!node) return;
-    const size = textSizeOf(node, node.style, ed.value);
+    const style = resolveNumericStyle(docStore.doc, node.style);
+    const size = textSizeOf(node, style, ed.value, docStore.doc);
     const fixed = (node.textAutoResize ?? "auto-width") === "fixed";
     ed.width = Math.max(24, (fixed ? node.width : size.width) * ed.scale + 4);
-    ed.height = Math.max(lineHeightPx(node.style) * ed.scale, (fixed ? node.height : size.height) * ed.scale);
+    ed.height = Math.max(lineHeightPx(style) * ed.scale, (fixed ? node.height : size.height) * ed.scale);
   }
 
   function startTextEdit(node: DocNode, selectAll = false): void {
@@ -95,7 +97,8 @@ export function useTextEditing(vp: Viewport, markDirty: () => void) {
     if (!r) return;
     const a = worldToScreen(vp, r.x, r.y);
     const scale = vp.zoom;
-    const size = textSizeOf(node, node.style, node.text ?? "文本");
+    const style = resolveNumericStyle(docStore.doc, node.style);
+    const size = textSizeOf(node, style, node.text ?? "文本", docStore.doc);
     const fixed = (node.textAutoResize ?? "auto-width") === "fixed";
     const css = cssFor(node, scale);
     const alignY = node.style.textVerticalAlign ?? "top";
@@ -109,7 +112,7 @@ export function useTextEditing(vp: Viewport, markDirty: () => void) {
       left: a.x,
       top: a.y,
       width: Math.max(24, (fixed ? node.width : size.width) * scale + 4),
-      height: Math.max(lineHeightPx(node.style) * scale, (fixed ? node.height : size.height) * scale),
+      height: Math.max(lineHeightPx(style) * scale, (fixed ? node.height : size.height) * scale),
       scale,
       css,
       listType: node.listType ?? "none",
@@ -162,7 +165,7 @@ export function useTextEditing(vp: Viewport, markDirty: () => void) {
     const patch: Partial<DocNode> = { text };
     const mode = node.textAutoResize ?? "auto-width";
     if (mode !== "fixed") {
-      const size = textSizeOf(node, node.style, text);
+      const size = textSizeOf(node, node.style, text, docStore.doc);
       if (mode === "auto-width") patch.width = size.width;
       patch.height = size.height;
     }

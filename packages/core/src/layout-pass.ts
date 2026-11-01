@@ -4,6 +4,7 @@
  */
 
 import { solveLayout, type LayoutChildInput } from "./layout";
+import { resolveNumericLayout } from "./token-resolve";
 import type { DocNode, DocState, NodeId } from "./model";
 
 /** 收集受影响节点自身及祖先链上的布局容器，按深度从深到浅排序。 */
@@ -68,7 +69,9 @@ export function layoutChildren(state: DocState, container: DocNode): LayoutChild
 export function solveContainer(state: DocState, container: DocNode) {
   if (!container.layout) return null;
   const { availW, availH } = layoutAvail(container);
-  const result = solveLayout(container.layout, layoutChildren(state, container), availW, availH);
+  // 数值 Token 在读时解析：布局求解永远看解析后的 gap / padding
+  const layout = resolveNumericLayout(state, container.layout);
+  const result = solveLayout(layout, layoutChildren(state, container), availW, availH);
   const hugW = (container.layoutSizingW ?? "fixed") === "hug";
   const hugH = (container.layoutSizingH ?? "fixed") === "hug";
   return {

@@ -1244,3 +1244,139 @@ describe("AI 工具：选区", () => {
     expect(res.hint).toBeTruthy();
   });
 });
+
+describe("AI 工具：数值 Token", () => {
+  it("create_node 写入字号 / 逐角圆角 / 间距 / 逐边内边距引用", async () => {
+    const { store, run } = setup();
+    await call(run, "define_token", { path: "size/body", type: "number", value: 18 });
+    await call(run, "define_token", { path: "space/md", type: "number", value: 12 });
+    await call(run, "define_token", { path: "radius/sm", type: "number", value: 6 });
+
+    const text = await call(run, "create_node", {
+      kind: "text",
+      text: "标题",
+      fontSize: 14,
+      fontSizeToken: "size/body",
+      cornerRadiusTokens: { topLeft: "radius/sm" },
+    });
+    const textNode = store.doc.nodes[text.nodeId as string];
+    expect(textNode.style.fontSizeToken).toBe("size/body");
+    expect(textNode.style.cornerRadiusTokens?.topLeft).toBe("radius/sm");
+
+    const frame = await call(run, "create_node", {
+      kind: "frame",
+      layout: { gapToken: "space/md", paddingTokens: { left: "space/md" } },
+    });
+    const frameNode = store.doc.nodes[frame.nodeId as string];
+    expect(frameNode.layout?.gapToken).toBe("space/md");
+    expect(frameNode.layout?.paddingTokens?.left).toBe("space/md");
+    expect(frameNode.layout?.direction).toBe("vertical");
+  });
+
+  it("拒绝颜色 Token 与不存在的 Token", async () => {
+    const { run } = setup();
+    await call(run, "define_token", { path: "color/x", type: "color", value: "#3366ff" });
+    await expect(run("create_node", { kind: "text", fontSizeToken: "color/x" })).rejects.toThrow(/数值 Token/);
+    await expect(run("create_node", { kind: "text", fontSizeToken: "size/nope" })).rejects.toThrow(/不存在/);
+    await expect(
+      run("create_node", { kind: "frame", layout: { gapToken: "size/nope" } }),
+    ).rejects.toThrow(/不存在/);
+  });
+
+  it("update_node 只传 gapToken 时保留其余布局字段", async () => {
+    const { store, run } = setup();
+    await call(run, "define_token", { path: "space/md", type: "number", value: 12 });
+    const frame = await call(run, "create_node", {
+      kind: "frame",
+      layout: { direction: "horizontal", gap: 4, padding: 8 },
+    });
+    await call(run, "update_node", { nodeId: frame.nodeId, layout: { gapToken: "space/md" } });
+    const node = store.doc.nodes[frame.nodeId as string];
+    expect(node.layout?.direction).toBe("horizontal");
+    expect(node.layout?.gap).toBe(4);
+    expect(node.layout?.padding).toEqual({ top: 8, right: 8, bottom: 8, left: 8 });
+    expect(node.layout?.gapToken).toBe("space/md");
+  });
+
+  it("逐角 / 逐边 Token 按项合并，null 解绑单项", async () => {
+    const { store, run } = setup();
+    await call(run, "define_token", { path: "radius/sm", type: "number", value: 6 });
+    const rect = await call(run, "create_node", { kind: "rect" });
+    await call(run, "update_node", {
+      nodeId: rect.nodeId,
+      cornerRadiusTokens: { topLeft: "radius/sm", topRight: "radius/sm" },
+    });
+    await call(run, "update_node", { nodeId: rect.nodeId, cornerRadiusTokens: { topLeft: null } });
+    const node = store.doc.nodes[rect.nodeId as string];
+    expect(node.style.cornerRadiusTokens).toEqual({ topRight: "radius/sm" });
+  });
+
+  it("文本测量使用解析后的字号", async () => {
+    const store = new DocStore(createDocWithPage());
+    const pageId = firstPageId(store.doc)!;
+    const measured: Array<number | undefined> = [];
+    const run = makeExecutor(
+      store,
+      async () => "",
+      () => pageId,
+      (_node, style) => {
+        measured.push(style.fontSize);
+        return { width: 100, height: 20 };
+      },
+    );
+    await call(run, "define_token", { path: "size/body", type: "number", value: 18 });
+    await call(run, "create_node", { kind: "text", text: "Hi", fontSize: 10, fontSizeToken: "size/body" });
+    expect(measured[0]).toBe(18);
+  });
+
+  it("read_document 回传数值引用", async () => {
+    const { run } = setup();
+    await call(run, "define_token", { path: "size/body", type: "number", value: 18 });
+    const created = await call(run, "create_node", { kind: "text", text: "Hi", fontSizeToken: "size/body" });
+    const doc = await call(run, "read_document");
+    const pages = doc.pages as Array<{ subtree: string }>;
+    const flat = JSON.parse(pages[0].subtree) as Array<{ id: string; style?: { fontSizeToken?: string } }>;
+    expect(flat.find((n) => n.id === created.nodeId)?.style?.fontSizeToken).toBe("size/body");
+  });
+});
+
+describe("AI 工具：数值 Token 的字面量解绑", () => {
+  it("update_node 只传字面量时自动解绑对应 Token", async () => {
+    const { store, run } = setup();
+    await call(run, "define_token", { path: "size/body", type: "number", value: 18 });
+    await call(run, "define_token", { path: "space/md", type: "number", value: 12 });
+
+    const text = await call(run, "create_node", { kind: "text", text: "Hi", fontSizeToken: "size/body" });
+    await call(run, "update_node", { nodeId: text.nodeId, fontSize: 22 });
+    const textNode = store.doc.nodes[text.nodeId as string];
+    expect(textNode.style.fontSize).toBe(22);
+    expect(textNode.style.fontSizeToken).toBeUndefined();
+
+    const frame = await call(run, "create_node", {
+      kind: "frame",
+      layout: { gapToken: "space/md", paddingTokens: { top: "space/md" } },
+    });
+    await call(run, "update_node", { nodeId: frame.nodeId, layout: { gap: 6, padding: 3 } });
+    const frameNode = store.doc.nodes[frame.nodeId as string];
+    expect(frameNode.layout?.gap).toBe(6);
+    expect(frameNode.layout?.gapToken).toBeUndefined();
+    expect(frameNode.layout?.padding).toEqual({ top: 3, right: 3, bottom: 3, left: 3 });
+    expect(frameNode.layout?.paddingTokens).toBeUndefined();
+  });
+});
+
+describe("AI 工具：inspect_layout 的数值 Token", () => {
+  it("存在 Token 时输出解析后的 gap / padding", async () => {
+    const { run } = setup();
+    await call(run, "define_token", { path: "space/md", type: "number", value: 20 });
+    const frame = await call(run, "create_node", {
+      kind: "frame",
+      layout: { gap: 4, gapToken: "space/md", padding: 2, paddingTokens: { top: "space/md" } },
+    });
+    const res = await call(run, "inspect_layout", { nodeIds: [frame.nodeId] });
+    const rows = res.nodes as Array<{ id: string; resolved?: { gap: number; padding: { top: number } } }>;
+    const row = rows.find((item) => item.id === frame.nodeId)!;
+    expect(row.resolved?.gap).toBe(20);
+    expect(row.resolved?.padding.top).toBe(20);
+  });
+});

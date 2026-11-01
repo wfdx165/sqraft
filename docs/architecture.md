@@ -226,12 +226,16 @@ interface RenderBackend {
 
 ## 8. Token 系统
 
-- Token：`{ path: "color/primary", type: "color", value: "#3366ff" }` —— 单一取值，不引入模式/主题维度（见 ADR-0006）；
-- 节点样式存**Token 引用** `{ token: "color/primary" }`，渲染前解析为具体值（每次解析，暂无缓存）；
-- **改名是原子命令**（`token.rename from → to`）：一次 apply 内搬条目并重写所有节点的 `style.fill.token` / `style.stroke.token`，**同时改写实例覆盖表**（`instance.overrides[key].style`——它是另一份持久化差异，漏掉的话下一次组件同步会把旧路径写回克隆节点），只占一步撤销；源不存在或目标重名直接抛错，不做静默 no-op；
-- **删除**（`token.delete`，MCP 侧是 `delete_token` 的 `detach`）：有引用时先把引用冻结成当前取值的字面量再删，仍是同一条撤销；实例覆盖由 `recordOverrides` 按克隆节点的新 style 重算，天然自愈；
+- Token：`{ path: "color/primary" | "spacing/md", type: "color" | "number", value }` —— 单一取值，不引入模式/主题维度（见 ADR-0006）；
+- 节点存**引用**、使用时解析（ADR-0028）：
+  - 颜色：`style.fill.token` / `style.stroke.token` / 阴影 `color.token`；
+  - 数值：`fontSizeToken`、`lineHeightToken`、`letterSpacingToken`、`paragraphSpacingToken`、`strokeWidthToken`、逐角 `cornerRadiusTokens`、`layout.gapToken` / `crossGapToken` / 逐边 `paddingTokens`。
+  - 解析入口是 `packages/core/src/token-resolve.ts`：Token 有效则覆盖字面量，缺失/类型不对回退字面量；渲染、布局求解、文本测量、检查器展示都走同一套。数值 Token 改值会标脏引用节点，布局 pass 重算、文本 reflow 重新测量。
+- **改名是原子命令**（`token.rename from → to`）：一次 apply 内搬条目并重写所有节点的颜色引用**与数值引用**（style / layout），**同时改写实例覆盖表**（`instance.overrides[key].style` / `.layout`——它是另一份持久化差异，漏掉的话下一次组件同步会把旧路径写回克隆节点），只占一步撤销；源不存在或目标重名直接抛错，不做静默 no-op；
+- **删除**（`token.delete`，MCP 侧是 `delete_token` 的 `detach`）：有引用时先把引用冻结成当前取值的字面量再删（数值引用逐角/逐边只冻结对应项），仍是同一条撤销；实例覆盖由 `recordOverrides` 按克隆节点的新 style 重算，天然自愈；
+- **检查器**：颜色走填充/描边下拉；数值字段旁有 Token 按钮（`TokenLink`）打开 `TokenPicker`（只列数值 Token）。统一圆角/内边距的按钮一次绑四角/四边，分角/分边各自独立；手改字面量自动解绑对应槽位。
 - 导出：W3C DTCG 格式 JSON + 一键生成 CSS 变量；
-- **Agent 纪律**：工具 schema 中样式参数只接受 Token 引用，字面量色值在工具层直接拒绝——这是让 AI 产出可控、可维护的核心手段。
+- **Agent 纪律**：颜色与数值都可以引用 Token，也可以给字面量；两者同时出现时 Token 优先（ADR-0024）。
 
 ## 9. 文本与字体
 

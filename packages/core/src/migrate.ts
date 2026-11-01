@@ -112,6 +112,9 @@ export function migrateDoc(state: DocState, fromVersion = state.formatVersion ??
   if (version < 5) version = 5;
   // 6：图片新增可选的 `sourceUrl`（链接图），`crop` 变为可选。缺省即嵌入图，不需要改数据。
   if (version < 6) version = 6;
+  // 7：样式/布局新增可选的数值 Token 引用（fontSizeToken / cornerRadiusTokens / gapToken …）。
+  //    缺省即字面量，不需要改数据。
+  if (version < 7) version = 7;
   state.formatVersion = CURRENT_FORMAT_VERSION;
   return state;
 }

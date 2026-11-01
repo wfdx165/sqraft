@@ -10,6 +10,7 @@ import {
   imageCropOf,
   maskPlan,
   resolvePaint,
+  resolveNumericStyle,
   polygonPoints,
   subtreeWorldBounds,
 } from "@sqraft/core";
@@ -158,8 +159,10 @@ function drawChildren(
     if (!mask || !target || !mask.visible || !target.visible) continue;
     backend.pushMaskLayer(subtreeWorldBounds(ctx.doc, target.id) ?? undefined);
     drawNode(backend, ctx, target, options);
+    const maskStyle = resolveNumericStyle(ctx.doc, mask.style);
+    const styledMask = maskStyle === mask.style ? mask : { ...mask, style: maskStyle };
     backend.popMaskLayer(
-      () => drawSelf(backend, ctx, mask, undefined, { mask: true }),
+      () => drawSelf(backend, ctx, styledMask, undefined, { mask: true }),
       mask.opacity ?? 1,
     );
   }
@@ -172,26 +175,30 @@ function drawNode(
   options: DrawOptions,
 ): void {
   if (!node.visible) return;
-  const opacity = node.opacity ?? 1;
-  const geo = geometryOf(node, options);
-  const changed = geo.x !== node.x || geo.y !== node.y || geo.width !== node.width || geo.height !== node.height;
-  const target = changed ? { ...node, ...geo } : node;
+  // 数值 Token 在读时解析：字号 / 描边宽 / 圆角等统一在这里落到字面量。
+  // 没有绑定的节点返回原对象，不产生额外分配。
+  const numericStyle = resolveNumericStyle(ctx.doc, node.style);
+  const styled = numericStyle === node.style ? node : { ...node, style: numericStyle };
+  const opacity = styled.opacity ?? 1;
+  const geo = geometryOf(styled, options);
+  const changed = geo.x !== styled.x || geo.y !== styled.y || geo.width !== styled.width || geo.height !== styled.height;
+  const target = changed ? { ...styled, ...geo } : styled;
   // 不透明度在外、效果在内：先按组合成，再施加效果，最后整体乘 alpha
-  if (opacity < 1) backend.pushOpacity(opacity, opacityLayerBounds(ctx.doc, node, geo, options));
+  if (opacity < 1) backend.pushOpacity(opacity, opacityLayerBounds(ctx.doc, styled, geo, options));
   // 效果层包住自绘与整棵子树：先合成，再施加效果（ADR-0018）
-  const effects = resolveEffects(ctx, node.style.effects);
+  const effects = resolveEffects(ctx, styled.style.effects);
   if (effects.length > 0) backend.pushEffects(target, effects);
   // 行内编辑中的文本由 DOM 输入框承载，画布上跳过以免重影
-  if (node.id !== options.hideTextId && node.id !== options.hidePathId) {
+  if (styled.id !== options.hideTextId && styled.id !== options.hidePathId) {
     const vectorOverride =
-      options.vectorPreview && options.vectorPreview.id === node.id ? options.vectorPreview.vector : undefined;
+      options.vectorPreview && options.vectorPreview.id === styled.id ? options.vectorPreview.vector : undefined;
     drawSelf(backend, ctx, target, vectorOverride);
   }
-  if (node.children.length > 0) {
-    backend.pushTransform(geo.x, geo.y, node.rotation, geo.width, geo.height);
-    const clipped = node.clip && (node.type === "frame" || node.type === "component" || node.type === "instance");
-    if (clipped) backend.pushClip(0, 0, geo.width, geo.height, cornerRadiusOf(node.style));
-    drawChildren(backend, ctx, node.children, options);
+  if (styled.children.length > 0) {
+    backend.pushTransform(geo.x, geo.y, styled.rotation, geo.width, geo.height);
+    const clipped = styled.clip && (styled.type === "frame" || styled.type === "component" || styled.type === "instance");
+    if (clipped) backend.pushClip(0, 0, geo.width, geo.height, cornerRadiusOf(styled.style));
+    drawChildren(backend, ctx, styled.children, options);
     if (clipped) backend.popClip();
     backend.popTransform();
   }

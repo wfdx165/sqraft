@@ -5,8 +5,36 @@
  * 改名与"删除时冻结引用"共用同一套遍历，避免两边各写一遍后慢慢漂移。
  */
 import { isShadowEffect } from "./effects";
-import type { DocNode, DocState, NodeId, NodeStyle, Paint } from "./model";
+import {
+  CORNER_RADIUS_KEYS,
+  NUMERIC_LITERAL_OF_TOKEN,
+  NUMERIC_TOKEN_FIELDS,
+  PADDING_SIDE_KEYS,
+} from "./token-fields";
+import { tokenNumberOf } from "./token-validation";
+import type { DocNode, DocState, LayoutSpec, NodeId, NodeStyle, Paint } from "./model";
 import type { Command } from "./store";
+
+/** 这个 style 是否引用了数值 Token `path`。 */
+export function hasNumericTokenRef(style: NodeStyle, path: string): boolean {
+  for (const tokenKey of NUMERIC_TOKEN_FIELDS) {
+    if (style[tokenKey] === path) return true;
+  }
+  const corners = style.cornerRadiusTokens;
+  return Boolean(corners && CORNER_RADIUS_KEYS.some((key) => corners[key] === path));
+}
+
+/** 这个 layout 是否引用了数值 Token `path`。 */
+export function hasNumericLayoutTokenRef(layout: LayoutSpec, path: string): boolean {
+  if (layout.gapToken === path || layout.crossGapToken === path) return true;
+  const padding = layout.paddingTokens;
+  return Boolean(padding && PADDING_SIDE_KEYS.some((key) => padding[key] === path));
+}
+
+/** 节点（style 或 layout）是否引用了数值 Token `path`。 */
+export function hasNodeNumericTokenRef(node: DocNode, path: string): boolean {
+  return hasNumericTokenRef(node.style, path) || Boolean(node.layout && hasNumericLayoutTokenRef(node.layout, path));
+}
 
 /** 这个 style 是否引用了 `path`。 */
 export function hasTokenRef(style: NodeStyle, path: string): boolean {
@@ -14,11 +42,11 @@ export function hasTokenRef(style: NodeStyle, path: string): boolean {
   return Boolean(style.effects?.some((effect) => isShadowEffect(effect) && effect.color.token === path));
 }
 
-/** 引用了 `path` 的节点（按文档遍历顺序）。 */
+/** 引用了 `path` 的节点（按文档遍历顺序，颜色与数值引用都算）。 */
 export function tokenRefsOf(state: DocState, path: string): NodeId[] {
   const ids: NodeId[] = [];
   for (const node of Object.values(state.nodes)) {
-    if (hasTokenRef(node.style, path)) ids.push(node.id);
+    if (hasTokenRef(node.style, path) || hasNodeNumericTokenRef(node, path)) ids.push(node.id);
   }
   return ids;
 }
@@ -49,6 +77,136 @@ export function mapTokenPaints(
     };
   }
 
+  return next;
+}
+
+/**
+ * 把 style / layout 里指向 `from` 的数值引用改成 `to`；没有命中返回 null。
+ * `layout` 允许为空（纯样式节点）。
+ */
+export function mapNumericTokenRefs(
+  style: NodeStyle,
+  layout: LayoutSpec | undefined,
+  from: string,
+  to: string,
+): { style?: NodeStyle; layout?: LayoutSpec } | null {
+  let nextStyle: NodeStyle | null = null;
+  for (const tokenKey of NUMERIC_TOKEN_FIELDS) {
+    if (style[tokenKey] !== from) continue;
+    nextStyle = { ...(nextStyle ?? style), [tokenKey]: to } as NodeStyle;
+  }
+  const corners = style.cornerRadiusTokens;
+  if (corners && CORNER_RADIUS_KEYS.some((key) => corners[key] === from)) {
+    const map: NonNullable<NodeStyle["cornerRadiusTokens"]> = { ...corners };
+    for (const key of CORNER_RADIUS_KEYS) {
+      if (map[key] === from) map[key] = to;
+    }
+    nextStyle = { ...(nextStyle ?? style), cornerRadiusTokens: map };
+  }
+
+  let nextLayout: LayoutSpec | null = null;
+  if (layout) {
+    if (layout.gapToken === from) nextLayout = { ...(nextLayout ?? layout), gapToken: to };
+    if (layout.crossGapToken === from) nextLayout = { ...(nextLayout ?? layout), crossGapToken: to };
+    const padding = layout.paddingTokens;
+    if (padding && PADDING_SIDE_KEYS.some((key) => padding[key] === from)) {
+      const map: NonNullable<LayoutSpec["paddingTokens"]> = { ...padding };
+      for (const key of PADDING_SIDE_KEYS) {
+        if (map[key] === from) map[key] = to;
+      }
+      nextLayout = { ...(nextLayout ?? layout), paddingTokens: map };
+    }
+  }
+
+  if (!nextStyle && !nextLayout) return null;
+  return {
+    ...(nextStyle ? { style: nextStyle } : {}),
+    ...(nextLayout ? { layout: nextLayout } : {}),
+  };
+}
+
+/** 改写实例覆盖表里的数值引用（style 与 layout 各一份持久化差异）。 */
+export function mapOverrideNumericRefs(node: DocNode, from: string, to: string): boolean {
+  const overrides = node.overrides;
+  if (!overrides) return false;
+  let touched = false;
+  const next: NonNullable<DocNode["overrides"]> = { ...overrides };
+  for (const [key, override] of Object.entries(overrides)) {
+    const mapped = mapNumericTokenRefs(override.style ?? {}, override.layout, from, to);
+    if (!mapped) continue;
+    next[key] = {
+      ...override,
+      ...(mapped.style ? { style: mapped.style } : {}),
+      ...(mapped.layout ? { layout: mapped.layout } : {}),
+    };
+    touched = true;
+  }
+  if (touched) node.overrides = next;
+  return touched;
+}
+
+/** 数值冻结时的范围约定：字号必须为正，字距允许负值，其余非负。 */
+function clampNumericLiteral(field: keyof NodeStyle, value: number, fallback: number | undefined): number | undefined {
+  if (field === "fontSize") return value > 0 ? value : fallback;
+  if (field === "letterSpacing") return value;
+  return Math.max(0, value);
+}
+
+/** 把这个 style 里指向 `path` 的数值引用冻结成字面量；没有命中返回 null。 */
+function freezeNumericStyle(style: NodeStyle, path: string, value: number | null): NodeStyle | null {
+  let next: NodeStyle | null = null;
+  for (const tokenKey of NUMERIC_TOKEN_FIELDS) {
+    if (style[tokenKey] !== path) continue;
+    const literalKey = NUMERIC_LITERAL_OF_TOKEN[tokenKey];
+    next = { ...(next ?? style) };
+    if (value !== null) {
+      const frozen = clampNumericLiteral(literalKey, value, style[literalKey]);
+      if (frozen !== undefined) (next as Record<string, unknown>)[literalKey] = frozen;
+    }
+    delete next[tokenKey];
+  }
+  const corners = style.cornerRadiusTokens;
+  if (corners && CORNER_RADIUS_KEYS.some((key) => corners[key] === path)) {
+    const map: NonNullable<NodeStyle["cornerRadiusTokens"]> = { ...corners };
+    const radius = {
+      ...(next?.cornerRadius ?? style.cornerRadius ?? { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 }),
+    };
+    for (const key of CORNER_RADIUS_KEYS) {
+      if (map[key] !== path) continue;
+      delete map[key];
+      if (value !== null) radius[key] = Math.max(0, value);
+    }
+    next = { ...(next ?? style), cornerRadius: radius };
+    if (Object.keys(map).length > 0) next.cornerRadiusTokens = map;
+    else delete next.cornerRadiusTokens;
+  }
+  return next;
+}
+
+/** 把这个 layout 里指向 `path` 的数值引用冻结成字面量；没有命中返回 null。 */
+function freezeNumericLayout(layout: LayoutSpec, path: string, value: number | null): LayoutSpec | null {
+  let next: LayoutSpec | null = null;
+  if (layout.gapToken === path) {
+    next = { ...(next ?? layout), gap: value === null ? layout.gap : Math.max(0, value) };
+    delete next.gapToken;
+  }
+  if (layout.crossGapToken === path) {
+    next = { ...(next ?? layout), crossGap: value === null ? layout.crossGap : Math.max(0, value) };
+    delete next.crossGapToken;
+  }
+  const padding = layout.paddingTokens;
+  if (padding && PADDING_SIDE_KEYS.some((key) => padding[key] === path)) {
+    const map: NonNullable<LayoutSpec["paddingTokens"]> = { ...padding };
+    const box = { ...(next?.padding ?? layout.padding) };
+    for (const key of PADDING_SIDE_KEYS) {
+      if (map[key] !== path) continue;
+      delete map[key];
+      if (value !== null) box[key] = Math.max(0, value);
+    }
+    next = { ...(next ?? layout), padding: box };
+    if (Object.keys(map).length > 0) next.paddingTokens = map;
+    else delete next.paddingTokens;
+  }
   return next;
 }
 
@@ -100,12 +258,25 @@ function detachTokenRefs(state: DocState, path: string): Command[] {
   const entry = state.tokens[path];
   if (!entry) return [];
   const value = String(entry.value);
+  const numberValue = entry.type === "number" ? tokenNumberOf(entry.value) : null;
 
   const commands: Command[] = [];
   for (const node of Object.values(state.nodes)) {
-    const next = mapTokenPaints(node.style, path, () => ({ value }));
-    if (!next) continue;
-    commands.push({ type: "node.update", params: { nodeId: node.id, patch: { style: next } } });
+    let style = mapTokenPaints(node.style, path, () => ({ value })) ?? node.style;
+    const frozen = freezeNumericStyle(style, path, numberValue);
+    if (frozen) style = frozen;
+    const layout = node.layout ? freezeNumericLayout(node.layout, path, numberValue) : null;
+    if (style === node.style && !layout) continue;
+    commands.push({
+      type: "node.update",
+      params: {
+        nodeId: node.id,
+        patch: {
+          ...(style !== node.style ? { style } : {}),
+          ...(layout ? { layout } : {}),
+        },
+      },
+    });
   }
   return commands;
 }

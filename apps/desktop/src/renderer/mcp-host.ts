@@ -217,7 +217,7 @@ export function installMcpHost(): void {
     docStore,
     (region) => hooks.getScreenshot(region),
     () => ui.activePageId,
-    (node, style, text) => textSizeOf(node, style, text),
+    (node, style, text) => textSizeOf(node, style, text, docStore.doc),
     {
       newDocument: () => newDocument(),
       openDocument: () => openDocument(),

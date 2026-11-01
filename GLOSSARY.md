@@ -192,7 +192,7 @@ _Avoid_: 变体切换器（作为独立概念）
 _Avoid_: 状态、款式
 
 **设计 Token（Token）**：
-命名的设计决策值（颜色、间距、字号、圆角、阴影），节点通过引用消费；单一取值，不引入模式/主题维度。
+命名的设计决策值（颜色、间距、字号、圆角、阴影），节点通过引用消费；单一取值，不引入模式/主题维度。数值 Token 通过 `fontSizeToken` / `lineHeightToken` / `letterSpacingToken` / `paragraphSpacingToken` / `strokeWidthToken` / `cornerRadiusTokens` / `gapToken` / `crossGapToken` / `paddingTokens` 被节点引用，圆角可逐角、内边距可逐边绑定。
 _Avoid_: 样式变量
 
 **设计系统面板（Design System）**：

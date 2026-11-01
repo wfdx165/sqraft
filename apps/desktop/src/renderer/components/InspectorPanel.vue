@@ -2,6 +2,7 @@
 import { useInspector } from "../inspector/useInspector";
 import Icon from "./Icon.vue";
 import ImageSection from "./ImageSection.vue";
+import TokenLink from "./TokenLink.vue";
 import { EFFECT_TYPES } from "@sqraft/core";
 import { docStore, ui } from "../store";
 
@@ -127,6 +128,18 @@ const {
   align,
   distribute,
   tokenNames,
+  styleView,
+  layoutView,
+  scalarTokenOf,
+  cornerTokenOf,
+  allCornerToken,
+  paddingTokenOf,
+  allPaddingToken,
+  layoutTokenOf,
+  openScalarToken,
+  openCornerToken,
+  openPaddingToken,
+  openLayoutToken,
   radiusExpanded,
   paddingExpanded,
   textDraft,
@@ -320,20 +333,40 @@ const {
           </div>
           <div class="grid two">
             <label>间距</label>
-            <input class="mono" type="number" :value="fmt(node.layout.gap)" :disabled="readonly" @change="setLayout({ gap: num($event) })" />
+            <div class="field-with-token">
+              <input class="mono" type="number" :value="fmt(layoutView?.gap ?? 0)" :disabled="readonly" @change="setLayout({ gap: num($event) })" />
+              <TokenLink :token="layoutTokenOf('gap')" :disabled="readonly" @open="openLayoutToken('gap', $event)" />
+            </div>
             <label>内边距</label>
             <div class="field-with-select">
               <input class="mono" type="number" :value="numValue(paddingUnified())" placeholder="混合" :disabled="readonly" @change="setPaddingAll" />
+              <TokenLink :token="allPaddingToken()" :disabled="readonly" @open="openPaddingToken('all', $event)" />
               <button class="mini corner-toggle" :disabled="readonly" @click="paddingExpanded = !paddingExpanded">
                 {{ paddingExpanded ? "统一" : "分边" }}
               </button>
             </div>
           </div>
           <div v-if="paddingExpanded" class="grid two">
-            <label>上</label><input class="mono" type="number" :value="fmt(paddingOf(node).top)" :disabled="readonly" @change="setPaddingSide('top', $event)" />
-            <label>右</label><input class="mono" type="number" :value="fmt(paddingOf(node).right)" :disabled="readonly" @change="setPaddingSide('right', $event)" />
-            <label>下</label><input class="mono" type="number" :value="fmt(paddingOf(node).bottom)" :disabled="readonly" @change="setPaddingSide('bottom', $event)" />
-            <label>左</label><input class="mono" type="number" :value="fmt(paddingOf(node).left)" :disabled="readonly" @change="setPaddingSide('left', $event)" />
+            <label>上</label>
+            <div class="field-with-token">
+              <input class="mono" type="number" :value="fmt(paddingOf(node).top)" :disabled="readonly" @change="setPaddingSide('top', $event)" />
+              <TokenLink :token="paddingTokenOf('top')" :disabled="readonly" @open="openPaddingToken('top', $event)" />
+            </div>
+            <label>右</label>
+            <div class="field-with-token">
+              <input class="mono" type="number" :value="fmt(paddingOf(node).right)" :disabled="readonly" @change="setPaddingSide('right', $event)" />
+              <TokenLink :token="paddingTokenOf('right')" :disabled="readonly" @open="openPaddingToken('right', $event)" />
+            </div>
+            <label>下</label>
+            <div class="field-with-token">
+              <input class="mono" type="number" :value="fmt(paddingOf(node).bottom)" :disabled="readonly" @change="setPaddingSide('bottom', $event)" />
+              <TokenLink :token="paddingTokenOf('bottom')" :disabled="readonly" @open="openPaddingToken('bottom', $event)" />
+            </div>
+            <label>左</label>
+            <div class="field-with-token">
+              <input class="mono" type="number" :value="fmt(paddingOf(node).left)" :disabled="readonly" @change="setPaddingSide('left', $event)" />
+              <TokenLink :token="paddingTokenOf('left')" :disabled="readonly" @open="openPaddingToken('left', $event)" />
+            </div>
           </div>
           <div class="grid two">
             <label>主轴</label>
@@ -355,7 +388,10 @@ const {
             <label>换行</label>
             <input type="checkbox" class="checkbox" :checked="node.layout.wrap" :disabled="readonly" @change="setLayout({ wrap: boolOf($event) })" />
             <label v-if="node.layout.wrap" class="inline-label">行距</label>
-            <input v-if="node.layout.wrap" class="mono" type="number" :value="fmt(node.layout.crossGap)" :disabled="readonly" @change="setLayout({ crossGap: num($event) })" />
+            <div v-if="node.layout.wrap" class="field-with-token">
+              <input class="mono" type="number" :value="fmt(layoutView?.crossGap ?? 0)" :disabled="readonly" @change="setLayout({ crossGap: num($event) })" />
+              <TokenLink :token="layoutTokenOf('crossGap')" :disabled="readonly" @open="openLayoutToken('crossGap', $event)" />
+            </div>
           </div>
           <div v-if="node.layout.wrap" class="grid two">
             <label>多行</label>
@@ -413,17 +449,21 @@ const {
             <option v-for="w in weightOptions" :key="w" :value="String(w)">{{ w }}</option>
           </select>
           <label>字号</label>
-          <input class="mono" type="number" min="1" :value="fmt(node.style.fontSize ?? 20)" :disabled="readonly" @change="setTextStyle('fontSize', $event, Number)" />
+          <div class="field-with-token">
+            <input class="mono" type="number" min="1" :value="fmt(styleView?.fontSize ?? 20)" :disabled="readonly" @change="setTextStyle('fontSize', $event, Number)" />
+            <TokenLink :token="scalarTokenOf('fontSize')" :disabled="readonly" @open="openScalarToken('fontSize', $event)" />
+          </div>
           <label>行高</label>
           <div class="field-with-select">
             <input
               class="mono"
               type="number"
-              :value="node.style.lineHeightUnit === 'auto' || !node.style.lineHeightUnit ? '' : fmt(node.style.lineHeight ?? 0)"
+              :value="node.style.lineHeightUnit === 'auto' || !node.style.lineHeightUnit ? '' : fmt(styleView?.lineHeight ?? 0)"
               placeholder="自动"
               :disabled="readonly || !node.style.lineHeightUnit || node.style.lineHeightUnit === 'auto'"
               @change="setTextStyle('lineHeight', $event, Number)"
             />
+            <TokenLink :token="scalarTokenOf('lineHeight')" :disabled="readonly" @open="openScalarToken('lineHeight', $event)" />
             <select :value="node.style.lineHeightUnit ?? 'auto'" :disabled="readonly" @change="setTextStyle('lineHeightUnit', $event)">
               <option value="auto">自动</option>
               <option value="px">px</option>
@@ -432,14 +472,18 @@ const {
           </div>
           <label>字距</label>
           <div class="field-with-select">
-            <input class="mono" type="number" :value="fmt(node.style.letterSpacing ?? 0)" :disabled="readonly" @change="setTextStyle('letterSpacing', $event, Number)" />
+            <input class="mono" type="number" :value="fmt(styleView?.letterSpacing ?? 0)" :disabled="readonly" @change="setTextStyle('letterSpacing', $event, Number)" />
+            <TokenLink :token="scalarTokenOf('letterSpacing')" :disabled="readonly" @open="openScalarToken('letterSpacing', $event)" />
             <select :value="node.style.letterSpacingUnit ?? 'px'" :disabled="readonly" @change="setTextStyle('letterSpacingUnit', $event)">
               <option value="px">px</option>
               <option value="percent">%</option>
             </select>
           </div>
           <label>段距</label>
-          <input class="mono" type="number" :value="fmt(node.style.paragraphSpacing ?? 0)" :disabled="readonly" @change="setTextStyle('paragraphSpacing', $event, Number)" />
+          <div class="field-with-token">
+            <input class="mono" type="number" :value="fmt(styleView?.paragraphSpacing ?? 0)" :disabled="readonly" @change="setTextStyle('paragraphSpacing', $event, Number)" />
+            <TokenLink :token="scalarTokenOf('paragraphSpacing')" :disabled="readonly" @open="openScalarToken('paragraphSpacing', $event)" />
+          </div>
         </div>
         <div class="row">
           <label>斜体</label>
@@ -556,22 +600,42 @@ const {
         </div>
         <div v-if="supportsStroke" class="row">
           <label>线宽</label>
-          <input class="mono" type="number" min="0" step="0.5" :value="node.style.strokeWidth ?? 1" :disabled="readonly" @change="setStrokeWidth($event)" />
+          <div class="field-with-token">
+            <input class="mono" type="number" min="0" step="0.5" :value="styleView?.strokeWidth ?? 1" :disabled="readonly" @change="setStrokeWidth($event)" />
+            <TokenLink :token="scalarTokenOf('strokeWidth')" :disabled="readonly" @open="openScalarToken('strokeWidth', $event)" />
+          </div>
         </div>
         <div v-if="supportsRadius" class="row">
           <label>圆角</label>
           <div class="field-with-select">
             <input class="mono" type="number" min="0" :value="numValue(radiusUnified())" placeholder="混合" :disabled="readonly" @change="setRadiusAll" />
+            <TokenLink :token="allCornerToken()" :disabled="readonly" @open="openCornerToken('all', $event)" />
             <button class="mini corner-toggle" :disabled="readonly" @click="radiusExpanded = !radiusExpanded">
               {{ radiusExpanded ? "统一" : "四角" }}
             </button>
           </div>
         </div>
         <div v-if="supportsRadius && radiusExpanded" class="grid two">
-          <label>左上</label><input class="mono" type="number" min="0" :value="fmt(radiusOf(node).topLeft)" :disabled="readonly" @change="setRadiusCorner('topLeft', $event)" />
-          <label>右上</label><input class="mono" type="number" min="0" :value="fmt(radiusOf(node).topRight)" :disabled="readonly" @change="setRadiusCorner('topRight', $event)" />
-          <label>右下</label><input class="mono" type="number" min="0" :value="fmt(radiusOf(node).bottomRight)" :disabled="readonly" @change="setRadiusCorner('bottomRight', $event)" />
-          <label>左下</label><input class="mono" type="number" min="0" :value="fmt(radiusOf(node).bottomLeft)" :disabled="readonly" @change="setRadiusCorner('bottomLeft', $event)" />
+          <label>左上</label>
+          <div class="field-with-token">
+            <input class="mono" type="number" min="0" :value="fmt(radiusOf(node).topLeft)" :disabled="readonly" @change="setRadiusCorner('topLeft', $event)" />
+            <TokenLink :token="cornerTokenOf('topLeft')" :disabled="readonly" @open="openCornerToken('topLeft', $event)" />
+          </div>
+          <label>右上</label>
+          <div class="field-with-token">
+            <input class="mono" type="number" min="0" :value="fmt(radiusOf(node).topRight)" :disabled="readonly" @change="setRadiusCorner('topRight', $event)" />
+            <TokenLink :token="cornerTokenOf('topRight')" :disabled="readonly" @open="openCornerToken('topRight', $event)" />
+          </div>
+          <label>右下</label>
+          <div class="field-with-token">
+            <input class="mono" type="number" min="0" :value="fmt(radiusOf(node).bottomRight)" :disabled="readonly" @change="setRadiusCorner('bottomRight', $event)" />
+            <TokenLink :token="cornerTokenOf('bottomRight')" :disabled="readonly" @open="openCornerToken('bottomRight', $event)" />
+          </div>
+          <label>左下</label>
+          <div class="field-with-token">
+            <input class="mono" type="number" min="0" :value="fmt(radiusOf(node).bottomLeft)" :disabled="readonly" @change="setRadiusCorner('bottomLeft', $event)" />
+            <TokenLink :token="cornerTokenOf('bottomLeft')" :disabled="readonly" @open="openCornerToken('bottomLeft', $event)" />
+          </div>
         </div>
         <div v-if="supportsClip" class="row">
           <label>裁剪内容</label>
@@ -997,6 +1061,20 @@ header {
 }
 
 .field-with-select > input {
+  flex: 1;
+}
+
+.field-with-token {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+
+.field-with-token > input {
+  flex: 1;
+}
+
+.row > .field-with-token {
   flex: 1;
 }
 

@@ -7,7 +7,9 @@ import {
   DEFAULT_TEXT_FONT_SIZE,
   layoutText,
   measureTextBox,
+  resolveNumericStyle,
   type DocNode,
+  type DocState,
   type MeasureText,
   type NodeStyle,
 } from "@sqraft/core";
@@ -34,23 +36,25 @@ export const measureText: MeasureText = (text: string, font: string): number => 
   return ctx.measureText(text).width;
 };
 
-/** 文本节点的目标尺寸（按 textAutoResize）。 */
+/** 文本节点的目标尺寸（按 textAutoResize）。传入文档状态时先解析数值 Token。 */
 export function textSizeOf(
   node: Pick<DocNode, "width" | "height" | "textAutoResize" | "listType" | "truncate">,
   style: NodeStyle,
   text: string,
+  state?: DocState,
 ): { width: number; height: number } {
-  return measureTextBox(node, style, measureText, text);
+  return measureTextBox(node, state ? resolveNumericStyle(state, style) : style, measureText, text);
 }
 
-/** 行盒结果，供行内编辑预览与渲染调试使用。 */
+/** 行盒结果，供行内编辑预览与渲染调试使用。传入文档状态时先解析数值 Token。 */
 export function textLayoutOf(
   node: Pick<DocNode, "width" | "height" | "textAutoResize" | "listType" | "truncate">,
   style: NodeStyle,
   text: string,
+  state?: DocState,
 ) {
   const mode = node.textAutoResize ?? "auto-width";
-  return layoutText(text, style, {
+  return layoutText(text, state ? resolveNumericStyle(state, style) : style, {
     measure: measureText,
     listType: node.listType,
     maxWidth: mode === "auto-width" ? undefined : node.width,

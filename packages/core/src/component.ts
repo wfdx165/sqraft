@@ -32,6 +32,7 @@ function cloneStyle(style: NodeStyle): NodeStyle {
     ...style,
     fill: style.fill ? { ...style.fill } : style.fill,
     stroke: style.stroke ? { ...style.stroke } : style.stroke,
+    cornerRadiusTokens: style.cornerRadiusTokens ? { ...style.cornerRadiusTokens } : undefined,
   };
 }
 

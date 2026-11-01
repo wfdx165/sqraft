@@ -3,7 +3,7 @@
  * 纪律：画布热路径不进 Vue 响应式；store 变更通过订阅推增量。
  */
 import { reactive } from "vue";
-import { DocStore, createEmptyDoc, firstPageId, type Command, type NodeId } from "@sqraft/core";
+import { DocStore, createEmptyDoc, firstPageId, NUMERIC_TOKEN_CHANGED, type Command, type DocNode, type NodeId } from "@sqraft/core";
 import { textSizeOf } from "./text-metrics";
 
 export type ToolKind = "select" | "frame" | "rect" | "ellipse" | "triangle" | "line" | "path" | "text";
@@ -34,7 +34,7 @@ export const ui = reactive({
   cropNodeId: null as NodeId | null,
 });
 
-docStore.subscribe(() => {
+docStore.subscribe((_state, changed) => {
   ui.version += 1;
   if (ui.expandedPageId && !docStore.doc.nodes[ui.expandedPageId]) {
     ui.expandedPageId = firstPageId(docStore.doc);
@@ -46,23 +46,33 @@ docStore.subscribe(() => {
   ui.instanceContext = ui.instanceContext.filter((id) => docStore.doc.nodes[id]?.type === "instance");
   // 裁切中的节点被删/换文档后就失效了，别让它继续拦住指针
   if (ui.cropNodeId && !docStore.doc.nodes[ui.cropNodeId]) ui.cropNodeId = null;
-  queueMicrotask(reflowAutoHeightText);
+  // 数值 Token 改值（token 命令会带 NUMERIC_TOKEN_CHANGED 标记）可能改字号/行高：
+  // 全量文本都要重算；普通编辑只需要修 auto-height 的高度。
+  const tokenChanged = changed.has(NUMERIC_TOKEN_CHANGED as NodeId);
+  queueMicrotask(() => reflowText(tokenChanged));
 });
 
 let reflowing = false;
 
 /**
- * 自动高度文本：宽度由布局或用户决定，高度必须由测量得出。
+ * 自动尺寸文本：宽度由布局或用户决定，高度必须由测量得出；auto-width 的宽度也由内容决定。
  * 测量在 UI 层完成，写回走 applyDerived（不进撤销栈）。
+ * `full=true` 用于 Token 改值：auto-width 的宽度也要重算。
  */
-function reflowAutoHeightText(): void {
+function reflowText(full = false): void {
   if (reflowing) return;
   const updates: Command[] = [];
   for (const n of Object.values(docStore.doc.nodes)) {
-    if (n.type !== "text" || (n.textAutoResize ?? "auto-width") !== "auto-height") continue;
-    const size = textSizeOf(n, n.style, n.text ?? "");
-    if (Math.abs(size.height - n.height) > 0.5) {
-      updates.push({ type: "node.update", params: { nodeId: n.id, patch: { height: size.height } } });
+    if (n.type !== "text") continue;
+    const mode = n.textAutoResize ?? "auto-width";
+    if (mode === "fixed") continue;
+    if (mode === "auto-width" && !full) continue;
+    const size = textSizeOf(n, n.style, n.text ?? "", docStore.doc);
+    const patch: Partial<DocNode> = {};
+    if (mode === "auto-width" && Math.abs(size.width - n.width) > 0.5) patch.width = size.width;
+    if (Math.abs(size.height - n.height) > 0.5) patch.height = size.height;
+    if (Object.keys(patch).length > 0) {
+      updates.push({ type: "node.update", params: { nodeId: n.id, patch } });
     }
   }
   if (updates.length === 0) return;

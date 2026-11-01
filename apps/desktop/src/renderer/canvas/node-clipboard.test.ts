@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createDocWithPage, createNode, firstPageId } from "@sqraft/core";
+import { createDocWithPage, createLayoutSpec, createNode, firstPageId } from "@sqraft/core";
 
 // 图片仓库在测试里只需要"已存在/注册成功"，解码属于 assets 自己的测试
 const assetState = vi.hoisted(() => ({
@@ -240,5 +240,49 @@ describe("节点剪贴板", () => {
     expect(pasted.overrides).toBeUndefined();
     const child = docStore.doc.nodes[pasted.children[0]];
     expect(child.mainId).toBeUndefined();
+  });
+});
+
+describe("节点剪贴板：数值 Token", () => {
+  beforeEach(() => {
+    clipboard = "";
+    docStore.replace(createDocWithPage());
+    ui.selection = [];
+  });
+
+  it("跨文档粘贴会带上数值 Token 定义", async () => {
+    const pageId = firstPageId(docStore.doc)!;
+    docStore.apply({ type: "token.define", params: { path: "size/body", tokenType: "number", value: 18 } }, "token");
+    docStore.apply({ type: "token.define", params: { path: "space/md", tokenType: "number", value: 12 } }, "token");
+
+    const node = createNode("frame", {
+      name: "卡片",
+      parentId: pageId,
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 100,
+      style: { fontSizeToken: "size/body" },
+      layout: createLayoutSpec({ gapToken: "space/md", paddingTokens: { left: "space/md" } }),
+    });
+    docStore.apply({ type: "node.create", params: { nodes: [node], parentId: pageId } });
+    select([node.id]);
+    expect(await copySelectionToClipboard()).toBe(true);
+
+    const payload = JSON.parse(clipboard) as { tokens: Record<string, { type: string; value: number }> };
+    expect(payload.tokens["size/body"]).toEqual({ type: "number", value: 18 });
+    expect(payload.tokens["space/md"]).toEqual({ type: "number", value: 12 });
+
+    // 模拟目标文档：Token 与源节点都不存在
+    docStore.apply({ type: "node.delete", params: { nodeId: node.id } });
+    docStore.apply({ type: "token.delete", params: { path: "size/body" } });
+    docStore.apply({ type: "token.delete", params: { path: "space/md" } });
+
+    expect(await pasteNodesFromClipboard(deps(null))).toBe(true);
+    expect(docStore.doc.tokens["size/body"]).toEqual({ type: "number", value: 18 });
+    const pasted = docStore.doc.nodes[ui.selection[0]];
+    expect(pasted.style.fontSizeToken).toBe("size/body");
+    expect(pasted.layout?.gapToken).toBe("space/md");
+    expect(pasted.layout?.paddingTokens?.left).toBe("space/md");
   });
 });

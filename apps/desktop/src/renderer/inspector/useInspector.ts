@@ -10,6 +10,9 @@ import {
   findOverrideOwner,
   newId,
   resolvePaint,
+  resolveNumericLayout,
+  resolveNumericStyle,
+  NUMERIC_TOKEN_OF_LITERAL,
   type Command,
   type ComponentPropertyDef,
   type CornerRadius,
@@ -32,6 +35,7 @@ import { dispatch, docStore, hooks, ui } from "../store";
 import { putAsset } from "../assets";
 import { firstFamilyOf, fontFamilies, fontWeightsOf, putFont } from "../fonts";
 import { selectionBounds as boundsOf } from "../canvas/selection-bounds";
+import { createTokenBindings } from "./token-bindings";
 
 /**
  * 检查器的状态与动作：模板只负责排版，逻辑集中在这里。
@@ -80,6 +84,15 @@ function lockedChain(n: DocNode | null | undefined): boolean {
 }
 
 const readonly = computed(() => nodes.value.some((n) => lockedChain(n)));
+
+/* ---------- 数值 Token 绑定 ---------- */
+
+/** 文本字面量 → Token 字段（手改字面量时解绑，字段表与 core 共用一份）。 */
+const TEXT_TOKEN_FIELDS = (["fontSize", "lineHeight", "letterSpacing", "paragraphSpacing"] as const).map(
+  (literal) => [literal, NUMERIC_TOKEN_OF_LITERAL[literal]] as const,
+);
+
+const tokenBindings = createTokenBindings({ nodes, node, applyStyle, applyTextStyle, applyNodes });
 
 /** 批量编辑目标：跳过页面与锁定子树。 */
 function targets(): DocNode[] {
@@ -405,7 +418,7 @@ function setCustomPaint(kind: "fill" | "stroke", e: Event): void {
 }
 
 function setStrokeWidth(e: Event): void {
-  applyStyle((style) => ({ ...style, strokeWidth: Math.max(0, num(e)) }));
+  applyStyle((style) => ({ ...style, strokeWidth: Math.max(0, num(e)), strokeWidthToken: undefined }));
 }
 
 /* ---------- 效果 ---------- */
@@ -487,7 +500,8 @@ function setEffectColorValue(index: number, e: Event): void {
 const radiusExpanded = ref(false);
 
 function radiusOf(n: DocNode): CornerRadius {
-  return n.style.cornerRadius ?? ZERO_CORNER_RADIUS;
+  // 展示与编辑都以解析后的值为准（Token 优先，未绑定回退字面量）
+  return resolveNumericStyle(docStore.doc, n.style).cornerRadius ?? ZERO_CORNER_RADIUS;
 }
 
 function uniform(values: Array<number | null>): number | Mixed {
@@ -511,12 +525,23 @@ function setRadiusAll(e: Event): void {
   applyStyle((style) => ({
     ...style,
     cornerRadius: { topLeft: value, topRight: value, bottomRight: value, bottomLeft: value },
+    // 手改统一值 = 解除四角的 Token 绑定
+    cornerRadiusTokens: undefined,
   }));
 }
 
 function setRadiusCorner(key: keyof CornerRadius, e: Event): void {
   const value = Math.max(0, num(e));
-  applyStyle((style) => ({ ...style, cornerRadius: { ...radiusOf({ style } as DocNode), [key]: value } }));
+  applyStyle((style) => {
+    const radius = { ...radiusOf({ style } as DocNode), [key]: value };
+    const tokens = style.cornerRadiusTokens ? { ...style.cornerRadiusTokens } : undefined;
+    if (tokens) delete tokens[key];
+    return {
+      ...style,
+      cornerRadius: radius,
+      cornerRadiusTokens: tokens && Object.keys(tokens).length > 0 ? tokens : undefined,
+    };
+  });
 }
 
 /* ---------- 自动布局 ---------- */
@@ -524,13 +549,16 @@ function setRadiusCorner(key: keyof CornerRadius, e: Event): void {
 const paddingExpanded = ref(false);
 
 function layoutOf(n: DocNode): LayoutSpec | undefined {
-  return n.layout;
+  return n.layout ? resolveNumericLayout(docStore.doc, n.layout) : undefined;
 }
 
 function setLayout(patch: Partial<LayoutSpec>): void {
   const n = node.value;
   if (!n) return;
   const layout = { ...(n.layout ?? createLayoutSpec()), ...patch };
+  // 手改字面量 = 解除对应的 Token 绑定
+  if (patch.gap !== undefined) delete layout.gapToken;
+  if (patch.crossGap !== undefined) delete layout.crossGapToken;
   dispatch({ type: "node.update", params: { nodeId: n.id, patch: { layout } } }, "layout");
 }
 
@@ -550,7 +578,7 @@ function removeLayout(): void {
 }
 
 function paddingOf(n: DocNode): Padding {
-  return n.layout?.padding ?? ZERO_PADDING;
+  return (n.layout ? resolveNumericLayout(docStore.doc, n.layout).padding : undefined) ?? ZERO_PADDING;
 }
 
 function paddingUnified(): number | Mixed {
@@ -564,14 +592,16 @@ function paddingUnified(): number | Mixed {
 
 function setPaddingAll(e: Event): void {
   const v = Math.max(0, num(e));
-  setLayout({ padding: { top: v, right: v, bottom: v, left: v } });
+  setLayout({ padding: { top: v, right: v, bottom: v, left: v }, paddingTokens: undefined });
 }
 
 function setPaddingSide(side: keyof Padding, e: Event): void {
   const n = node.value;
   if (!n) return;
   const padding = { ...paddingOf(n), [side]: Math.max(0, num(e)) };
-  setLayout({ padding });
+  const tokens = n.layout?.paddingTokens ? { ...n.layout.paddingTokens } : undefined;
+  if (tokens) delete tokens[side];
+  setLayout({ padding, paddingTokens: tokens && Object.keys(tokens).length > 0 ? tokens : undefined });
 }
 
 function setSizing(axis: "W" | "H", e: Event): void {
@@ -659,7 +689,7 @@ function textPatch(n: DocNode, style: NodeStyle, text: string): Partial<DocNode>
   const patch: Partial<DocNode> = { text };
   const mode = n.textAutoResize ?? "auto-width";
   if (mode !== "fixed") {
-    const size = textSizeOf(n, style, text);
+    const size = textSizeOf(n, style, text, docStore.doc);
     if (mode === "auto-width") patch.width = size.width;
     patch.height = size.height;
   }
@@ -677,16 +707,19 @@ function commitText(): void {
   );
 }
 
-/** 文本样式变更：同步重算自动尺寸。 */
+/** 文本样式变更：同步重算自动尺寸；手改字面量时解除对应的 Token 绑定。 */
 function applyTextStyle(patch: Partial<NodeStyle>, label = "inspect"): void {
   const cmds: Command[] = [];
   for (const n of targets()) {
     if (n.type !== "text") continue;
     const style = { ...n.style, ...patch };
+    for (const [literal, token] of TEXT_TOKEN_FIELDS) {
+      if (patch[literal] !== undefined && patch[token] === undefined) delete style[token];
+    }
     const next: Partial<DocNode> = { style };
     const mode = n.textAutoResize ?? "auto-width";
     if (mode !== "fixed") {
-      const size = textSizeOf(n, style, n.text ?? "");
+      const size = textSizeOf(n, style, n.text ?? "", docStore.doc);
       if (mode === "auto-width") next.width = size.width;
       next.height = size.height;
     }
@@ -700,7 +733,8 @@ function setTextStyle(key: keyof NodeStyle, e: Event, parse: (v: string) => unkn
   if (key === "lineHeightUnit") {
     const unit = raw as NodeStyle["lineHeightUnit"];
     const patch: Partial<NodeStyle> = { lineHeightUnit: unit };
-    if (unit !== "auto" && (node.value?.style.lineHeight ?? 0) === 0) {
+    // 已绑定行高 Token 时，切单位不应顺手写一个字面量（那会解绑）
+    if (!node.value?.style.lineHeightToken && unit !== "auto" && (node.value?.style.lineHeight ?? 0) === 0) {
       patch.lineHeight = unit === "px" ? Math.round((node.value?.style.fontSize ?? 20) * 1.4) : 140;
     }
     applyTextStyle(patch);
@@ -715,7 +749,7 @@ function setAutoResize(e: Event): void {
   const mode = (e.target as HTMLSelectElement).value as TextAutoResize;
   const patch: Partial<DocNode> = { textAutoResize: mode };
   if (mode !== "fixed") {
-    const size = textSizeOf({ ...n, textAutoResize: mode }, n.style, n.text ?? "");
+    const size = textSizeOf({ ...n, textAutoResize: mode }, n.style, n.text ?? "", docStore.doc);
     if (mode === "auto-width") patch.width = size.width;
     patch.height = size.height;
   }
@@ -728,7 +762,7 @@ function setListType(e: Event): void {
   const listType = (e.target as HTMLSelectElement).value as ListType;
   const patch: Partial<DocNode> = { listType };
   if ((n.textAutoResize ?? "auto-width") !== "fixed") {
-    const size = textSizeOf({ ...n, listType }, n.style, n.text ?? "");
+    const size = textSizeOf({ ...n, listType }, n.style, n.text ?? "", docStore.doc);
     if ((n.textAutoResize ?? "auto-width") === "auto-width") patch.width = size.width;
     patch.height = size.height;
   }
@@ -1152,6 +1186,7 @@ function resetOuterField(field: string): void {
     setRadiusAll,
     setRadiusCorner,
     layoutOf,
+    ...tokenBindings,
     setLayout,
     addLayout,
     removeLayout,

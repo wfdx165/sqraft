@@ -15,3 +15,6 @@ export * from "./scale";
 export * from "./rotate";
 export * from "./token-validation";
 export * from "./token-refs";
+export * from "./token-resolve";
+export * from "./token-fields";
+export { NUMERIC_TOKEN_CHANGED } from "./token-commands";

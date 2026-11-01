@@ -10,6 +10,7 @@
 import {
   newId,
   remapNode,
+  tokenPathsOfNode,
   topLevelIds,
   walkSubtree,
   worldRect,
@@ -304,11 +305,8 @@ function collectTokens(nodes: readonly DocNode[]): Record<string, TokenEntry> {
     if (token && docStore.doc.tokens[token]) out[token] = docStore.doc.tokens[token];
   };
   for (const node of nodes) {
-    add(node.style.fill?.token);
-    add(node.style.stroke?.token);
-    for (const effect of node.style.effects ?? []) {
-      if (effect.type === "drop-shadow" || effect.type === "inner-shadow") add(effect.color?.token);
-    }
+    // 颜色与数值引用都要带上：跨文档粘贴时靠这里补 token.define
+    for (const path of tokenPathsOfNode(node)) add(path);
   }
   return out;
 }

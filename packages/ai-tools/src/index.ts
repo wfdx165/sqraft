@@ -34,7 +34,13 @@ import {
   type ReorderAction,
   nextComponentName,
   planTokenDelete,
+  resolveNumericLayout,
+  resolveNumericStyle,
   validateVector,
+  NUMERIC_TOKEN_FIELDS,
+  NUMERIC_TOKEN_OF_LITERAL,
+  CORNER_RADIUS_KEYS,
+  PADDING_SIDE_KEYS,
   tokenColorOf,
   tokenNumberOf,
   tokenPathOf,
@@ -53,6 +59,22 @@ const STYLE_SCHEMA: Record<string, unknown> = {
   strokeToken: { type: "string", description: "描边色的 Token 名；与 stroke 二选一，Token 优先" },
   stroke: { type: "string", description: "描边色的字面量（如 #1a1a1a）" },
   strokeWidth: { type: "number", description: "描边线宽" },
+  fontSizeToken: { type: "string", description: "字号的数值 Token 名，如 size/body；与 fontSize 同时存在时 Token 优先" },
+  lineHeightToken: { type: "string", description: "行高的数值 Token 名；绑定后行高单位若为 auto 会自动切到 px" },
+  letterSpacingToken: { type: "string", description: "字距的数值 Token 名" },
+  paragraphSpacingToken: { type: "string", description: "段距的数值 Token 名" },
+  strokeWidthToken: { type: "string", description: "描边线宽的数值 Token 名" },
+  cornerRadiusTokens: {
+    type: "object",
+    description: "逐角绑定数值 Token；null 表示解绑该角，省略则保持原绑定",
+    properties: {
+      topLeft: { oneOf: [{ type: "string" }, { type: "null" }] },
+      topRight: { oneOf: [{ type: "string" }, { type: "null" }] },
+      bottomRight: { oneOf: [{ type: "string" }, { type: "null" }] },
+      bottomLeft: { oneOf: [{ type: "string" }, { type: "null" }] },
+    },
+    additionalProperties: false,
+  },
   cornerRadius: {
     description: "圆角：数字表示四角统一；也可传 { topLeft, topRight, bottomRight, bottomLeft }",
     oneOf: [
@@ -144,6 +166,19 @@ const NODE_SCHEMA: Record<string, unknown> = {
     properties: {
       direction: { type: "string", enum: ["horizontal", "vertical"] },
       gap: { type: "number" },
+      gapToken: { type: "string", description: "间距的数值 Token 名" },
+      crossGapToken: { type: "string", description: "换行行距的数值 Token 名" },
+      paddingTokens: {
+        type: "object",
+        description: "逐边绑定内边距数值 Token；null 表示解绑该边，省略则保持原绑定",
+        properties: {
+          top: { oneOf: [{ type: "string" }, { type: "null" }] },
+          right: { oneOf: [{ type: "string" }, { type: "null" }] },
+          bottom: { oneOf: [{ type: "string" }, { type: "null" }] },
+          left: { oneOf: [{ type: "string" }, { type: "null" }] },
+        },
+        additionalProperties: false,
+      },
       padding: {
         oneOf: [
           { type: "number" },
@@ -180,7 +215,7 @@ export const tools: ToolDefinition[] = [
   {
     name: "read_document",
     description:
-      "读取当前文档的页面与节点树紧凑摘要。组件节点带 propertyDefs，实例带 componentId / propValues / overrides，插槽带 slotFilled。主组件是文档根节点，不在页面树里：`components` 给摘要（含 propertyDefs），要改母版内部结构时传 includeComponentTrees=true 连内部节点树一起返回。返回 JSON 字符串。",
+      "读取当前文档的页面与节点树紧凑摘要。组件节点带 propertyDefs，实例带 componentId / propValues / overrides，插槽带 slotFilled。主组件是文档根节点，不在页面树里：`components` 给摘要（含 propertyDefs），要改母版内部结构时传 includeComponentTrees=true 连内部节点树一起返回。样式里的 fontSize / gap / padding 等是 Token 缺失时的回退字面量，实际值看对应的 *Token 与 get_tokens。返回 JSON 字符串。",
     readonly: true,
     input_schema: {
       type: "object",
@@ -210,7 +245,7 @@ export const tools: ToolDefinition[] = [
   {
     name: "define_token",
     description:
-      "新增或覆盖一个设计 Token。path 形如 color/primary、spacing/md（至少含一个 /，不能有空格或空段）；type=color 时 value 接受 #hex（3/6/8 位）、rgb() / rgba()（带 alpha 也可用 8 位 hex），type=number 时接受有限数值。已存在的同类型路径覆盖取值（可撤销）；不能把已有 Token 改成另一种类型。",
+      "新增或覆盖一个设计 Token。path 形如 color/primary、spacing/md（至少含一个 /，不能有空格或空段）；type=color 时 value 接受 #hex（3/6/8 位）、rgb() / rgba()（带 alpha 也可用 8 位 hex），type=number 时接受有限数值。已存在的同类型路径覆盖取值（可撤销）；不能把已有 Token 改成另一种类型。数值 Token 可被 fontSizeToken / lineHeightToken / letterSpacingToken / paragraphSpacingToken / strokeWidthToken / cornerRadiusTokens / gapToken / crossGapToken / paddingTokens 引用。",
     input_schema: {
       type: "object",
       properties: {
@@ -225,7 +260,7 @@ export const tools: ToolDefinition[] = [
   {
     name: "rename_token",
     description:
-      "重命名设计 Token；节点里对旧路径的 fill / stroke / 阴影颜色引用会一起改过去（可撤销）。旧路径不存在或目标路径已存在时拒绝。",
+      "重命名设计 Token；节点里对旧路径的 fill / stroke / 阴影颜色引用会一起改过去，数值引用（*Token）也会同步（可撤销）。旧路径不存在或目标路径已存在时拒绝。",
     input_schema: {
       type: "object",
       properties: {
@@ -272,7 +307,7 @@ export const tools: ToolDefinition[] = [
   {
     name: "create_node",
     description:
-      "在父节点下创建一个节点。kind 支持 frame/rect/ellipse/polygon/line/path/text/image/component/slot。component 是文档根节点（不接受 parentId；x/y 省略时自动排到画布上的组件区）；slot 必须位于主组件内并提供唯一名字。polygon 是参数化多边形，用 sides 指定边数（3–12，默认 3，3 即三角形），顶点由 width/height 包围盒推导。path 用 points 描述锚点（父容器坐标，手柄为相对锚点的偏移），闭合路径至少 3 个锚点、开放路径至少 2 个。image 用 image.data 传 base64（上限 5MB），不接受文件路径。颜色可引用 fillToken / strokeToken，也可直接给 fill / stroke 字面量（Token 优先）。",
+      "在父节点下创建一个节点。kind 支持 frame/rect/ellipse/polygon/line/path/text/image/component/slot。component 是文档根节点（不接受 parentId；x/y 省略时自动排到画布上的组件区）；slot 必须位于主组件内并提供唯一名字。polygon 是参数化多边形，用 sides 指定边数（3–12，默认 3，3 即三角形），顶点由 width/height 包围盒推导。path 用 points 描述锚点（父容器坐标，手柄为相对锚点的偏移），闭合路径至少 3 个锚点、开放路径至少 2 个。image 用 image.data 传 base64（上限 5MB），不接受文件路径。颜色可引用 fillToken / strokeToken，也可直接给 fill / stroke 字面量（Token 优先）。数值属性可引用 fontSizeToken / lineHeightToken / letterSpacingToken / paragraphSpacingToken / strokeWidthToken / cornerRadiusTokens / layout.gapToken / layout.crossGapToken / layout.paddingTokens（与字面量同时存在时 Token 优先）。",
     input_schema: {
       type: "object",
       properties: {
@@ -404,7 +439,7 @@ export const tools: ToolDefinition[] = [
   {
     name: "update_node",
     description:
-      "更新节点属性（含改名）。颜色可引用 fillToken / strokeToken，也可给 fill / stroke 字面量（Token 优先）。polygon 可用 sides 改边数（3–12）。path 可用 points（父容器坐标）整体替换锚点、用 closed 切换闭合；只改 width/height 时锚点会按比例缩放。图片节点可用 crop 改可见区域（原图像素坐标）、用 mask 标记为蒙版（遮罩同父级上方相邻兄弟）。",
+      "更新节点属性（含改名）。颜色可引用 fillToken / strokeToken，也可给 fill / stroke 字面量（Token 优先）。数值属性可引用 fontSizeToken / lineHeightToken / letterSpacingToken / paragraphSpacingToken / strokeWidthToken / cornerRadiusTokens / layout.gapToken / layout.crossGapToken / layout.paddingTokens；cornerRadiusTokens / paddingTokens 传 null 可解绑单个角/边。只传字面量（如 fontSize / gap / padding）会自动解绑对应 Token。polygon 可用 sides 改边数（3–12）。path 可用 points（父容器坐标）整体替换锚点、用 closed 切换闭合；只改 width/height 时锚点会按比例缩放。图片节点可用 crop 改可见区域（原图像素坐标）、用 mask 标记为蒙版（遮罩同父级上方相邻兄弟）。",
     input_schema: {
       type: "object",
       properties: {
@@ -566,7 +601,7 @@ export const tools: ToolDefinition[] = [
   {
     name: "inspect_layout",
     description:
-      "读取页面或指定节点的布局数据：世界坐标几何、是否绝对定位、自动布局参数（方向/gap/padding/wrap）与 hug-fill 行为。只读。",
+      "读取页面或指定节点的布局数据：世界坐标几何、是否绝对定位、自动布局参数（方向/gap/padding/wrap）与 hug-fill 行为；布局对象会带 gapToken / crossGapToken / paddingTokens 引用，存在 Token 时 `resolved` 给出解析后的实际 gap / crossGap / padding。只读。",
     input_schema: {
       type: "object",
       properties: {
@@ -735,6 +770,63 @@ export function assertToken(store: DocStore, token: string | undefined, field: s
   }
 }
 
+/** 数值 Token：必须存在且 type=number（颜色 Token 不能塞进 fontSizeToken 之类的字段）。 */
+export function assertNumberToken(store: DocStore, token: string | null | undefined, field: string): void {
+  if (token === undefined || token === null || token === "") return;
+  const entry = store.doc.tokens[token];
+  if (!entry) {
+    throw new Error(
+      `${field} 引用了不存在的 Token "${token}"；先调用 define_token 建这个 Token，或改用字面量数值。`,
+    );
+  }
+  if (entry.type !== "number") {
+    throw new Error(`${field} 需要数值 Token，但 "${token}" 是颜色 Token；改用数值 Token 或字面量数值。`);
+  }
+}
+
+/** 逐项合并 Token 映射：null / 空串解绑，其余写入；没有剩余键时返回 undefined。 */
+function mergeTokenMap<T extends Record<string, string>>(base: T | undefined, patch: unknown): T | undefined {
+  if (!patch || typeof patch !== "object") return base;
+  const map: Record<string, string> = { ...(base ?? {}) };
+  for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
+    if (value === null || value === "") delete map[key];
+    else if (typeof value === "string") map[key] = value;
+  }
+  return Object.keys(map).length > 0 ? (map as T) : undefined;
+}
+
+/** 校验一次调用里所有数值 Token 入参（存在 + 类型正确）。 */
+function assertNumericTokenArgs(store: DocStore, args: Record<string, unknown>): void {
+  for (const key of NUMERIC_TOKEN_FIELDS) {
+    if (args[key] === undefined || args[key] === null) continue;
+    assertNumberToken(store, String(args[key]), key);
+  }
+  const corners = args.cornerRadiusTokens;
+  if (corners && typeof corners === "object") {
+    for (const key of CORNER_RADIUS_KEYS) {
+      const value = (corners as Record<string, unknown>)[key];
+      if (value === undefined || value === null) continue;
+      assertNumberToken(store, String(value), `cornerRadiusTokens.${key}`);
+    }
+  }
+  const layout = args.layout;
+  if (layout && typeof layout === "object") {
+    const raw = layout as Record<string, unknown>;
+    for (const key of ["gapToken", "crossGapToken"] as const) {
+      if (raw[key] === undefined || raw[key] === null) continue;
+      assertNumberToken(store, String(raw[key]), `layout.${key}`);
+    }
+    const padding = raw.paddingTokens;
+    if (padding && typeof padding === "object") {
+      for (const key of PADDING_SIDE_KEYS) {
+        const value = (padding as Record<string, unknown>)[key];
+        if (value === undefined || value === null) continue;
+        assertNumberToken(store, String(value), `layout.paddingTokens.${key}`);
+      }
+    }
+  }
+}
+
 function findSlotByName(store: DocStore, instanceId: NodeId, name: string): NodeId | null {
   let found: NodeId | null = null;
   walkSubtree(store.doc, instanceId, (n) => {
@@ -763,13 +855,31 @@ function paddingFrom(value: unknown): Padding {
   return { top: Number(p.top ?? 0), right: Number(p.right ?? 0), bottom: Number(p.bottom ?? 0), left: Number(p.left ?? 0) };
 }
 
-function layoutFrom(value: unknown): LayoutSpec | undefined {
+/** 布局入参 → 显式字段的 patch（未传的字段保持原值，供 update 合并）。 */
+function layoutPatchFrom(value: unknown): Partial<LayoutSpec> | undefined {
   if (value === undefined) return undefined;
-  const raw = value as Partial<LayoutSpec>;
-  return createLayoutSpec({
-    ...raw,
-    padding: paddingFrom(raw.padding),
-  });
+  const raw = value as Record<string, unknown>;
+  const patch: Partial<LayoutSpec> = {};
+  if (raw.direction !== undefined) patch.direction = raw.direction as LayoutSpec["direction"];
+  if (raw.gap !== undefined) patch.gap = Number(raw.gap);
+  if (raw.padding !== undefined) patch.padding = paddingFrom(raw.padding);
+  if (raw.gapToken !== undefined) patch.gapToken = raw.gapToken === null ? undefined : String(raw.gapToken);
+  if (raw.crossGapToken !== undefined) {
+    patch.crossGapToken = raw.crossGapToken === null ? undefined : String(raw.crossGapToken);
+  }
+  if (raw.paddingTokens !== undefined) {
+    patch.paddingTokens = raw.paddingTokens as LayoutSpec["paddingTokens"];
+  }
+  if (raw.mainAlign !== undefined) patch.mainAlign = raw.mainAlign as LayoutSpec["mainAlign"];
+  if (raw.crossAlign !== undefined) patch.crossAlign = raw.crossAlign as LayoutSpec["crossAlign"];
+  if (raw.wrap !== undefined) patch.wrap = Boolean(raw.wrap);
+  if (raw.crossGap !== undefined) patch.crossGap = Number(raw.crossGap);
+  if (raw.alignContent !== undefined) patch.alignContent = raw.alignContent as LayoutSpec["alignContent"];
+  // 只传字面量 = 解绑对应的 Token（与检查器手改一致）
+  if (raw.gap !== undefined && raw.gapToken === undefined) patch.gapToken = undefined;
+  if (raw.crossGap !== undefined && raw.crossGapToken === undefined) patch.crossGapToken = undefined;
+  if (raw.padding !== undefined && raw.paddingTokens === undefined) patch.paddingTokens = undefined;
+  return patch;
 }
 
 /** 外观与排版字段（只在显式传入时覆盖）。 */
@@ -785,6 +895,20 @@ function applyStyleArgs(style: NodeStyle, args: Record<string, unknown>): NodeSt
   }
   const corner = cornerFrom(args.cornerRadius);
   if (corner) next.cornerRadius = corner;
+  for (const key of NUMERIC_TOKEN_FIELDS) {
+    if (args[key] === undefined) continue;
+    (next as Record<string, unknown>)[key] = args[key] === null ? undefined : String(args[key]);
+  }
+  if (args.cornerRadiusTokens !== undefined) {
+    next.cornerRadiusTokens = mergeTokenMap(next.cornerRadiusTokens, args.cornerRadiusTokens);
+  }
+  // 自动行高会忽略数值：绑定行高 Token 时切到 px，否则绑定看似无效
+  if (args.lineHeightToken && (next.lineHeightUnit ?? "auto") === "auto") next.lineHeightUnit = "px";
+  // 只传字面量 = 解绑对应的 Token（与检查器手改一致）
+  for (const [literal, token] of Object.entries(NUMERIC_TOKEN_OF_LITERAL)) {
+    if (args[literal] !== undefined && args[token] === undefined) delete next[token as keyof NodeStyle];
+  }
+  if (args.cornerRadius !== undefined && args.cornerRadiusTokens === undefined) next.cornerRadiusTokens = undefined;
   applyStyleTokens(next, args);
   if (args.effects !== undefined) next.effects = effectsFrom(args.effects);
   return next;
@@ -833,8 +957,8 @@ export function assertEffectTokens(store: DocStore, effects: Effect[] | undefine
   }
 }
 
-/** 节点几何/布局字段（只在显式传入时覆盖）。 */
-function applyNodeArgs(args: Record<string, unknown>): Partial<DocNode> {
+/** 节点几何/布局字段（只在显式传入时覆盖）。`baseLayout` 有值时布局按字段合并。 */
+function applyNodeArgs(args: Record<string, unknown>, baseLayout?: LayoutSpec): Partial<DocNode> {
   const patch: Partial<DocNode> = {};
   const keys = [
     "x", "y", "width", "height", "rotation", "opacity", "visible", "locked", "clip",
@@ -844,8 +968,13 @@ function applyNodeArgs(args: Record<string, unknown>): Partial<DocNode> {
   for (const key of keys) {
     if (args[key] !== undefined) (patch as Record<string, unknown>)[key] = args[key];
   }
-  const layout = layoutFrom(args.layout);
-  if (layout) patch.layout = layout;
+  const layout = layoutPatchFrom(args.layout);
+  if (layout) {
+    if (layout.paddingTokens !== undefined) {
+      layout.paddingTokens = mergeTokenMap(baseLayout?.paddingTokens, layout.paddingTokens);
+    }
+    patch.layout = baseLayout ? { ...baseLayout, ...layout } : createLayoutSpec(layout);
+  }
   return patch;
 }
 
@@ -1144,6 +1273,7 @@ export function makeExecutor(
         if (args.layout !== undefined && kind !== "frame" && kind !== "component") {
           throw new Error("layout 仅适用于 frame / component");
         }
+        assertNumericTokenArgs(store, args);
         const style = applyStyleArgs({}, args);
         if (isPath) {
           // 与 GUI 一致：未显式给颜色时，闭合默认填充、开放默认描边
@@ -1204,7 +1334,7 @@ export function makeExecutor(
         if ((kind === "frame" || kind === "component") && !node.layout) node.layout = defaultLayoutFor(kind);
         // 文本：自动尺寸由宿主注入的测量函数决定
         if (kind === "text" && measureText && (node.textAutoResize ?? "auto-width") !== "fixed") {
-          const size = measureText(node, node.style, node.text ?? "");
+          const size = measureText(node, resolveNumericStyle(store.doc, node.style), node.text ?? "");
           node.width = size.width;
           node.height = size.height;
         }
@@ -1297,12 +1427,13 @@ export function makeExecutor(
         if (!node) throw new Error(`节点 ${nodeId} 不存在`);
         assertToken(store, args.fillToken as string | undefined, "fillToken");
         assertToken(store, args.strokeToken as string | undefined, "strokeToken");
+        assertNumericTokenArgs(store, args);
         if (Array.isArray(args.effects)) assertEffectTokens(store, effectsFrom(args.effects));
 
         if (args.layout !== undefined && node.type !== "frame" && node.type !== "component" && node.type !== "instance") {
           throw new Error("layout 仅适用于 frame / component / instance");
         }
-        const patch: Partial<DocNode> = { ...applyNodeArgs(args) };
+        const patch: Partial<DocNode> = { ...applyNodeArgs(args, node.layout ?? undefined) };
         if (args.name !== undefined) {
           const name = String(args.name).trim();
           if (!name) throw new Error("name 不能为空");
@@ -1394,7 +1525,11 @@ export function makeExecutor(
           const text = (patch.text ?? node.text ?? "") as string;
           const style = (patch.style ?? node.style) as NodeStyle;
           if (mode !== "fixed") {
-            const size = measureText({ ...node, ...patch, style }, style, text);
+            const size = measureText(
+              { ...node, ...patch, style },
+              resolveNumericStyle(store.doc, style),
+              text,
+            );
             if (mode === "auto-width") patch.width = size.width;
             patch.height = size.height;
           }
@@ -1533,6 +1668,12 @@ export function makeExecutor(
           if (!node || emitted.has(id)) return;
           emitted.add(id);
           const box = worldRect(store.doc, id);
+          const resolved = node.layout ? resolveNumericLayout(store.doc, node.layout) : null;
+          const layoutDiffers =
+            Boolean(resolved && node.layout) &&
+            (resolved!.gap !== node.layout!.gap ||
+              resolved!.crossGap !== node.layout!.crossGap ||
+              PADDING_SIDE_KEYS.some((side) => resolved!.padding[side] !== node.layout!.padding[side]));
           rows.push({
             id: node.id,
             name: node.name,
@@ -1546,6 +1687,10 @@ export function makeExecutor(
             sizingW: node.layoutSizingW,
             sizingH: node.layoutSizingH,
             layout: node.layout ?? null,
+            // 有数值 Token 时给出解析后的实际值；agent 不必自己拿 Token 表换算
+            resolved: layoutDiffers && resolved
+              ? { gap: resolved.gap, crossGap: resolved.crossGap, padding: resolved.padding }
+              : undefined,
           });
           for (const childId of node.children) visit(childId, depth + 1);
         };

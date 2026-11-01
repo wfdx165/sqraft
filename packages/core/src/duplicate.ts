@@ -119,6 +119,7 @@ function cloneStyle(style: NodeStyle): NodeStyle {
   if (style.fill) next.fill = { ...style.fill };
   if (style.stroke) next.stroke = { ...style.stroke };
   if (style.cornerRadius) next.cornerRadius = { ...style.cornerRadius };
+  if (style.cornerRadiusTokens) next.cornerRadiusTokens = { ...style.cornerRadiusTokens };
   if (style.effects) next.effects = style.effects.map(cloneEffect);
   return next;
 }

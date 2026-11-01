@@ -6,6 +6,7 @@
  */
 import { worldRect, type DocNode, type DocState, type NodeId, type Rect } from "./model";
 import type { Command } from "./store";
+import { resolveNumericLayout } from "./token-resolve";
 
 export type ReorderAction = "forward" | "backward" | "front" | "back";
 
@@ -218,7 +219,7 @@ function parentContentBox(doc: DocState, id: NodeId): Rect | null {
   if (!parent) return null;
   const box = worldRect(doc, parent.id);
   if (!box) return null;
-  const pad = parent.layout?.padding;
+  const pad = parent.layout ? resolveNumericLayout(doc, parent.layout).padding : undefined;
   if (!pad) return box;
   return {
     x: box.x + pad.left,

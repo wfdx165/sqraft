@@ -8,6 +8,7 @@
 import {
   layoutAvail,
   layoutChildren,
+  resolveNumericLayout,
   solveLayout,
   worldRect,
   type LayoutChildInput,
@@ -65,7 +66,9 @@ export function buildInsertPreview(
   if (ghosts.length === 0) return null;
   items.splice(at, 0, ...ghosts);
   const { availW, availH } = layoutAvail(container);
-  const solved = solveLayout(container.layout, items, availW, availH);
+  // 与布局 pass 保持一致：预览也要用解析后的 gap / padding
+  const layout = resolveNumericLayout(doc, container.layout);
+  const solved = solveLayout(layout, items, availW, availH);
 
   const boxes = new Map<NodeId, PreviewBox>();
   for (const item of solved.items) {
