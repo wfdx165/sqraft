@@ -222,7 +222,7 @@ _Avoid_: 操作、动作（口语可用，术语必须是命令）
 暴露给 AI agent 的一条原子能力；与命令不同，工具可以是只读的（如查询 Token、截图）。
 
 **智能体（Agent）**：
-驱动 Sqraft 的 AI。只有一个接入插槽：外部 MCP 客户端（Claude Code 等）通过本机 IPC 连入，工具定义来自 `@sqraft/ai-tools`。应用内不调用模型、不保存密钥。
+驱动 Sqraft 的 AI。只有一个接入插槽：外部 MCP 客户端（Claude Code 等）通过本机 HTTP 端点连入（Streamable HTTP，ADR-0026），工具定义来自 `@sqraft/ai-tools`。应用内不调用模型、不保存密钥。
 
 
 ## 桌面
@@ -234,8 +234,9 @@ _Avoid_: 后端、服务端
 **欢迎页（Welcome）**：
 窗口在没有打开文档时的形态：新建、打开、最近 8 条。与"空文档"不同，欢迎页不是文档。
 
-**本机 IPC（Local IPC）**：
-主进程与 MCP 客户端之间的 Unix domain socket / Windows 命名管道通道；不是网络服务，不监听外部接口。
+**本机 MCP 端点（Loopback MCP Endpoint）**：
+`http://127.0.0.1:<port>/mcp` 的 Streamable HTTP 单端点（主进程提供，ADR-0026）。只绑 loopback、拒绝带 `Origin` 的请求、没有 token；不是对外网络服务。
+_Avoid_: 本机 IPC、Unix socket、命名管道（那是已被 ADR-0026 取代的旧传输）
 
 **事务（Transaction）**：
 把一段执行中的多条命令合并成一条撤销记录；失败时回滚。见 `DocStore.transact`。

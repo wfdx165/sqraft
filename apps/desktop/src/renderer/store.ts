@@ -28,7 +28,7 @@ export const ui = reactive({
   expandedLayers: {} as Record<NodeId, boolean>,
   /** 当前进入的实例上下文（栈，Esc 逐级退出） */
   instanceContext: [] as NodeId[],
-  /** 左栏 tab：默认对话（每次刷新都回到对话，不持久化） */
+  /** 左栏 tab：默认页面（每次刷新都回到页面，不持久化） */
   tab: "pages" as PanelTab,
   /** 正在裁切的图片节点（double-click 进入，Esc 退出） */
   cropNodeId: null as NodeId | null,

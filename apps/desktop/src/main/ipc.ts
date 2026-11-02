@@ -1,5 +1,5 @@
 /** 文件与对话框的 IPC 落地：只做"要对话框、搬字节、报结果"，不解析文件内容。 */
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import {
   CHANNELS,
   type AppLogEntry,
@@ -13,7 +13,7 @@ import {
   type UnsavedChoice,
 } from "../shared/ipc";
 import { mtimeChanged, mtimeOf, readFileSnapshot, writeFileAtomic } from "./files";
-import { basename } from "node:path";
+import { basename, join } from "node:path";
 import { logApp, logRenderer } from "./mcp/log";
 import { flushPendingOpen, forgetRecentFile, listRecentFiles, requestOpen, touchRecentFile } from "./recent-state";
 
@@ -82,10 +82,21 @@ export function registerFileChannels(): void {
   ipcMain.handle(CHANNELS.appInfo, () => ({
     name: app.getName(),
     version: app.getVersion(),
-    electron: process.versions.electron,
-    chrome: process.versions.chrome,
     dataPath: app.getPath("userData"),
   }));
+
+  // 许可文本随包分发（extraResources → Resources/licenses/）；dev 下没有这段资源，退回
+  // electron 自带 dist 目录（里面同样有 LICENSE 与 LICENSES.chromium.html）
+  ipcMain.handle(CHANNELS.appShowLicenses, async () => {
+    const licenses = app.isPackaged
+      ? join(process.resourcesPath, "licenses")
+      : join(app.getAppPath(), "node_modules/electron/dist");
+    try {
+      await shell.openPath(licenses);
+    } catch (error) {
+      logApp("warn", "licenses open failed", { licenses, error: messageOf(error) });
+    }
+  });
 
   ipcMain.on(CHANNELS.appRendererReady, () => {
     logApp("info", "renderer ready");

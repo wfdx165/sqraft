@@ -1,5 +1,7 @@
 # MCP 接入：本机 IPC、薄 CLI 与工具路由
 
+> **Superseded**：传输与 CLI 部分已由 ADR-0026 取代（Streamable HTTP、删除薄 CLI）。工具路由的语义在 ADR-0026 与现行代码中延续；本文保留作为历史决策。
+
 > **已被 ADR-0026 取代（2026-10）**：传输已改为本机 Streamable HTTP，薄 CLI 已删除。本篇保留作为当时决策的对照。
 
 外部 agent 通过 MCP 驱动 Sqraft。实现刻意不用 SDK：协议面只需要 `initialize` / `tools/list` / `tools/call` / `ping`，自己实现比适配传输层更短、更好测。

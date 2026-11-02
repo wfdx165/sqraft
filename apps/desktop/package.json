@@ -2,7 +2,7 @@
   "name": "@sqraft/desktop",
   "version": "0.0.1",
   "private": true,
-  "description": "Sqraft 桌面应用（Electron 壳 + 渲染层）",
+  "description": "Sqraft 桌面应用",
   "main": "out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",

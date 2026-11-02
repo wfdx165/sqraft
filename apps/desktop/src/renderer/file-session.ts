@@ -36,7 +36,7 @@ const WARN_SAVE_BYTES = 20 * 1024 * 1024;
 
 /**
  * 超限文案：降体积的方法要真实可行。链接图（sourceUrl）字节不进文件
- * （摊在 ~/.sqraft/cache/images/，ADR-0027），改链接是最有效的手段之一。
+ * （摊在 userData/image-cache/，ADR-0027），改链接是最有效的手段之一。
  */
 function overLimitMessage(): string {
   return `文件超过 ${MAX_SAVE_BYTES / 1024 / 1024}MB，已取消保存。占体积的主要是内嵌图片与字体：压缩或删掉大图、把嵌入图改成链接图（字节不进文件）、减少内嵌字体后重试。`;
@@ -215,11 +215,37 @@ async function adoptFile(file: { path: string; name: string; mtimeMs: number; by
   }
 }
 
+/**
+ * 渲染层保存互斥：进行中的保存期间再次触发（连按 ⌘S、关窗撞上手动保存）**复用同一次**，
+ * 不并发跑两条"序列化 + 写盘"。并发是两类事故的源头：
+ * 第二次拿旧 mtime 比对 → 假 conflict 弹框；两条 zip 同时在内存 → 大文档双倍峰值。
+ * 代价是并发期间产生的新改动要再按一次保存（这条记在 02-save-race-fixes 票里）。
+ */
+let activeSave: Promise<boolean> | null = null;
+
+function guardedSave(source: SaveSource, task: () => Promise<boolean>): Promise<boolean> {
+  if (activeSave) {
+    logWarn("save: in-flight, reusing", { source });
+    return activeSave;
+  }
+  const run = task();
+  const wrapped = run.finally(() => {
+    if (activeSave === wrapped) activeSave = null;
+  });
+  activeSave = wrapped;
+  return wrapped;
+}
+
 /** 保存到当前文件；没有路径时等价于另存为。返回是否真的落盘。 */
-export async function saveDocument(source: SaveSource = "direct"): Promise<boolean> {
+export function saveDocument(source: SaveSource = "direct"): Promise<boolean> {
+  return guardedSave(source, () => runSave(source));
+}
+
+async function runSave(source: SaveSource): Promise<boolean> {
   if (!fileState.path) {
     logInfo("save: no path, save-as", { source });
-    return saveDocumentAs(source);
+    // 内部走 runSaveAs：套壳入口不能嵌套，否则会复用到自己（activeSave 还没赋值）
+    return runSaveAs(source);
   }
   const started = Date.now();
   try {
@@ -268,7 +294,7 @@ export async function saveDocument(source: SaveSource = "direct"): Promise<boole
     const choice = await bridge.dialog.overwrite();
     logInfo("save: conflict choice", { source, choice });
     if (choice === "cancel") return false;
-    if (choice === "save-as") return saveDocumentAs(source, "conflict");
+    if (choice === "save-as") return runSaveAs(source, "conflict");
 
     const forced = await bridge.file.save({ path: fileState.path, bytes, expectedMtimeMs: null });
     logInfo("save: forced result", { source, status: forced.status });
@@ -287,7 +313,11 @@ export async function saveDocument(source: SaveSource = "direct"): Promise<boole
 }
 
 /** 另存为：始终弹系统对话框，成功后切换当前文件。 */
-export async function saveDocumentAs(source: SaveSource = "direct", reason: "direct" | "conflict" = "direct"): Promise<boolean> {
+export function saveDocumentAs(source: SaveSource = "direct", reason: "direct" | "conflict" = "direct"): Promise<boolean> {
+  return guardedSave(source, () => runSaveAs(source, reason));
+}
+
+async function runSaveAs(source: SaveSource, reason: "direct" | "conflict" = "direct"): Promise<boolean> {
   const started = Date.now();
   try {
     const entries = saveEntries();

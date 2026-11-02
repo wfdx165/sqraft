@@ -1,7 +1,7 @@
 /**
  * 链接（远程）图片的解码缓存（ADR-0027）。
  *
- * 文档只存 URL；字节由主进程抓取并缓存在 `~/.sqraft/cache/images/`
+ * 文档只存 URL；字节由主进程抓取并缓存在 `userData/image-cache/`
  * （见 `main/image-cache.ts`），这里只管"按 URL 去重 → 解码 → LRU → 通知重绘"。
  *
  * 渲染热路径必须同步：`linkedImage()` 未就绪时返回 null（画占位），

@@ -2,7 +2,7 @@
   "name": "sqraft",
   "private": true,
   "version": "0.0.1",
-  "description": "Sqraft — AI 驱动的轻量 UI 设计工具，纯单机、桌面优先（Electron）",
+  "description": "Sqraft — AI 驱动的轻量 UI 设计工具，纯单机、桌面优先",
   "packageManager": "pnpm@10.33.4",
   "pnpm": {
     "onlyBuiltDependencies": [

@@ -60,11 +60,11 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 
 ## 日志
 
-- **不要用 `console.log`**（`console.info/warn/error` 同理）：MCP 与主进程日志一律走 `apps/desktop/src/main/mcp/log.ts`——`logInfo` / `logWarn` / `logError` 是 MCP 流量（`[mcp]`），主进程事件用 `logApp`（`[app]`），渲染层上报用 `logRenderer`（`[renderer]`）。默认 sink 同时写终端（info/warn → stdout，error → stderr）与 `~/.sqraft/logs/sqraft.log`，格式、级别与参数摘要规则都在这一处实现
+- **不要用 `console.log`**（`console.info/warn/error` 同理）：MCP 与主进程日志一律走 `apps/desktop/src/main/mcp/log.ts`——`logInfo` / `logWarn` / `logError` 是 MCP 流量（`[mcp]`），主进程事件用 `logApp`（`[app]`），渲染层上报用 `logRenderer`（`[renderer]`）。默认 sink 同时写终端（info/warn → stdout，error → stderr）与平台日志目录 `app.getPath("logs")/sqraft.log`（macOS 即 `~/Library/Logs/Sqraft/`），格式、级别与参数摘要规则都在这一处实现
 - 新增日志点时只给"事件 + 字段"（`logInfo(tag, "tools/call x ok 12ms", { args })`），格式与截断不要各拼一份
 - 渲染层日志走 `renderer/log.ts` 的 `logInfo` / `logWarn` / `logError`，经白名单 IPC `app:log` 发"事件 + 字段"；它拿不到文件系统，字段必须是可结构化克隆的纯值（别传 Vue 代理、DOM、节点对象）。日志失败一律吞掉，不能影响业务
 - 历史遗留：`main/ipc.ts` 与 `renderer/file-session.ts` 里各有 dev 专用的 `[close]` `console.info`（关闭流程诊断）；不要照抄这种写法，改到那儿时顺手迁走
-- 落盘位置 `~/.sqraft/logs/`，按大小轮转：单文件 10MB、最多 10 个文件（含当前文件，归档为 `sqraft.log.1` … `.9`），启动时清掉超量；写失败静默降级为仅终端（`main/log-file.ts`）
+- 落盘位置 `app.getPath("logs")/`（macOS `~/Library/Logs/Sqraft/`），按大小轮转：单文件 10MB、最多 10 个文件（含当前文件，归档为 `sqraft.log.1` … `.9`），启动时清掉超量；写失败静默降级为仅终端（`main/log-file.ts`）
 - 参数只记摘要（长字符串截断、`data:image` 折叠成体积）。打包版从 Finder 启动时 stdout 没有出口，看日志文件，或用帮助菜单的「打开日志目录」
 - 测试里用 `setMcpLogSink()` 换掉写入口（静音或断言），不要为了日志去改生产签名
 
@@ -81,7 +81,7 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 - 打包不需要把任何可执行文件放到 asar 外（旧 CLI 已删除）；未签名构建要用 `CSC_IDENTITY_AUTO_DISCOVERY=false`
 - `electron-builder.yml` 里 `npmRebuild: false` 与 `electronDist: node_modules/electron/dist` 是提速项：项目没有原生模块，且复用已解压的 Electron。加原生依赖时必须去掉 `npmRebuild: false`
 - macOS 用 `hiddenInset` 标题栏：左栏顶部为红绿灯让出 58px，左上 340×46 是拖拽区（`-webkit-app-region: drag`），改布局时别把这块盖住（标题栏只留拖拽，不放控件）。当前文件名与「回欢迎页」是工具栏品牌名右侧的两个胶囊（`Toolbar.vue`）
-- 数据目录：`~/.sqraft/`（偏好、最近文件、排障用的 `mcp.json`、日志目录 `logs/`），启动时由 `data-dir.ts` 从旧 `userData` 迁移一次偏好
+- 数据目录：平台惯例的 `userData`（macOS `~/Library/Application Support/Sqraft`，Windows `%APPDATA%\Sqraft`），dev 与打包版共用；里面是偏好、最近文件、排障用的 `mcp.json`、链接图缓存 `image-cache/`。日志单独走 `app.getPath("logs")`（macOS `~/Library/Logs/Sqraft/`）。首次启动由 `data-dir.ts` 同步把旧的 `~/.sqraft` 一次性迁过来（**可再生的浏览器缓存与 socket 残留留在旧目录不动**，失败不阻断启动）
 - MCP 端点：`http://127.0.0.1:<port>/mcp`（Streamable HTTP，ADR-0026）。只绑 loopback、拒绝带 `Origin` 的请求、无 token；默认端口 7331，显式端口被占即报错，自动模式才顺延。应用必须保持运行，没有 CLI 拉起
 - 菜单里**别用 `role: "close"`**：它自带 `CmdOrCtrl+W` 并直接注册，会在渲染层之前吃掉 ⌘W，而 ⌘W 是"关闭文档回欢迎页"（渲染层注册表）。关闭窗口用显式的 ⇧⌘W
 - `CloseGuard` 的放行状态必须随窗口重建复位（`attach()`）：macOS 关窗后从 Dock 重开，留着的 `allow` 会让守卫永久失效、静默丢稿
@@ -89,7 +89,9 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 - dev 热更新会**重新执行渲染层模块**：注册 IPC 监听必须配套 `import.meta.hot?.dispose(...)` 清理。`mcp-host.ts` 把 disposer 挂到 `globalThis` 并在安装前先摘旧监听（同一条 `tools/call` 只执行一次，否则 `create_node` 会落两个节点）；`file-session.ts` 用模块级 `disposers` 数组 + HMR dispose。漏了的话，一次关闭会被多个模块实例各弹一次"保存 / 不保存 / 取消"
 - 图片资源在 `.sqraft` 的 `assets/` 里按内容哈希命名，`doc.json` 只记 `assetId`；**不要**在保存时按"当前文档引用"清理资源——撤销栈里的节点还引用着它，清掉会让"保存后撤销"变破图（ADR-0022）
 - 旧 CLI 软链迁移：`setup.ts` 的 `removeStaleCliLink()` 启动时只删指向本应用旧 `bin` 的 `current` / `stale` 链接，`foreign` 一律不碰；删之前必须走 `inspectEntry()`，直接 `unlink` 有误删用户文件的先例
-- MCP 操作日志同时写终端与 `~/.sqraft/logs/sqraft.log`（10MB × 10 个文件轮转），打包版从 Finder 启动也能看到；写法与截断规则见上面「日志」一节
+- 数据目录迁移的过渡期：旧版本仍写 `~/.sqraft`、新版本写 `~/Library/Application Support/Sqraft`，**两者单实例锁不在同一个 userData，可以同时运行并写同一个 `.sqraft`**。升级后先退掉所有旧实例再启动新包
+- 链接图缓存目录叫 `image-cache`，**不能叫 `cache`**：Chromium 的 HTTP 缓存在 `userData/Cache`，大小写不敏感卷上会撞成同一目录（早期实现踩过，`data-dir.ts` 的 `relocateImageCache()` 负责把误放进去的图片搬出来）
+- MCP 操作日志同时写终端与 `app.getPath("logs")/sqraft.log`（macOS `~/Library/Logs/Sqraft/`，10MB × 10 个文件轮转），打包版从 Finder 启动也能看到；写法与截断规则见上面「日志」一节
 
 ## 验证
 

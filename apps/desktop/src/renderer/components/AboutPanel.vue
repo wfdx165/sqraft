@@ -22,6 +22,11 @@ function copyPath(): void {
   copied.value = true;
   window.setTimeout(() => (copied.value = false), 1400);
 }
+
+/** 许可文本随包分发在 Resources/licenses/，这里只负责把目录打开给用户。 */
+function openLicenses(): void {
+  void window.sqraft.app.showLicenses();
+}
 </script>
 
 <template>
@@ -40,19 +45,20 @@ function copyPath(): void {
         </div>
       </div>
 
-      <dl>
-        <dt>Electron</dt>
-        <dd>{{ info?.electron ?? "—" }}</dd>
-        <dt>Chromium</dt>
-        <dd>{{ info?.chrome ?? "—" }}</dd>
-      </dl>
-
       <section>
         <div class="label">
           <span>数据目录</span>
           <button class="copy" @click="copyPath">{{ copied ? "已复制" : "复制路径" }}</button>
         </div>
         <p class="path">{{ info?.dataPath ?? "—" }}</p>
+      </section>
+
+      <section>
+        <div class="label">
+          <span>开源许可</span>
+          <button class="copy" @click="openLicenses">打开许可证目录</button>
+        </div>
+        <p class="foot">运行时与第三方组件的许可文本随应用一起分发，点右侧按钮可打开所在目录。</p>
       </section>
 
       <p class="foot">纯本地应用：设计稿以 .sqraft 文件保存在磁盘上，文档不会离开这台机器。</p>
@@ -139,23 +145,6 @@ h2 {
   margin: 2px 0 0;
   font-size: 11.5px;
   color: var(--text-dim);
-}
-
-dl {
-  display: grid;
-  grid-template-columns: 90px 1fr;
-  gap: 6px 10px;
-  margin: 0;
-  font-size: 11.5px;
-}
-
-dt {
-  color: var(--text-faint);
-}
-
-dd {
-  margin: 0;
-  color: var(--text);
 }
 
 .label {

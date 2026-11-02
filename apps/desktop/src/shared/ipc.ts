@@ -45,8 +45,6 @@ export type OverwriteChoice = "overwrite" | "save-as" | "cancel";
 export interface AppInfo {
   name: string;
   version: string;
-  electron: string;
-  chrome: string;
   dataPath: string;
 }
 
@@ -178,6 +176,8 @@ export interface SqraftApi {
   };
   app: {
     info(): Promise<AppInfo>;
+    /** 在访达中显示随包分发的许可文本（Electron / Chromium / 第三方） */
+    showLicenses(): Promise<void>;
     /** 写系统剪贴板（渲染层不需要剪贴板权限） */
     copyText(text: string): void;
     /**
@@ -207,7 +207,7 @@ export interface SqraftApi {
     onOpenRequest(handler: (path: string) => void): () => void;
     /** 让主进程显示"已修改"标记并记住脏状态 */
     setDirty(dirty: boolean, name: string): void;
-    /** 渲染层日志：主进程统一格式化，写终端与 `~/.sqraft/logs/` */
+    /** 渲染层日志：主进程统一格式化，写终端与平台日志目录（`app.getPath("logs")`） */
     log(level: AppLogLevel, event: string, fields?: Record<string, unknown>): void;
     /** 主进程请求关闭；渲染层处理完保存后调用 finishClose */
     onCloseRequest(handler: (request: CloseRequest) => void): () => void;
@@ -244,6 +244,8 @@ export const CHANNELS = {
   appClipboardNodesWrite: "app:clipboard-nodes-write",
   appClipboardNodesRead: "app:clipboard-nodes-read",
   appInfo: "app:info",
+  /** 在访达里打开许可文本目录（关于面板的「开源许可」） */
+  appShowLicenses: "app:show-licenses",
   recentList: "recent:list",
   menuCommand: "menu:command",
   menuSetBindings: "menu:set-bindings",

@@ -96,7 +96,7 @@ pnpm clean       # 手动清空 apps/desktop 的 out/ 与 release/
   ```
 - 多客户端串行执行，单次调用 30s 超时；会话空闲 30 分钟过期；不提供 SSE，也没有退出广播
 - 安全：只监听 `127.0.0.1`，拒绝带 `Origin` 的请求；**没有 token**，同机其他用户/进程也能连接
-- 操作日志同时写终端与 `~/.sqraft/logs/sqraft.log`：终端打 `[mcp]` / `[app]` / `[renderer]` 行（会话、工具名、耗时、参数摘要、保存链路、错误）。单文件 10MB、最多 10 个，按大小轮转；打包版从 Finder 启动也能看，或走 `帮助 > 打开日志目录`
+- 操作日志同时写终端与平台日志目录 `app.getPath("logs")/sqraft.log`（macOS 即 `~/Library/Logs/Sqraft/`，可用 Console.app 查看）：终端打 `[mcp]` / `[app]` / `[renderer]` 行（会话、工具名、耗时、参数摘要、保存链路、错误）。单文件 10MB、最多 10 个，按大小轮转；打包版从 Finder 启动也能看，或走 `帮助 > 打开日志目录`
 
 图片：`create_node` 的 `kind` 支持 `image`，用 base64 传位图（上限 5MB）；`update_node` 可改 `crop` 与 `mask`。
 

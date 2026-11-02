@@ -3,8 +3,8 @@
  *
  * 纪律：
  * 1. 键位是**应用级 UI 状态**，不进文档、不进撤销；
- * 2. 面板、tooltip、画布、对话都从 `keyOf()` 读，改键后处处同步（不再硬编码文案）；
- * 3. 单键（无修饰）快捷键在输入框内一律让位；文件/对话类命令仍全局生效。
+ * 2. 面板、tooltip、画布都从 `keyOf()` 读，改键后处处同步（不再硬编码文案）；
+ * 3. 单键（无修饰）快捷键在输入框内一律让位；文件类命令仍全局生效。
  */
 import { reactive, ref } from "vue";
 import { logInfo, logWarn } from "./log";
@@ -311,6 +311,9 @@ export function runAction(id: ActionId): void {
 export function installShortcuts(): () => void {
   const onKey = (e: KeyboardEvent) => {
     if (e.isComposing) return;
+    // 按住键会连发：注册表分发只认首次按下。重复触发曾让"保存"被第二次调用撞上
+    // 对话框/互斥（见 .scratch/logging/issues/02-save-race-fixes.md）
+    if (e.repeat) return;
     // Esc 由画布做分层退出，这里不抢
     if (e.key === "Escape") return;
 

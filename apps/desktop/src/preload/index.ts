@@ -69,6 +69,7 @@ const api: SqraftApi = {
   },
   app: {
     info: () => ipcRenderer.invoke(CHANNELS.appInfo) as Promise<AppInfo>,
+    showLicenses: () => ipcRenderer.invoke(CHANNELS.appShowLicenses) as Promise<void>,
     copyText: (text: string) => ipcRenderer.send(CHANNELS.appCopyText, text),
     readClipboardImage: () => ipcRenderer.invoke(CHANNELS.appClipboardImage) as Promise<Uint8Array | null>,
     fetchImage: (url: string, options?: { force?: boolean }) =>

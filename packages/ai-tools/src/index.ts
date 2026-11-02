@@ -1,5 +1,5 @@
 /**
- * AI 工具定义：内置对话面板与 MCP Server 的唯一真源（ADR-0004）。
+ * AI 工具定义：MCP Server 的唯一真源（ADR-0004 单插槽；内置对话已删除）。
  * 纪律：颜色优先引用 Token，也可以直接用字面量（ADR-0024）。
  */
 
@@ -1735,7 +1735,7 @@ export function toOpenAITools(): Array<{ type: "function"; function: ToolDefinit
   return tools.map((t) => ({ type: "function" as const, function: t }));
 }
 
-/** 供 MCP Server 使用的扁平清单（骨架；M4 正式实现挂 @modelcontextprotocol/sdk）。 */
+/** 供 MCP Server 使用的扁平清单（服务端在 apps/desktop/src/main/mcp 自实现，不引 SDK，见 ADR-0026）。 */
 export function toMCPManifest(): { name: string; description: string; inputSchema: Record<string, unknown> }[] {
   return tools.map((t) => ({ name: t.name, description: t.description, inputSchema: t.input_schema }));
 }

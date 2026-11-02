@@ -14,16 +14,19 @@
  *   连缓存都没有才返回失败（画布画占位，导出也不阻断）；
  * - 缓存总量 500MB，按最近使用淘汰；`clearImageCache()` 给用户手动清。
  */
-import { ipcMain, net } from "electron";
+import { app, ipcMain, net } from "electron";
 import { createHash } from "node:crypto";
 import { lookup } from "node:dns/promises";
 import { mkdir, readdir, readFile, rename, rm, stat, unlink, utimes, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { CHANNELS, type FetchImageResult } from "../shared/ipc";
-import { dataDirOf } from "./data-dir";
+import { IMAGE_CACHE_DIRNAME } from "./data-dir";
 import { isHttpUrl as parseHttpUrl, isLinkLocalAddress as linkLocal } from "./image-url";
 import { logApp } from "./mcp/log";
+import { imageUserAgent } from "./ua";
+
+/** 对外请求带的 UA：去掉 Electron 词（见 ua.ts），Chrome 版本跟 Electron 走 */
+const IMAGE_UA = imageUserAgent(process.platform, process.versions.chrome ?? "", app.getVersion());
 
 /** 单张图上限：与本地资源入库上限一致。 */
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -50,11 +53,13 @@ const revalidated = new Set<string>();
 let tempSeq = 0;
 
 function cacheDir(): string {
-  // 与 data-dir.ts 同一口径（`~/.sqraft`），不走 app.getPath 的另一套解析
-  return join(dataDirOf(homedir()), "cache", "images");
+  // 跟随 Electron 的 userData（平台惯例目录，见 data-dir.ts）：与偏好同级。
+  // 目录名不能是 `cache`——Chromium 的 HTTP 缓存在 `userData/Cache`，
+  // 大小写不敏感卷上会撞成同一个目录，清缓存会连带删掉链接图字节。
+  return join(app.getPath("userData"), IMAGE_CACHE_DIRNAME);
 }
 
-/** `~/.sqraft/cache/images/<key>.{bin,json}` */
+/** `userData/image-cache/<key>.{bin,json}` */
 function cachePaths(key: string): { bin: string; meta: string } {
   const dir = cacheDir();
   return { bin: join(dir, `${key}.bin`), meta: join(dir, `${key}.json`) };
@@ -323,7 +328,7 @@ export async function fetchRemoteImage(raw: string, force = false): Promise<Fetc
   if (cached && !force && revalidated.has(key)) return ok(cached, meta!.contentType, false);
 
   const started = Date.now();
-  const headers: Record<string, string> = { Accept: "image/*" };
+  const headers: Record<string, string> = { Accept: "image/*", "User-Agent": IMAGE_UA };
   if (!force && meta?.etag) headers["If-None-Match"] = meta.etag;
   else if (!force && meta?.lastModified) headers["If-Modified-Since"] = meta.lastModified;
 

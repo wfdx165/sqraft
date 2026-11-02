@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createEmptyDoc, createNode, firstPageId } from "@sqraft/core";
 import type { UnsavedChoice } from "../shared/ipc";
 
@@ -170,6 +170,57 @@ describe("未保存标记跟着保存点走", () => {
     // 来源必须能区分快捷键/菜单、工具栏、关窗
     const start = bridge.app.log.mock.calls.find(([, event]) => event === "save: start");
     expect(start?.[2]).toMatchObject({ source: "action" });
+  });
+});
+
+/**
+ * 渲染层保存互斥（`.scratch/logging/issues/02-save-race-fixes.md`）：
+ * 连按 ⌘S / 关窗撞上手动保存时复用进行中的那一次——只落盘一次、不弹冲突框，
+ * 且后续保存拿到的是上一次刚写盘的新 mtime（假 conflict 的根因）。
+ */
+describe("保存互斥", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    docStore.replace(createEmptyDoc());
+    ui.docOpen = false;
+    fileState.path = "/tmp/并发.sqraft";
+    fileState.mtimeMs = 0;
+    installFileSession();
+  });
+
+  afterEach(() => {
+    fileState.path = null;
+    fileState.mtimeMs = 0;
+  });
+
+  it("进行中再次触发：复用同一次保存，只落盘一次、不弹冲突框", async () => {
+    makeDirtyDocument();
+    let release!: (result: { status: string; mtimeMs: number }) => void;
+    bridge.file.save.mockImplementationOnce(
+      () => new Promise<{ status: string; mtimeMs: number }>((resolve) => { release = resolve; }),
+    );
+
+    const first = saveDocument("action");
+    const second = saveDocument("action");
+    // 两次拿到同一个 Promise：第二次不排队、不重复序列化
+    expect(second).toBe(first);
+
+    await vi.waitFor(() => expect(bridge.file.save).toHaveBeenCalledTimes(1));
+    release({ status: "ok", mtimeMs: 42 });
+    await expect(first).resolves.toBe(true);
+
+    expect(bridge.file.save).toHaveBeenCalledTimes(1);
+    expect(bridge.dialog.overwrite).not.toHaveBeenCalled();
+    expect(fileState.mtimeMs).toBe(42);
+    // 复用留痕：现场日志里能查到"当时被合并了"
+    expect(bridge.app.log.mock.calls.some(([, event]) => event === "save: in-flight, reusing")).toBe(true);
+
+    // 互斥在保存结束后释放：再来一次是新的保存，且用的是上一次刚写盘的 mtime
+    await expect(saveDocument("action")).resolves.toBe(true);
+    expect(bridge.file.save).toHaveBeenCalledTimes(2);
+    const secondWrite = bridge.file.save.mock.calls[1] as unknown as [{ expectedMtimeMs: number }];
+    expect(secondWrite[0]).toMatchObject({ expectedMtimeMs: 42 });
+    expect(bridge.dialog.overwrite).not.toHaveBeenCalled();
   });
 });
 

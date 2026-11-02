@@ -31,7 +31,7 @@
 
 ## M4 — AI 完整化（MCP 单插槽）
 
-- MCP Server 随桌面版发布：本机 IPC 接入、配置面板、多客户端串行
+- MCP Server 随桌面版发布：本机 HTTP 接入（Streamable HTTP，ADR-0026）、配置面板、多客户端串行
 - 截图自检闭环打磨（定尺寸、区域截图）
 
 ## M5 — 多页面与原型

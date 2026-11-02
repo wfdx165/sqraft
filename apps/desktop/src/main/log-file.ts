@@ -1,5 +1,6 @@
 /**
- * 日志落盘：`~/.sqraft/logs/sqraft.log`，按大小轮转。
+ * 日志落盘：平台日志目录 `app.getPath("logs")/sqraft.log`（macOS 即
+ * `~/Library/Logs/Sqraft/`），按大小轮转。诊断产物不跟用户数据混放。
  *
  * 为什么要有它：打包版从 Finder 启动时 stdout 没有出口，保存失败这类只在
  * 安装包里复现的问题看不到任何现场。日志同时写终端与文件，dev / 打包版一致。

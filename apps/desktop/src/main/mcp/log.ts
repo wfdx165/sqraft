@@ -1,6 +1,6 @@
 /**
  * 操作日志：同时写终端（info/warn → stdout，error → stderr）与
- * `~/.sqraft/logs/sqraft.log`（见 `../log-file.ts`），不碰 `console`。
+ * `app.getPath("logs")/sqraft.log`（见 `../log-file.ts`），不碰 `console`。
  *
  * 目标是"出问题时能还原一次调用"：谁调的、调了什么、成没成、多久、参数长什么样。
  * 因此格式与截断规则必须只有一份实现——埋点处只给事件与字段，别自己拼字符串。

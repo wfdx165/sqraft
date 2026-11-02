@@ -38,6 +38,11 @@ const MAX_CLIPBOARD_BYTES = 20 * 1024 * 1024;
  * `dyn.ah62d4rv4…` 这类动态 UTI，`clipboard.has()` 直接返回 false、`read()` 也拿不到内容
  * （Electron 45 实测）。Electron 文档留的口子是平台原始类型，即
  * `electron application/osclipboard;format="<UTI>"`；反向域名形式的 UTI 能正常往返。
+ *
+ * 这个 `electron ` 前缀**改不掉**：实测（2026-11，Electron 45）换成
+ * `sqraft application/osclipboard;format="…"` 或裸 `com.sqraft.nodes` 之后
+ * `clipboard.read()` 都匹配不到写进去的条目——它是 Electron 识别平台原始类型的编码，
+ * 不是可以随便换的展示串。该串只有剪贴板检查工具能看到，普通用户无感。
  */
 const NODES_UTI = "com.sqraft.nodes";
 const NODES_FORMAT = `electron application/osclipboard;format="${NODES_UTI}"`;
@@ -185,7 +190,7 @@ export function registerMcpChannels(): void {
   });
 }
 
-/** 写一份只读的运行信息供排障（`~/.sqraft/mcp.json`）；客户端发现机制不用它。 */
+/** 写一份只读的运行信息供排障（`userData/mcp.json`）；客户端发现机制不用它。 */
 async function writeRuntimeInfo(): Promise<void> {
   const file = join(app.getPath("userData"), "mcp.json");
   const payload = {

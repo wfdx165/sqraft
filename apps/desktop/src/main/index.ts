@@ -1,7 +1,7 @@
 import { app, BrowserWindow, nativeTheme, screen, session, shell } from "electron";
 import { homedir } from "node:os";
 import { join } from "node:path";
-import { dataDirOf, prepareDataDir } from "./data-dir";
+import { legacyDotDirOf, migrateFromLegacyDotDir, relocateImageCache, userDataDirOf } from "./data-dir";
 import { attachCloseGuard, registerCloseChannels } from "./close-guard";
 import { registerFileChannels } from "./ipc";
 import { registerImageCacheChannels } from "./image-cache";
@@ -15,12 +15,32 @@ import { restoreBounds } from "./window-state";
 
 app.setName("Sqraft");
 
-// 数据目录统一到 ~/.sqraft：必须在 app ready 之前改，之后的 getPath 才走新目录
-// （偏好、最近文件、MCP socket 都在这里）。旧目录留着不删，首次启动会迁移偏好。
-const legacyUserData = app.getPath("userData");
-app.setPath("userData", dataDirOf(homedir()));
+// 数据目录走平台惯例的 userData（macOS `~/Library/Application Support/Sqraft`，见 data-dir.ts）：
+// 必须在 app ready 之前改，之后的 getPath 才走新目录；dev 与打包版共用同一目录。
+const targetUserData = userDataDirOf(app.getPath("appData"));
+const targetLogs = app.getPath("logs");
+const legacyDotDir = legacyDotDirOf(homedir());
+app.setPath("userData", targetUserData);
+// 一次性迁移旧家目录点目录：同步执行，必须早于日志与任何 Chromium 存储访问
+// （Local Storage 里存着用户自定义快捷键，要在渲染层起来之前搬过去）
+const migration = migrateFromLegacyDotDir({ legacy: legacyDotDir, target: targetUserData, logs: targetLogs });
+// 早期构建把链接图缓存放进了 Chromium 的 `Cache/images`（大小写不敏感卷上同一目录）：
+// 独立于迁移标记、每次启动检查一次，没有旧目录就是 no-op
+const relocated = relocateImageCache(targetUserData);
 // 日志最先初始化：启动早期的失败（数据目录不可写等）也要留下线索
-initLogFile({ dir: join(dataDirOf(homedir()), "logs") });
+initLogFile({ dir: targetLogs });
+if (migration.status === "failed") {
+  process.stderr?.write(`[log] data dir migration failed: ${migration.error}\n`);
+  // 打包版从 Finder 启动时 stderr 没有出口：失败必须同时在文件日志里留痕
+  logApp("error", "data dir migration failed", {
+    from: legacyDotDir,
+    to: targetUserData,
+    error: migration.error,
+  });
+} else if (migration.status === "migrated") {
+  logApp("info", "data dir migrated", { from: legacyDotDir, to: targetUserData, moved: migration.moved });
+}
+if (relocated) logApp("info", "image cache relocated", relocated);
 // 应用固定浅色：连原生菜单、标题栏、系统弹窗也不要跟随系统深色
 nativeTheme.themeSource = "light";
 
@@ -179,8 +199,9 @@ function createWindow(): void {
 app.whenReady().then(async () => {
   logApp("info", "app ready", {
     version: app.getVersion(),
-    electron: process.versions.electron,
-    chrome: process.versions.chrome,
+    // 字段名刻意中性（排障仍要版本值）：日志由帮助菜单「打开日志目录」直达，不往外带 Electron 字样
+    runtime: process.versions.electron,
+    engine: process.versions.chrome,
     platform: process.platform,
     packaged: app.isPackaged,
   });
@@ -191,7 +212,6 @@ app.whenReady().then(async () => {
   registerMenuChannels();
   rebuildMenu();
   registerMcpChannels();
-  await prepareDataDir(legacyUserData);
   await initRecentFiles();
   // 旧版本装过 sqraft-mcp 软链：升级后目标文件已删，能确认是本应用留下的就清掉
   void removeStaleCliLink({

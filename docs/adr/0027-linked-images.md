@@ -18,7 +18,7 @@
   校验只拦链路本地地址（169.254/16、fe80::/10）与 `file:`/`data:`；**本机与私网放行**（本地图床是正常用法）。
   请求用 `net.request(redirect: "manual")` 逐跳跟随（最多 3 跳，每跳重新校验主机）：实测 Electron 45 的
   `net.fetch` 在 `manual` 下会直接取消请求，自动跟随时又不填 `redirected` / `url`，拿不到最终地址。
-- **缓存**：`~/.sqraft/cache/images/<sha256(url)>` + 元数据（etag / last-modified / 最近使用）。
+- **缓存**：`userData/image-cache/<sha256(url)>` + 元数据（etag / last-modified / 最近使用）。
   上限 500MB，按最近使用淘汰；菜单里给「清除图片缓存」。
 - **时机**：懒加载——进视口/导出/截图时才抓；同一 URL 每会话校验一次（`If-None-Match` / `If-Modified-Since`），之后直接读缓存。
 - **失败语义**：服务器说变了就静默换新图；断网/404/超时一律用上一次缓存（`stale`），**不报错**；
