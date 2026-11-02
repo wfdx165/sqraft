@@ -76,6 +76,7 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 - `newId()` 基于时间戳+计数器，只用于"新建节点前"，不要在命令执行期调用
 - `apps/desktop/out/` 是 electron-vite 的产物（main / preload / renderer 三份），不要手改；改源码后要重新构建才会进 App
 - `sandbox: true` 下 preload 只能用 `electron` 等少数模块，不能用 Node 内置模块；需要文件/网络等能力一律回调主进程
+- 打包版 CSP 是 `script-src 'self'`，**没有放行 `blob:`**：任何会用 blob-URL Web Worker 的库（如 fflate 的 async API）在打包版会被拦——worker 不报错也不回调，promise 永久挂起，症状是"保存没反应、窗口关不掉"（保存改用 `zipSync`，与读路径 `unzipSync` 对称；引入新依赖时避开这类 async API，或给 CSP 补 `worker-src`）
 - Electron 二进制在首次 `pnpm dev` 时才下载（`electron` 包没有 postinstall），首次启动会慢
 - 打包不需要把任何可执行文件放到 asar 外（旧 CLI 已删除）；未签名构建要用 `CSC_IDENTITY_AUTO_DISCOVERY=false`
 - `electron-builder.yml` 里 `npmRebuild: false` 与 `electronDist: node_modules/electron/dist` 是提速项：项目没有原生模块，且复用已解压的 Electron。加原生依赖时必须去掉 `npmRebuild: false`

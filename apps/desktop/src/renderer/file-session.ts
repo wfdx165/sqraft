@@ -9,6 +9,7 @@ import { parseDoc, serializeDoc } from "./fileio";
 import { allAssets, assetEntryName, loadAssets, resetAssets } from "./assets";
 import { resetLinkedImages } from "./linked-images";
 import { fontEntryName, fontTable, fontsForSave, loadFonts, registerDocFonts, resetFonts } from "./fonts";
+import { showToast } from "./toast";
 import { logError, logInfo, logWarn } from "./log";
 
 /** 保存入口来源：区分快捷键/菜单、工具栏、关窗流程，排查"点了没反应"时先看这里。 */
@@ -30,6 +31,16 @@ const bridge = window.sqraft;
 
 /** 单文件体积上限：超过就提示而不是让 zip 卡死界面。 */
 const MAX_SAVE_BYTES = 300 * 1024 * 1024;
+/** 大文档预告阈值：超过这个体量，zip 是可感知的同步卡顿，先提示一声再动手。 */
+const WARN_SAVE_BYTES = 20 * 1024 * 1024;
+
+/**
+ * 超限文案：降体积的方法要真实可行。链接图（sourceUrl）字节不进文件
+ * （摊在 ~/.sqraft/cache/images/，ADR-0027），改链接是最有效的手段之一。
+ */
+function overLimitMessage(): string {
+  return `文件超过 ${MAX_SAVE_BYTES / 1024 / 1024}MB，已取消保存。占体积的主要是内嵌图片与字体：压缩或删掉大图、把嵌入图改成链接图（字节不进文件）、减少内嵌字体后重试。`;
+}
 
 /** 保存时把仓库里的图片一并写进 zip（不在文档里的孤儿资源也一并带上，避免撤销后丢图）。 */
 /** 保存用快照：字体表从字体仓库现算（字体是资产，不进撤销栈）。 */
@@ -59,13 +70,21 @@ function estimatedBytesOf(
   return assets + JSON.stringify(snapshot).length;
 }
 
+/**
+ * 大文档预告：zip 是同步压缩，体量大时 UI 会有可感知的停顿。
+ * 先发 toast，再让出一次任务队列让 toast 画出来，然后才同步压缩。
+ */
+async function warnLargeSaveIfAny(estimated: number): Promise<void> {
+  if (estimated <= WARN_SAVE_BYTES) return;
+  showToast(`文档较大（约 ${Math.ceil(estimated / 1024 / 1024)}MB），正在保存…`);
+  await new Promise((resolve) => setTimeout(resolve, 60));
+}
+
 /** 超限就提示并放弃保存；`estimated` 由调用方算好传进来，避免重复快照。 */
 async function withinSaveLimit(estimated: number, source: SaveSource): Promise<boolean> {
   if (estimated <= MAX_SAVE_BYTES) return true;
   logWarn("save: over limit", { source, estimatedBytes: estimated, limitBytes: MAX_SAVE_BYTES });
-  await bridge.dialog.error(
-    `文件超过 ${MAX_SAVE_BYTES / 1024 / 1024}MB，已取消保存。请减少或压缩图片后重试。`,
-  );
+  await bridge.dialog.error(overLimitMessage());
   return false;
 }
 
@@ -217,12 +236,13 @@ export async function saveDocument(source: SaveSource = "direct"): Promise<boole
       estimatedBytes: estimated,
     });
     if (!(await withinSaveLimit(estimated, source))) return false;
+    await warnLargeSaveIfAny(estimated);
     const serializeStarted = Date.now();
     const bytes = await serializeDoc(snapshot, entries);
     logInfo("save: serialized", { source, bytes: bytes.length, ms: Date.now() - serializeStarted });
     if (bytes.length > MAX_SAVE_BYTES) {
       logWarn("save: over limit after zip", { source, bytes: bytes.length, limitBytes: MAX_SAVE_BYTES });
-      await bridge.dialog.error(`文件超过 ${MAX_SAVE_BYTES / 1024 / 1024}MB，已取消保存。请减少或压缩图片后重试。`);
+      await bridge.dialog.error(overLimitMessage());
       return false;
     }
     const result = await bridge.file.save({
@@ -282,12 +302,13 @@ export async function saveDocumentAs(source: SaveSource = "direct", reason: "dir
       estimatedBytes: estimated,
     });
     if (!(await withinSaveLimit(estimated, source))) return false;
+    await warnLargeSaveIfAny(estimated);
     const serializeStarted = Date.now();
     const bytes = await serializeDoc(snapshot, entries);
     logInfo("save-as: serialized", { source, bytes: bytes.length, ms: Date.now() - serializeStarted });
     if (bytes.length > MAX_SAVE_BYTES) {
       logWarn("save-as: over limit after zip", { source, bytes: bytes.length, limitBytes: MAX_SAVE_BYTES });
-      await bridge.dialog.error(`文件超过 ${MAX_SAVE_BYTES / 1024 / 1024}MB，已取消保存。请减少或压缩图片后重试。`);
+      await bridge.dialog.error(overLimitMessage());
       return false;
     }
     const result = await bridge.file.saveAs({ suggestedName: suggestedName(), bytes });

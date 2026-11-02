@@ -1,10 +1,6 @@
 /** .sqraft 文件格式：zip 容器（manifest + 快照 + 操作日志 + 图片资源）。见 architecture.md §10。 */
-import { strToU8, strFromU8, unzipSync, zip, type Zippable } from "fflate";
+import { strToU8, strFromU8, unzipSync, zipSync, type Zippable } from "fflate";
 import { CURRENT_FORMAT_VERSION, migrateDoc, type DocState } from "@sqraft/core";
-
-function zipAsync(files: Zippable): Promise<Uint8Array> {
-  return new Promise((resolve, reject) => zip(files, (err, data) => (err ? reject(err) : resolve(data))));
-}
 
 export interface AssetEntry {
   /** zip 内路径，形如 `assets/<id>.png` */
@@ -24,7 +20,10 @@ export async function serializeDoc(state: DocState, assets: readonly AssetEntry[
     // PNG/JPEG 已经是压缩格式，再 deflate 只费 CPU 不省体积
     files[asset.name] = [asset.bytes, { level: 0 }];
   }
-  return zipAsync(files);
+  // 必须用 zipSync（与读路径的 unzipSync 对称）：async zip 对 ≥160KB 的条目
+  // 走 blob-URL Web Worker，打包版 CSP 只放行 'self'，worker 拉不起来时
+  // fflate 不报错也不回调，promise 永远不 settle——保存静默挂死（连带关不掉窗口）。
+  return zipSync(files);
 }
 
 export interface ParsedDoc {
