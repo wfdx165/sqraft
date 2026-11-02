@@ -2,6 +2,7 @@ import { contextBridge, ipcRenderer, webUtils } from "electron";
 import {
   CHANNELS,
   type AppInfo,
+  type AppLogLevel,
   type CloseRequest,
   type FetchImageResult,
   type McpCallRequest,
@@ -86,6 +87,8 @@ const api: SqraftApi = {
       return () => ipcRenderer.removeListener(CHANNELS.fileOpenRequest, listener);
     },
     setDirty: (dirty: boolean, name: string) => ipcRenderer.send(CHANNELS.appSetDirty, { dirty, name }),
+    log: (level: AppLogLevel, event: string, fields?: Record<string, unknown>) =>
+      ipcRenderer.send(CHANNELS.appLog, { level, event, fields }),
     onCloseRequest: (handler: (request: CloseRequest) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, request: CloseRequest) => handler(request);
       ipcRenderer.on(CHANNELS.appRequestClose, listener);

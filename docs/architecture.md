@@ -285,7 +285,7 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 - **一次工具调用只执行一次**：渲染层的监听宿主登记在 `globalThis` 上，重复安装先摘掉旧监听，并按主进程分配的调用号去重（同号的重复投递静默丢弃）。dev 热更新会重新执行渲染层模块，少了这一层，旧实例的监听会和新实例一起处理同一条调用——`create_node` 会落两个节点（返回 id 之外多一个没有子节点的副本）；
 - 工具清单与执行器都在渲染进程（`@sqraft/ai-tools` 的唯一真源），主进程只转发；截图只取文档层画布，不含编辑器叠加层。
 
-**操作日志**：会话创建、`tools/list`、每次 `tools/call` 的耗时与错误都以 `[mcp]` 单行写到终端（info/warn → stdout，error → stderr），不落文件、不经 `console`。参数只记摘要——长字符串截断、`data:image` 折叠成类型与体积，规则单点在 `src/main/mcp/log.ts`。身份来自客户端 `initialize` 的 `clientInfo`（如 `c1 claude-code/2.1`）。排障用的端口与进程信息写在 `~/.sqraft/mcp.json`（0600），那不是客户端发现机制。打包版从 Finder 启动时 stdout 没有出口，看日志要从终端启动。
+**操作日志**：会话创建、`tools/list`、每次 `tools/call` 的耗时与错误都以 `[mcp]` 单行写终端（info/warn → stdout，error → stderr）并追加到 `~/.sqraft/logs/sqraft.log`，不经 `console`。同一份日志还有两种来源：主进程事件标 `[app]`（生命周期、文件类 IPC、对话框），渲染层上报标 `[renderer]`（快捷键分发、保存链路、未捕获错误）——渲染层拿不到文件系统，只经 `app:log` 白名单通道发"事件 + 字段"。参数只记摘要——长字符串截断、`data:image` 折叠成类型与体积，规则单点在 `src/main/mcp/log.ts`；落盘与轮转（10MB × 10 个文件）在 `src/main/log-file.ts`，写失败静默降级为仅终端。身份来自客户端 `initialize` 的 `clientInfo`（如 `c1 claude-code/2.1`）。排障用的端口与进程信息写在 `~/.sqraft/mcp.json`（0600），那不是客户端发现机制。帮助菜单的「打开日志目录」直接定位到日志。
 
 工具清单（v1）：
 

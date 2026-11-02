@@ -23,7 +23,7 @@ import { dirname, join } from "node:path";
 import { CHANNELS, type FetchImageResult } from "../shared/ipc";
 import { dataDirOf } from "./data-dir";
 import { isHttpUrl as parseHttpUrl, isLinkLocalAddress as linkLocal } from "./image-url";
-import { logInfo, logWarn } from "./mcp/log";
+import { logApp } from "./mcp/log";
 
 /** 单张图上限：与本地资源入库上限一致。 */
 const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
@@ -202,7 +202,7 @@ async function requestImage(url: URL, headers: Record<string, string>): Promise<
     if (result.kind === "response") return result;
     const next = isHttpUrl(result.location);
     if (!next) throw new Error("重定向到了不支持的地址");
-    logWarn(null, "image url redirected", { from: current.toString(), to: next.toString() });
+    logApp("warn", "image url redirected", { from: current.toString(), to: next.toString() });
     current = next;
   }
   throw new Error("重定向次数过多");
@@ -301,7 +301,7 @@ async function persist(
     lastModified: headerOf(response.headers, "last-modified") ?? undefined,
     lastUsedAt: Date.now(),
   }, bytes);
-  logInfo(null, "image fetched", { url, bytes: bytes.length, ms: Date.now() - started });
+  logApp("info", "image fetched", { url, bytes: bytes.length, ms: Date.now() - started });
   return ok(bytes, contentType, false);
 }
 
@@ -332,7 +332,7 @@ export async function fetchRemoteImage(raw: string, force = false): Promise<Fetc
     const response = await requestImage(url, headers);
     if (response.status === 304) {
       if (cached && meta) {
-        logInfo(null, "image not modified", { url: normalized, ms: Date.now() - started });
+        logApp("info", "image not modified", { url: normalized, ms: Date.now() - started });
         return ok(cached, meta.contentType, false);
       }
       // 条件请求说有缓存，但缓存文件被清掉了：去掉条件头重新抓一次
@@ -346,10 +346,10 @@ export async function fetchRemoteImage(raw: string, force = false): Promise<Fetc
     const reason = messageOf(error);
     if (cached) {
       // 断网/404/超时：用上一次的缓存，画布不报错
-      logWarn(null, "image fetch failed, using cache", { url: normalized, error: reason });
+      logApp("warn", "image fetch failed, using cache", { url: normalized, error: reason });
       return ok(cached, meta!.contentType, true);
     }
-    logWarn(null, "image fetch failed", { url: normalized, error: reason });
+    logApp("warn", "image fetch failed", { url: normalized, error: reason });
     return { ok: false, reason: `抓取图片失败：${reason}` };
   }
 }
@@ -378,7 +378,7 @@ export async function clearImageCache(): Promise<number> {
   const before = await imageCacheBytes();
   await rm(cacheDir(), { recursive: true, force: true });
   revalidated.clear();
-  logInfo(null, "image cache cleared", { bytes: before });
+  logApp("info", "image cache cleared", { bytes: before });
   return before;
 }
 

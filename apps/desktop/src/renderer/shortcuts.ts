@@ -7,6 +7,7 @@
  * 3. 单键（无修饰）快捷键在输入框内一律让位；文件/对话类命令仍全局生效。
  */
 import { reactive, ref } from "vue";
+import { logInfo, logWarn } from "./log";
 
 export type ActionId =
   | "mode.pan"
@@ -295,9 +296,16 @@ export function registerShortcuts(map: Partial<Record<ActionId, () => void>>): (
   };
 }
 
-/** 供组件主动触发某动作（如面板里"试试"按钮），未登记则忽略。 */
+/** 供组件主动触发某动作（菜单派发、面板里的"试试"按钮），未登记则忽略但留痕。 */
 export function runAction(id: ActionId): void {
-  executors.get(id)?.();
+  const run = executors.get(id);
+  if (!run) {
+    // 菜单项在欢迎页等没有执行器的状态下点击：和快捷键同一条兜底
+    logWarn("menu action dropped: no executor", { action: id });
+    return;
+  }
+  logInfo("menu action", { action: id });
+  run();
 }
 
 export function installShortcuts(): () => void {
@@ -324,9 +332,14 @@ export function installShortcuts(): () => void {
     const action = ACTIONS.find((a) => keyOf(a.id) === binding);
     if (!action) return;
     const run = executors.get(action.id);
-    if (!run) return;
+    if (!run) {
+      // 快捷键按对了但没人接：这是"点了没反应"的一类现场，必须留痕
+      logWarn("shortcut dropped: no executor", { action: action.id, binding, repeat: e.repeat });
+      return;
+    }
     if (!GLOBAL_ACTIONS.has(action.id) && isTypingTarget(e.target)) return;
     e.preventDefault();
+    logInfo("action", { action: action.id, binding, repeat: e.repeat });
     run();
   };
   window.addEventListener("keydown", onKey);

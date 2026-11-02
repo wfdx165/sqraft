@@ -17,6 +17,7 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 - 类型检查 + 构建：`pnpm build` —— packages 内 `tsc` 只做类型检查（`noEmit`）；桌面应用先跑 `typecheck`（main / preload / renderer 三份 `tsc --noEmit`）再 `electron-vite build` 到 `apps/desktop/out`
 - 测试：`pnpm test` —— 递归跑有 `test` 脚本的包（`@sqraft/core`、`@sqraft/ai-tools`、`@sqraft/desktop` 的 vitest）；`@sqraft/render` 无测试运行器
 - 打包：`pnpm dist` —— 按当前系统自动选命令（macOS → arm64 dmg，Windows → nsis，Linux → AppImage），产物在 `apps/desktop/release/`
+- 所有 `dist*` 脚本都先跑 `pnpm clean`：清空 `apps/desktop/out/` 与 `release/`，避免旧产物被打进 asar 或堆在 release 里；想保留上一次的 dmg 用 `pnpm --filter @sqraft/desktop exec node scripts/clean.mjs --keep-release`
 - 快速出包（只出 `.app`、不建 dmg，约 4s）：`pnpm dist:dir` —— 验证"打包后能不能跑 / MCP 通不通"用它
 - 指定平台打包：`pnpm dist:mac` / `dist:win` / `dist:linux`；同一台机器上的交叉打包需要 wine / docker，本项目只在 macOS 上验证过
 - 单个测试：`pnpm --filter @sqraft/core exec vitest run -t "关键词"`
@@ -59,10 +60,12 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 
 ## 日志
 
-- **不要用 `console.log`**（`console.info/warn/error` 同理）：MCP 与主进程日志一律走 `apps/desktop/src/main/mcp/log.ts` 的 `logInfo` / `logWarn` / `logError`——它自建 sink 直写 stdout/stderr，格式、级别与参数摘要规则都在这一处实现
+- **不要用 `console.log`**（`console.info/warn/error` 同理）：MCP 与主进程日志一律走 `apps/desktop/src/main/mcp/log.ts`——`logInfo` / `logWarn` / `logError` 是 MCP 流量（`[mcp]`），主进程事件用 `logApp`（`[app]`），渲染层上报用 `logRenderer`（`[renderer]`）。默认 sink 同时写终端（info/warn → stdout，error → stderr）与 `~/.sqraft/logs/sqraft.log`，格式、级别与参数摘要规则都在这一处实现
 - 新增日志点时只给"事件 + 字段"（`logInfo(tag, "tools/call x ok 12ms", { args })`），格式与截断不要各拼一份
+- 渲染层日志走 `renderer/log.ts` 的 `logInfo` / `logWarn` / `logError`，经白名单 IPC `app:log` 发"事件 + 字段"；它拿不到文件系统，字段必须是可结构化克隆的纯值（别传 Vue 代理、DOM、节点对象）。日志失败一律吞掉，不能影响业务
 - 历史遗留：`main/ipc.ts` 与 `renderer/file-session.ts` 里各有 dev 专用的 `[close]` `console.info`（关闭流程诊断）；不要照抄这种写法，改到那儿时顺手迁走
-- 日志只进终端，不落文件；参数只记摘要（长字符串截断、`data:image` 折叠成体积）。打包版从 Finder 启动时 stdout 没有出口，看不到日志
+- 落盘位置 `~/.sqraft/logs/`，按大小轮转：单文件 10MB、最多 10 个文件（含当前文件，归档为 `sqraft.log.1` … `.9`），启动时清掉超量；写失败静默降级为仅终端（`main/log-file.ts`）
+- 参数只记摘要（长字符串截断、`data:image` 折叠成体积）。打包版从 Finder 启动时 stdout 没有出口，看日志文件，或用帮助菜单的「打开日志目录」
 - 测试里用 `setMcpLogSink()` 换掉写入口（静音或断言），不要为了日志去改生产签名
 
 ## 已知坑
@@ -77,7 +80,7 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 - 打包不需要把任何可执行文件放到 asar 外（旧 CLI 已删除）；未签名构建要用 `CSC_IDENTITY_AUTO_DISCOVERY=false`
 - `electron-builder.yml` 里 `npmRebuild: false` 与 `electronDist: node_modules/electron/dist` 是提速项：项目没有原生模块，且复用已解压的 Electron。加原生依赖时必须去掉 `npmRebuild: false`
 - macOS 用 `hiddenInset` 标题栏：左栏顶部为红绿灯让出 58px，左上 340×46 是拖拽区（`-webkit-app-region: drag`），改布局时别把这块盖住（标题栏只留拖拽，不放控件）。当前文件名与「回欢迎页」是工具栏品牌名右侧的两个胶囊（`Toolbar.vue`）
-- 数据目录：`~/.sqraft/`（偏好、最近文件、排障用的 `mcp.json`），启动时由 `data-dir.ts` 从旧 `userData` 迁移一次偏好
+- 数据目录：`~/.sqraft/`（偏好、最近文件、排障用的 `mcp.json`、日志目录 `logs/`），启动时由 `data-dir.ts` 从旧 `userData` 迁移一次偏好
 - MCP 端点：`http://127.0.0.1:<port>/mcp`（Streamable HTTP，ADR-0026）。只绑 loopback、拒绝带 `Origin` 的请求、无 token；默认端口 7331，显式端口被占即报错，自动模式才顺延。应用必须保持运行，没有 CLI 拉起
 - 菜单里**别用 `role: "close"`**：它自带 `CmdOrCtrl+W` 并直接注册，会在渲染层之前吃掉 ⌘W，而 ⌘W 是"关闭文档回欢迎页"（渲染层注册表）。关闭窗口用显式的 ⇧⌘W
 - `CloseGuard` 的放行状态必须随窗口重建复位（`attach()`）：macOS 关窗后从 Dock 重开，留着的 `allow` 会让守卫永久失效、静默丢稿
@@ -85,7 +88,7 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 - dev 热更新会**重新执行渲染层模块**：注册 IPC 监听必须配套 `import.meta.hot?.dispose(...)` 清理。`mcp-host.ts` 把 disposer 挂到 `globalThis` 并在安装前先摘旧监听（同一条 `tools/call` 只执行一次，否则 `create_node` 会落两个节点）；`file-session.ts` 用模块级 `disposers` 数组 + HMR dispose。漏了的话，一次关闭会被多个模块实例各弹一次"保存 / 不保存 / 取消"
 - 图片资源在 `.sqraft` 的 `assets/` 里按内容哈希命名，`doc.json` 只记 `assetId`；**不要**在保存时按"当前文档引用"清理资源——撤销栈里的节点还引用着它，清掉会让"保存后撤销"变破图（ADR-0022）
 - 旧 CLI 软链迁移：`setup.ts` 的 `removeStaleCliLink()` 启动时只删指向本应用旧 `bin` 的 `current` / `stale` 链接，`foreign` 一律不碰；删之前必须走 `inspectEntry()`，直接 `unlink` 有误删用户文件的先例
-- MCP 操作日志只打终端、不落文件，打包版从 Finder 启动看不见；写法与截断规则见上面「日志」一节
+- MCP 操作日志同时写终端与 `~/.sqraft/logs/sqraft.log`（10MB × 10 个文件轮转），打包版从 Finder 启动也能看到；写法与截断规则见上面「日志」一节
 
 ## 验证
 

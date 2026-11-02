@@ -14,6 +14,7 @@
     "dev": "pnpm --filter @sqraft/desktop dev",
     "build": "pnpm -r --if-present run build",
     "test": "pnpm -r --if-present run test",
+    "clean": "pnpm --filter @sqraft/desktop run clean",
     "dist": "pnpm --filter @sqraft/desktop run dist",
     "dist:mac": "pnpm --filter @sqraft/desktop run dist:mac",
     "dist:win": "pnpm --filter @sqraft/desktop run dist:win",

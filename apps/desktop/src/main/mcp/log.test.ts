@@ -1,4 +1,8 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { LOG_FILE_NAME, initLogFile, resetLogFile } from "../log-file";
 import {
   LINE_LIMIT,
   logError,
@@ -55,17 +59,24 @@ describe("MCP 日志摘要", () => {
 describe("MCP 日志行", () => {
   it("格式固定：前缀、本地时间、级别、连接标签、事件、字段", () => {
     expect(formatLine("info", at, "c1 claude(8123)", "connect", { clients: 1 })).toBe(
-      "[mcp] 12:34:56.789 info  c1 claude(8123) connect clients=1",
+      "[mcp] 2026-01-01 12:34:56.789 info  c1 claude(8123) connect clients=1",
     );
   });
 
   it("没有标签与字段时不留下多余空格", () => {
-    expect(formatLine("error", at, null, "server start failed")).toBe("[mcp] 12:34:56.789 error server start failed");
+    expect(formatLine("error", at, null, "server start failed")).toBe(
+      "[mcp] 2026-01-01 12:34:56.789 error server start failed",
+    );
+  });
+
+  it("来源作用域写在行首：主进程 / 渲染层与 MCP 可区分", () => {
+    expect(formatLine("info", at, null, "app ready", undefined, "app")).toMatch(/^\[app\] /);
+    expect(formatLine("warn", at, null, "save: start", undefined, "renderer")).toMatch(/^\[renderer\] /);
   });
 
   it("事件文本里的换行与转义序列不会伪造日志行或操纵终端", () => {
     const line = formatLine("info", at, "c1", "a\nb\u001b[2J");
-    expect(line).toBe("[mcp] 12:34:56.789 info  c1 a\\nb\\u001b[2J");
+    expect(line).toBe("[mcp] 2026-01-01 12:34:56.789 info  c1 a\\nb\\u001b[2J");
     expect(line).not.toContain("\n");
     expect(line).not.toContain("\u001b");
   });
@@ -90,5 +101,24 @@ describe("MCP 日志落点", () => {
 
     expect(seen.map((entry) => entry.level)).toEqual(["info", "warn", "error"]);
     expect(seen[2].line).toContain("c1 claude(8123) c");
+  });
+
+  it("默认 sink 同时写终端与日志文件", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sqraft-log-"));
+    const chunks: string[] = [];
+    const spy = vi.spyOn(process.stdout, "write").mockImplementation(((chunk: string | Uint8Array) => {
+      chunks.push(String(chunk));
+      return true;
+    }) as typeof process.stdout.write);
+    initLogFile({ dir });
+    try {
+      logInfo(null, "tee check");
+      expect(chunks.join("")).toContain("tee check");
+      expect(readFileSync(join(dir, LOG_FILE_NAME), "utf8")).toContain("tee check");
+    } finally {
+      spy.mockRestore();
+      resetLogFile();
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });

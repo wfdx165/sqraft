@@ -7,10 +7,11 @@
  * - macOS 用 accelerator 仅做展示（registerAccelerator: false），实际按键仍由渲染层处理；
  * - Windows/Linux 不注册 accelerator，把键位拼进标签，避免和渲染层抢事件。
  */
-import { app, BrowserWindow, dialog, ipcMain, Menu, type MenuItemConstructorOptions } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type MenuItemConstructorOptions } from "electron";
 import { basename } from "node:path";
 import { CHANNELS } from "../shared/ipc";
 import { clearImageCache } from "./image-cache";
+import { logFileDir } from "./log-file";
 
 /** 渲染层同步过来的、面向菜单的动作键位（默认值兜底）。 */
 let bindings: Record<string, string> = {};
@@ -256,6 +257,14 @@ export function buildTemplate(
       click: () => {
         const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
         target?.webContents.send(CHANNELS.menuCommand, "app.mcpSetup");
+      },
+    },
+    {
+      // 打包版从 Finder 启动时日志只落文件，入口要能被找到
+      label: "打开日志目录",
+      click: () => {
+        const dir = logFileDir();
+        if (dir) void shell.openPath(dir);
       },
     },
   ];

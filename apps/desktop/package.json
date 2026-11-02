@@ -10,11 +10,12 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.preload.json && tsc --noEmit -p tsconfig.web.json",
     "preview": "electron-vite preview",
     "test": "vitest run",
+    "clean": "node scripts/clean.mjs",
     "dist": "node scripts/dist.mjs",
-    "dist:mac": "pnpm build && electron-builder --mac --arm64",
-    "dist:win": "pnpm build && electron-builder --win nsis",
-    "dist:linux": "pnpm build && electron-builder --linux AppImage",
-    "dist:dir": "pnpm build && electron-builder --dir"
+    "dist:mac": "pnpm clean && pnpm build && electron-builder --mac --arm64",
+    "dist:win": "pnpm clean && pnpm build && electron-builder --win nsis",
+    "dist:linux": "pnpm clean && pnpm build && electron-builder --linux AppImage",
+    "dist:dir": "pnpm clean && pnpm build && electron-builder --dir"
   },
   "dependencies": {
     "@fontsource-variable/geist": "5.3.0",

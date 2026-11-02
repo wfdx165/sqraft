@@ -1,18 +1,22 @@
 /**
- * MCP 操作日志：只写终端（info/warn → stdout，error → stderr），不落文件、不碰 `console`。
+ * 操作日志：同时写终端（info/warn → stdout，error → stderr）与
+ * `~/.sqraft/logs/sqraft.log`（见 `../log-file.ts`），不碰 `console`。
  *
  * 目标是"出问题时能还原一次调用"：谁调的、调了什么、成没成、多久、参数长什么样。
  * 因此格式与截断规则必须只有一份实现——埋点处只给事件与字段，别自己拼字符串。
+ * 打包版从 Finder 启动时 stdout 没有出口，文件日志是唯一的现场。
  *
  * 所有进入日志的字符串（事件文本、连接身份、参数）都过 `singleLine`：
  * 压平换行、把控制字符转义成 `\uXXXX`。客户端自报的 `name` 与工具名都是不可信输入，
  * 不能让它们伪造日志行或把转义序列送进读日志的终端。
- *
- * 代价（刻意接受）：打包版从 Finder 启动时 stdout 没有出口，日志看不见；
- * 需要排查时从终端启动应用或跑 `pnpm dev`。
  */
 
+import { writeLogLine } from "../log-file";
+
 export type McpLogLevel = "info" | "warn" | "error";
+
+/** 日志来源：MCP 流量、主进程事件、渲染层上报。行首据此区分。 */
+export type LogScope = "mcp" | "app" | "renderer";
 
 /** 整行上限：超了整体截断，保证一个事件永远只占一行。 */
 export const LINE_LIMIT = 1024;
@@ -100,31 +104,35 @@ export function formatFields(fields?: Record<string, unknown>): string {
     .join(" ");
 }
 
-/** 本地时间 `HH:mm:ss.SSS`：一次会话内够用，不写日期。 */
-export function formatTime(date: Date): string {
+/** 本地时间戳 `YYYY-MM-DD HH:mm:ss.SSS`：文件会跨天，日期不能省。 */
+export function formatStamp(date: Date): string {
   const pad = (value: number, size = 2) => String(value).padStart(size, "0");
-  return `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
+  const day = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`;
+  const clock = `${pad(date.getHours())}:${pad(date.getMinutes())}:${pad(date.getSeconds())}.${pad(date.getMilliseconds(), 3)}`;
+  return `${day} ${clock}`;
 }
 
-/** `[mcp] 14:03:11.482 info  c1 claude-code/2.1 tools/call document.write ok 12ms args={…}` */
+/** `[mcp] 2026-11-02 14:03:11.482 info  c1 claude-code/2.1 tools/call document.write ok 12ms args={…}` */
 export function formatLine(
   level: McpLogLevel,
   date: Date,
   tag: string | null,
   message: string,
   fields?: Record<string, unknown>,
+  scope: LogScope = "mcp",
 ): string {
-  const head = `[mcp] ${formatTime(date)} ${level.padEnd(5)}${tag ? ` ${singleLine(tag)}` : ""} ${singleLine(message)}`;
+  const head = `[${scope}] ${formatStamp(date)} ${level.padEnd(5)}${tag ? ` ${singleLine(tag)}` : ""} ${singleLine(message)}`;
   const tail = formatFields(fields);
   return truncate(tail ? `${head} ${tail}` : head, LINE_LIMIT);
 }
 
 export type McpLogSink = (level: McpLogLevel, line: string) => void;
 
-/** 默认 sink：error 进 stderr，其余进 stdout；打包版无出口时静默丢弃。 */
+/** 默认 sink：终端 + 文件（文件写失败自动降级，见 log-file.ts）。 */
 const streamSink: McpLogSink = (level, line) => {
   const stream = level === "error" ? process.stderr : process.stdout;
   stream?.write(`${line}\n`);
+  writeLogLine(line);
 };
 
 let sink: McpLogSink = streamSink;
@@ -139,8 +147,27 @@ export function logEvent(
   tag: string | null,
   message: string,
   fields?: Record<string, unknown>,
+  scope: LogScope = "mcp",
 ): void {
-  sink(level, formatLine(level, new Date(), tag, message, fields));
+  sink(level, formatLine(level, new Date(), tag, message, fields, scope));
+}
+
+/** 主进程事件（应用生命周期、文件 IPC、对话框）。 */
+export function logApp(
+  level: McpLogLevel,
+  message: string,
+  fields?: Record<string, unknown>,
+): void {
+  logEvent(level, null, message, fields, "app");
+}
+
+/** 渲染层上报（快捷键分发、保存链路、未捕获错误）。 */
+export function logRenderer(
+  level: McpLogLevel,
+  message: string,
+  fields?: Record<string, unknown>,
+): void {
+  logEvent(level, null, message, fields, "renderer");
 }
 
 export function logInfo(tag: string | null, message: string, fields?: Record<string, unknown>): void {

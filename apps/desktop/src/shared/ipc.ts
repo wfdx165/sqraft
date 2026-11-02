@@ -122,6 +122,15 @@ export interface McpCallResult {
   error?: string;
 }
 
+/** 渲染层上报的日志：只收事件文本与字段，主进程统一格式化。 */
+export type AppLogLevel = "info" | "warn" | "error";
+
+export interface AppLogEntry {
+  level: AppLogLevel;
+  event: string;
+  fields?: Record<string, unknown>;
+}
+
 export interface CloseRequest {
   /** true 表示这次是退出应用，false 只是关闭窗口 */
   quit: boolean;
@@ -198,6 +207,8 @@ export interface SqraftApi {
     onOpenRequest(handler: (path: string) => void): () => void;
     /** 让主进程显示"已修改"标记并记住脏状态 */
     setDirty(dirty: boolean, name: string): void;
+    /** 渲染层日志：主进程统一格式化，写终端与 `~/.sqraft/logs/` */
+    log(level: AppLogLevel, event: string, fields?: Record<string, unknown>): void;
     /** 主进程请求关闭；渲染层处理完保存后调用 finishClose */
     onCloseRequest(handler: (request: CloseRequest) => void): () => void;
     finishClose(quit: boolean): void;
@@ -238,6 +249,7 @@ export const CHANNELS = {
   menuSetBindings: "menu:set-bindings",
   appRendererReady: "app:renderer-ready",
   appSetDirty: "app:set-dirty",
+  appLog: "app:log",
   appRequestClose: "app:request-close",
   appFinishClose: "app:finish-close",
   appCancelClose: "app:cancel-close",

@@ -86,11 +86,18 @@ function pickTool(kind: ToolKind) {
 async function onOpen() {
   await openDocument();
 }
+/** 工具栏按钮：来源记 toolbar；快捷键与菜单走下面的 action 变体。 */
 async function onSave() {
-  await saveDocument();
+  await saveDocument("toolbar");
 }
 async function onSaveAs() {
-  await saveDocumentAs();
+  await saveDocumentAs("toolbar");
+}
+function onSaveAction(): void {
+  void saveDocument("action");
+}
+function onSaveAsAction(): void {
+  void saveDocumentAs("action");
 }
 /** 关闭文档回欢迎页（有未保存改动时先问，和 ⌘W 同一条路径） */
 async function onClose() {
@@ -132,7 +139,11 @@ function onBarResize(): void {
 }
 
 onMounted(() => {
-  unregister = registerShortcuts({ "file.open": onOpen, "file.save": onSave, "file.saveAs": onSaveAs });
+  unregister = registerShortcuts({
+    "file.open": onOpen,
+    "file.save": onSaveAction,
+    "file.saveAs": onSaveAsAction,
+  });
   window.addEventListener("resize", onBarResize);
   void nextTick(() => void fitBar(false));
 });

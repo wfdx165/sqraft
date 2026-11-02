@@ -6,8 +6,9 @@ import { attachCloseGuard, registerCloseChannels } from "./close-guard";
 import { registerFileChannels } from "./ipc";
 import { registerImageCacheChannels } from "./image-cache";
 import { registerMcpChannels, shutdownMcp, startMcp } from "./mcp";
-import { logError, logInfo } from "./mcp/log";
+import { logApp } from "./mcp/log";
 import { removeStaleCliLink } from "./mcp/setup";
+import { initLogFile } from "./log-file";
 import { rebuildMenu, registerMenuChannels } from "./menu";
 import { currentPreferences, initRecentFiles, requestOpen, saveWindowBounds } from "./recent-state";
 import { restoreBounds } from "./window-state";
@@ -18,6 +19,8 @@ app.setName("Sqraft");
 // （偏好、最近文件、MCP socket 都在这里）。旧目录留着不删，首次启动会迁移偏好。
 const legacyUserData = app.getPath("userData");
 app.setPath("userData", dataDirOf(homedir()));
+// 日志最先初始化：启动早期的失败（数据目录不可写等）也要留下线索
+initLogFile({ dir: join(dataDirOf(homedir()), "logs") });
 // 应用固定浅色：连原生菜单、标题栏、系统弹窗也不要跟随系统深色
 nativeTheme.themeSource = "light";
 
@@ -42,6 +45,7 @@ if (!hasLock) {
   app.on("second-instance", (_event, argv) => {
     focusMainWindow();
     const path = pathFromArgs(argv);
+    logApp("info", "second instance", { path: path ?? undefined });
     if (path) requestOpen(path);
   });
 }
@@ -49,6 +53,7 @@ if (!hasLock) {
 // macOS：双击 .sqraft / 拖到 Dock 图标
 app.on("open-file", (event, path) => {
   event.preventDefault();
+  logApp("info", "open-file event", { path });
   requestOpen(path);
 });
 
@@ -143,6 +148,8 @@ function createWindow(): void {
     window.show();
   });
   attachCloseGuard(window);
+  logApp("info", "window created", { width: bounds.width, height: bounds.height });
+  window.on("closed", () => logApp("info", "window closed"));
 
   // 记住窗口位置：拖动/缩放时防抖写盘，关闭前再兜一次
   let saveTimer: ReturnType<typeof setTimeout> | null = null;
@@ -170,6 +177,13 @@ function createWindow(): void {
 }
 
 app.whenReady().then(async () => {
+  logApp("info", "app ready", {
+    version: app.getVersion(),
+    electron: process.versions.electron,
+    chrome: process.versions.chrome,
+    platform: process.platform,
+    packaged: app.isPackaged,
+  });
   if (!isDev) applyContentSecurityPolicy();
   registerFileChannels();
   registerImageCacheChannels();
@@ -185,9 +199,9 @@ app.whenReady().then(async () => {
     resourcesPath: process.resourcesPath,
     appPath: app.getAppPath(),
   }).then((removed) => {
-    if (removed.length > 0) logInfo(null, "legacy cli link removed", { paths: removed.join(", ") });
+    if (removed.length > 0) logApp("info", "legacy cli link removed", { paths: removed.join(", ") });
   }).catch((error: unknown) => {
-    logError(null, "legacy cli cleanup failed", {
+    logApp("error", "legacy cli cleanup failed", {
       error: error instanceof Error ? error.message : String(error),
     });
   });
@@ -206,8 +220,12 @@ app.whenReady().then(async () => {
 
 app.on("web-contents-created", (_event, contents) => hardenContents(contents));
 
-app.on("before-quit", () => shutdownMcp());
+app.on("before-quit", () => {
+  logApp("info", "before-quit");
+  shutdownMcp();
+});
 
 app.on("window-all-closed", () => {
+  logApp("info", "window-all-closed", { platform: process.platform });
   if (process.platform !== "darwin") app.quit();
 });

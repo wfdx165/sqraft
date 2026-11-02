@@ -9,6 +9,7 @@ vi.mock("electron", () => ({
   BrowserWindow: { getFocusedWindow: () => null, getAllWindows: () => windows },
   Menu: { buildFromTemplate: (template: unknown) => ({ template }), setApplicationMenu: vi.fn() },
   ipcMain: { on: vi.fn() },
+  shell: { openPath: vi.fn() },
 }));
 
 const { buildTemplate } = await import("./menu");
@@ -80,6 +81,7 @@ describe("应用菜单", () => {
   it("开发者工具在帮助菜单，快捷键按平台区分", () => {
     expect(helpSubmenu("darwin", { showDevTools: true }).map((item) => item.label)).toEqual([
       "配置 MCP…",
+      "打开日志目录",
       undefined,
       "开发者工具",
       undefined,
@@ -97,6 +99,7 @@ describe("应用菜单", () => {
       expect(devtoolsItem(platform, { showDevTools: false })).toBeUndefined();
       expect(helpSubmenu(platform, { showDevTools: false }).map((item) => item.label)).toEqual([
         "配置 MCP…",
+        "打开日志目录",
         undefined,
         "关于 Sqraft",
       ]);

@@ -38,6 +38,7 @@ const bridge = {
     },
     finishClose: vi.fn(),
     cancelClose: vi.fn(),
+    log: vi.fn(),
   },
 };
 
@@ -148,6 +149,27 @@ describe("未保存标记跟着保存点走", () => {
     bridge.dialog.unsaved.mockResolvedValueOnce("discard");
     await expect(newDocument()).resolves.toBe(true);
     expect(fileState.dirty).toBe(false);
+  });
+
+  it("保存链路留下可定位的日志点（来源、序列化、写盘结果、保存点）", async () => {
+    makeDirtyDocument();
+    fileState.path = "/tmp/日志.sqraft";
+    fileState.mtimeMs = 0;
+
+    await expect(saveDocument("action")).resolves.toBe(true);
+
+    const events = bridge.app.log.mock.calls.map(([level, event]) => `${String(level)}:${String(event)}`);
+    expect(events).toEqual(
+      expect.arrayContaining([
+        "info:save: start",
+        "info:save: serialized",
+        "info:save: result",
+        "info:save: marked saved",
+      ]),
+    );
+    // 来源必须能区分快捷键/菜单、工具栏、关窗
+    const start = bridge.app.log.mock.calls.find(([, event]) => event === "save: start");
+    expect(start?.[2]).toMatchObject({ source: "action" });
   });
 });
 
