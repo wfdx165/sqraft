@@ -19,6 +19,7 @@ import {
 } from "./canvas/agent-activity";
 import { docStore, hooks, ui } from "./store";
 import { newDocument, openDocument } from "./file-session";
+import { appInfo } from "./app-meta";
 import { textSizeOf } from "./text-metrics";
 import { putAsset } from "./assets";
 import { putFont } from "./fonts";
@@ -221,6 +222,10 @@ export function installMcpHost(): void {
     {
       newDocument: () => newDocument(),
       openDocument: () => openDocument(),
+      appInfo: async () => {
+        const info = await appInfo();
+        return { name: info.name, version: info.version, platform: window.sqraft.platform };
+      },
       activatePage: (pageId) => hooks.activatePage(pageId),
       exportPng: (request) => hooks.renderExport(request),
       importFont: async (fileName, dataBase64) => {

@@ -19,7 +19,9 @@
     "dist:mac": "pnpm --filter @sqraft/desktop run dist:mac",
     "dist:win": "pnpm --filter @sqraft/desktop run dist:win",
     "dist:linux": "pnpm --filter @sqraft/desktop run dist:linux",
-    "dist:dir": "pnpm --filter @sqraft/desktop run dist:dir"
+    "dist:dir": "pnpm --filter @sqraft/desktop run dist:dir",
+    "release": "pnpm --filter @sqraft/desktop run release",
+    "stage:update": "pnpm --filter @sqraft/desktop run stage:update"
   },
   "engines": {
     "node": ">=22.12"

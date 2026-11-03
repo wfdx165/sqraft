@@ -12,6 +12,7 @@ import {
   savePreferences,
   type McpPreferences,
   type Preferences,
+  type UpdatePreferences,
   type WindowBounds,
 } from "./preferences";
 import { setRecentFiles } from "./menu";
@@ -53,6 +54,22 @@ export async function updateMcpPreferences(patch: {
 
 export async function saveWindowBounds(bounds: WindowBounds): Promise<void> {
   preferences = { ...preferences, window: bounds };
+  await savePreferences(preferencesFile(), preferences);
+}
+
+/** 更新状态偏好：字段传 `undefined` 表示删除该字段。 */
+export function updatePreferences(): UpdatePreferences {
+  return { ...(preferences.update ?? {}) };
+}
+
+export async function patchUpdatePreferences(patch: Partial<UpdatePreferences>): Promise<void> {
+  const next: UpdatePreferences = { ...(preferences.update ?? {}) };
+  for (const key of Object.keys(patch) as (keyof UpdatePreferences)[]) {
+    const value = patch[key];
+    if (value === undefined) delete next[key];
+    else (next as Record<string, unknown>)[key] = value;
+  }
+  preferences = { ...preferences, update: next };
   await savePreferences(preferencesFile(), preferences);
 }
 

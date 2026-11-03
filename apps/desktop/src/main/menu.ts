@@ -260,6 +260,14 @@ export function buildTemplate(
       },
     },
     {
+      // 更新是半静默的（ADR-0029）：自动检查之外，给一个"我现在就想查"的入口
+      label: "检查更新…",
+      click: () => {
+        const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+        target?.webContents.send(CHANNELS.menuCommand, "app.checkUpdates");
+      },
+    },
+    {
       // 打包版从 Finder 启动时日志只落文件，入口要能被找到
       label: "打开日志目录",
       click: () => {

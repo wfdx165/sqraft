@@ -8,14 +8,15 @@
     "dev": "electron-vite dev",
     "build": "pnpm typecheck && electron-vite build",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.preload.json && tsc --noEmit -p tsconfig.web.json",
-    "preview": "electron-vite preview",
     "test": "vitest run",
     "clean": "node scripts/clean.mjs",
     "dist": "node scripts/dist.mjs",
     "dist:mac": "pnpm clean && pnpm build && electron-builder --mac --arm64",
     "dist:win": "pnpm clean && pnpm build && electron-builder --win nsis",
     "dist:linux": "pnpm clean && pnpm build && electron-builder --linux AppImage",
-    "dist:dir": "pnpm clean && pnpm build && electron-builder --dir"
+    "dist:dir": "pnpm clean && pnpm build && electron-builder --dir",
+    "release": "node scripts/release.mjs",
+    "stage:update": "node scripts/stage-update.mjs"
   },
   "dependencies": {
     "@fontsource-variable/geist": "5.3.0",

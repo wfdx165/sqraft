@@ -28,6 +28,10 @@ mac:
     - target: dmg
       arch:
         - arm64
+    # 自动更新必须用 zip：dmg 是只读挂载，没法原地替换 .app（ADR-0029）
+    - target: zip
+      arch:
+        - arm64
 win:
   icon: build/icon.png
   target:

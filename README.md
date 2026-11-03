@@ -69,6 +69,21 @@ pnpm clean       # 手动清空 apps/desktop 的 out/ 与 release/
 
 产物在 `apps/desktop/release/`。每次打包都会先清空 `out/` 与 `release/`，旧产物不会累积（想留旧 dmg 就先挪出去，或对 `scripts/clean.mjs` 加 `--keep-release`）。当前只验证过 macOS arm64，且未签名。
 
+发布（自动更新链路见 ADR-0029）：
+
+```bash
+pnpm release               # 打包 → 算 sha256 → 生成 latest.json → 创建 draft release
+pnpm release --publish     # 自测通过后直接发布（客户端 24 小时内会看到）
+pnpm release --skip-build  # 复用 release/ 里已有产物，只补传元数据
+```
+
+- 发布仓库写在 `apps/desktop/update.config.json`（客户端与脚本读同一份）；**首次发布前必须改成真实仓库**，否则检查更新是静默 404。
+- 自动更新只认 **zip**（dmg 是只读挂载，没法原地替换 `.app`）；dmg 仍随同一版发布，供手动安装与回滚。
+- 更新说明放 `docs/releases/v<version>.md`，没有就留空。
+- 发布纪律：draft 只用来核对 notes 与资产；**draft 阶段验证不了自动更新**（`/releases/latest` 不含 draft，draft 资产匿名下载 404）。正确姿势是发布后从上一版点「检查更新…」验证，坏了靠回滚 + 发补丁版。
+- 替换 / 回滚演练不依赖网络：先退出应用，跑 `pnpm stage:update`（把本地产物塞进 `userData/updates/` 并标记已就绪），再启动 → 点「重启更新」。回滚演练把 zip 换成坏包重复一次。
+- 只有 macOS arm64 承诺自动更新；Windows/Linux 与 Intel Mac 在关于面板里显式显示"暂不支持"。
+
 ## 架构要点
 
 - **一切编辑都是命令**：GUI、MCP、撤销重做、持久化共用同一条命令路径。

@@ -18,6 +18,7 @@ import {
   type SaveFileResult,
   type SqraftApi,
   type UnsavedChoice,
+  type UpdateState,
 } from "../shared/ipc";
 
 /**
@@ -58,6 +59,16 @@ const api: SqraftApi = {
   },
   recent: {
     list: () => ipcRenderer.invoke(CHANNELS.recentList) as Promise<{ path: string; name: string }[]>,
+  },
+  update: {
+    state: () => ipcRenderer.invoke(CHANNELS.updateState) as Promise<UpdateState>,
+    check: (manual?: boolean) => ipcRenderer.invoke(CHANNELS.updateCheck, manual === true) as Promise<UpdateState>,
+    restart: () => ipcRenderer.invoke(CHANNELS.updateRestart) as Promise<void>,
+    onState: (handler: (state: UpdateState) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, next: UpdateState) => handler(next);
+      ipcRenderer.on(CHANNELS.updateChanged, listener);
+      return () => ipcRenderer.removeListener(CHANNELS.updateChanged, listener);
+    },
   },
   menu: {
     onCommand: (handler: (action: string) => void) => {

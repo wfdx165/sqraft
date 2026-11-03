@@ -5,6 +5,7 @@ import { closeDocument, fileState, openDocument, saveDocument, saveDocumentAs } 
 import { openContextMenu, type ContextMenuItem } from "../context-menu";
 import { keyOf, PANEL_BINDING, registerShortcuts, shortcutUi, type ActionId } from "../shortcuts";
 import { vTip } from "../tooltip";
+import { restartToUpdate, updateReady, updateUi } from "../update";
 import appIcon from "../brand/app-icon.png";
 import Icon from "./Icon.vue";
 
@@ -180,6 +181,16 @@ onBeforeUnmount(() => {
       <Icon name="home" :size="12" /><span>欢迎页</span>
     </button>
 
+    <!-- 更新就绪：唯一的常驻入口；平时不存在，不占视觉 -->
+    <button
+      v-if="updateReady"
+      class="doc-chip update"
+      v-tip="{ label: `新版本 ${updateUi.latestVersion ?? ''} 已就绪，重启后安装` }"
+      @click="restartToUpdate"
+    >
+      <Icon name="update" :size="12" /><span>重启更新</span>
+    </button>
+
     <span v-show="!hiddenGroups.has('doc')" class="divider" />
 
     <nav class="group modes">
@@ -348,6 +359,21 @@ onBeforeUnmount(() => {
 .doc-chip.back:hover {
   background: var(--accent-soft);
   color: var(--accent);
+}
+
+/* 更新胶囊：强调色描边，但保持和文档胶囊同一高度与形状 */
+.doc-chip.update {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  cursor: pointer;
+  box-shadow: none;
+}
+
+.doc-chip.update:hover {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
 }
 
 .doc-name {

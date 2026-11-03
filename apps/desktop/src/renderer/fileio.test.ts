@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createDocWithPage, createEmptyDoc } from "@sqraft/core";
+import { strFromU8, unzipSync } from "fflate";
+import { CURRENT_FORMAT_VERSION, createDocWithPage, createEmptyDoc } from "@sqraft/core";
 import { parseDoc, serializeDoc } from "./fileio";
 
 describe(".sqraft 容器", () => {
@@ -33,5 +34,18 @@ describe(".sqraft 容器", () => {
 
   it("缺 doc.json 时给出可读错误", async () => {
     await expect(parseDoc(new Uint8Array([1, 2, 3]))).rejects.toBeTruthy();
+  });
+
+  it("manifest 记录真实应用版本", async () => {
+    const bytes = await serializeDoc(createEmptyDoc(), [], "0.1.0");
+    const manifest = JSON.parse(strFromU8(unzipSync(bytes)["manifest.json"])) as { version: string };
+    expect(manifest.version).toBe("0.1.0");
+  });
+
+  it("格式版本比当前新时明确拒绝（旧版不能猜着读新稿）", async () => {
+    const state = createEmptyDoc();
+    state.formatVersion = CURRENT_FORMAT_VERSION + 1;
+    const bytes = await serializeDoc(state);
+    await expect(parseDoc(bytes)).rejects.toThrow(/请升级 Sqraft/);
   });
 });

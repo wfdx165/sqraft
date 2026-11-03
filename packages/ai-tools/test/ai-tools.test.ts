@@ -699,6 +699,27 @@ describe("AI 工具：文档级操作与截图区域", () => {
     await expect(run("document.new", {})).rejects.toThrow(/不支持新建文档/);
   });
 
+  it("app_info 返回宿主版本与当前格式版本", async () => {
+    const store = new DocStore(createDocWithPage());
+    const run = makeExecutor(store, async () => "", undefined, undefined, {
+      newDocument: async () => true,
+      openDocument: async () => true,
+      appInfo: async () => ({ name: "Sqraft", version: "0.1.0", platform: "darwin" }),
+    });
+    const info = await call(run, "app_info");
+    expect(info).toMatchObject({ name: "Sqraft", version: "0.1.0", platform: "darwin" });
+    expect(typeof info.formatVersion).toBe("number");
+  });
+
+  it("app_info 在没有宿主元信息时明确报错", async () => {
+    const store = new DocStore(createDocWithPage());
+    const run = makeExecutor(store, async () => "", undefined, undefined, {
+      newDocument: async () => true,
+      openDocument: async () => true,
+    });
+    await expect(run("app_info", {})).rejects.toThrow(/不支持 app_info/);
+  });
+
   it("screenshot 把区域交给宿主，并校验参数", async () => {
     const store = new DocStore(createDocWithPage());
     const regions: unknown[] = [];

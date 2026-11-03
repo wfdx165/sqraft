@@ -1,10 +1,19 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { AppInfo } from "../../shared/ipc";
+import { checkForUpdates, restartToUpdate, updateReady, updateStatusText, updateUi } from "../update";
 
 const emit = defineEmits<{ close: [] }>();
 const info = ref<AppInfo | null>(null);
 const copied = ref(false);
+
+const busy = computed(() => updateUi.phase === "checking" || updateUi.phase === "downloading");
+
+/** 已就绪时这个按钮变成"重启更新"：用户在这里点也不必去找工具栏胶囊。 */
+function onUpdateAction(): void {
+  if (updateReady.value) restartToUpdate();
+  else void checkForUpdates(true);
+}
 
 onMounted(async () => {
   info.value = await window.sqraft.app.info();
@@ -44,6 +53,17 @@ function openLicenses(): void {
           <p class="version">版本 {{ info?.version ?? "—" }}</p>
         </div>
       </div>
+
+      <section>
+        <div class="label">
+          <span>版本更新</span>
+          <button class="copy" :disabled="busy" @click="onUpdateAction">
+            {{ updateReady ? "重启更新" : busy ? "检查中…" : "检查更新" }}
+          </button>
+        </div>
+        <p class="foot">{{ updateStatusText() }}</p>
+        <p v-if="updateReady && updateUi.notes" class="notes">{{ updateUi.notes }}</p>
+      </section>
 
       <section>
         <div class="label">
@@ -170,6 +190,25 @@ h2 {
 .copy:hover {
   color: var(--text);
   border-color: var(--hairline-strong);
+}
+
+.copy:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+.notes {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--tint-4);
+  border: 1px solid var(--hairline);
+  font-size: 11px;
+  line-height: 1.55;
+  color: var(--text-dim);
+  white-space: pre-wrap;
+  max-height: 120px;
+  overflow: auto;
 }
 
 .path {

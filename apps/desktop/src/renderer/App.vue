@@ -22,6 +22,7 @@ import { closeDocument, installFileSession, newDocument } from "./file-session";
 import { installMcpHost } from "./mcp-host";
 import { pasteFromClipboard } from "./paste";
 import { copySelectionAction, cutSelectionAction } from "./canvas/node-clipboard";
+import { checkForUpdates, installUpdates } from "./update";
 
 /** 菜单里出现的动作：键位同步给主进程，点击回送到渲染层同一个执行器。 */
 const MENU_ACTIONS: ActionId[] = [
@@ -58,6 +59,7 @@ onMounted(() => {
   uninstall = installShortcuts();
   installFileSession();
   installMcpHost();
+  installUpdates();
   uninstallMenu = window.sqraft.menu.onCommand((action) => {
     if (action === "app.mcpSetup") {
       mcpSetupOpen.value = true;
@@ -65,6 +67,12 @@ onMounted(() => {
     }
     if (action === "app.about") {
       aboutOpen.value = true;
+      return;
+    }
+    if (action === "app.checkUpdates") {
+      // 菜单入口 = 手动检查：结果落在关于面板里（失败原因同时 toast 一次）
+      aboutOpen.value = true;
+      void checkForUpdates(true);
       return;
     }
     runAction(action as ActionId);

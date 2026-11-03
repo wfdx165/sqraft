@@ -11,6 +11,7 @@ import { removeStaleCliLink } from "./mcp/setup";
 import { initLogFile } from "./log-file";
 import { rebuildMenu, registerMenuChannels } from "./menu";
 import { currentPreferences, initRecentFiles, requestOpen, saveWindowBounds } from "./recent-state";
+import { initUpdater, installOnQuit, registerUpdateChannels, scheduleAutoCheck } from "./updater";
 import { restoreBounds } from "./window-state";
 
 app.setName("Sqraft");
@@ -213,6 +214,10 @@ app.whenReady().then(async () => {
   rebuildMenu();
   registerMcpChannels();
   await initRecentFiles();
+  // 更新器依赖偏好（节流时间、已下载版本），必须排在 initRecentFiles 之后
+  await initUpdater();
+  registerUpdateChannels();
+  installOnQuit();
   // 旧版本装过 sqraft-mcp 软链：升级后目标文件已删，能确认是本应用留下的就清掉
   void removeStaleCliLink({
     packaged: app.isPackaged,
@@ -230,6 +235,7 @@ app.whenReady().then(async () => {
   session.defaultSession.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
 
   createWindow();
+  scheduleAutoCheck();
   const initial = pathFromArgs(process.argv);
   if (initial) requestOpen(initial);
 

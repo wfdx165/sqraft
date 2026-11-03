@@ -134,6 +134,25 @@ export interface CloseRequest {
   quit: boolean;
 }
 
+/** 更新器阶段：`dev` / `unsupported` 都不发请求。 */
+export type UpdatePhase = "dev" | "unsupported" | "idle" | "checking" | "up-to-date" | "downloading" | "ready" | "error";
+
+export interface UpdateState {
+  phase: UpdatePhase;
+  currentVersion: string;
+  latestVersion: string | null;
+  notes: string | null;
+  publishedAt: string | null;
+  /** 下载进度 0–1；非下载阶段保留上一次值 */
+  progress: number;
+  /** 面向用户的状态说明（失败原因等）；没有额外信息时为 null */
+  message: string | null;
+  /** 进入"已就绪"的时间（毫秒）；未就绪为 null */
+  readyAt: number | null;
+  /** 当前安装位置是否支持自动更新 */
+  supported: boolean;
+}
+
 export interface SqraftApi {
   readonly platform: string;
   file: {
@@ -167,6 +186,16 @@ export interface SqraftApi {
   };
   recent: {
     list(): Promise<{ path: string; name: string }[]>;
+  };
+  update: {
+    /** 当前状态（渲染层挂载时取一次） */
+    state(): Promise<UpdateState>;
+    /** 检查更新；`manual` 不受 24 小时节流，失败信息会留在状态里 */
+    check(manual?: boolean): Promise<UpdateState>;
+    /** 重启以安装已就绪的版本：走关闭守卫（未保存时有保存/不保存/取消） */
+    restart(): Promise<void>;
+    /** 主进程推送的状态变化 */
+    onState(handler: (state: UpdateState) => void): () => void;
   };
   menu: {
     /** 菜单点击 → 与快捷键相同的动作 id */
@@ -247,6 +276,10 @@ export const CHANNELS = {
   /** 在访达里打开许可文本目录（关于面板的「开源许可」） */
   appShowLicenses: "app:show-licenses",
   recentList: "recent:list",
+  updateState: "update:state",
+  updateCheck: "update:check",
+  updateRestart: "update:restart",
+  updateChanged: "update:changed",
   menuCommand: "menu:command",
   menuSetBindings: "menu:set-bindings",
   appRendererReady: "app:renderer-ready",

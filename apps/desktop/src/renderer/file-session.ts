@@ -6,6 +6,7 @@ import { reactive } from "vue";
 import { createEmptyDoc, firstPageId } from "@sqraft/core";
 import { docStore, ui } from "./store";
 import { parseDoc, serializeDoc } from "./fileio";
+import { appInfo } from "./app-meta";
 import { allAssets, assetEntryName, loadAssets, resetAssets } from "./assets";
 import { resetLinkedImages } from "./linked-images";
 import { fontEntryName, fontTable, fontsForSave, loadFonts, registerDocFonts, resetFonts } from "./fonts";
@@ -28,6 +29,15 @@ export const fileState = reactive({
 });
 
 const bridge = window.sqraft;
+
+/** manifest 里的"生成应用版本"：元信息读不到时写 unknown——保存不能因为版本号失败。 */
+async function appVersionForManifest(): Promise<string> {
+  try {
+    return (await appInfo()).version || "unknown";
+  } catch {
+    return "unknown";
+  }
+}
 
 /** 单文件体积上限：超过就提示而不是让 zip 卡死界面。 */
 const MAX_SAVE_BYTES = 300 * 1024 * 1024;
@@ -264,7 +274,7 @@ async function runSave(source: SaveSource): Promise<boolean> {
     if (!(await withinSaveLimit(estimated, source))) return false;
     await warnLargeSaveIfAny(estimated);
     const serializeStarted = Date.now();
-    const bytes = await serializeDoc(snapshot, entries);
+    const bytes = await serializeDoc(snapshot, entries, await appVersionForManifest());
     logInfo("save: serialized", { source, bytes: bytes.length, ms: Date.now() - serializeStarted });
     if (bytes.length > MAX_SAVE_BYTES) {
       logWarn("save: over limit after zip", { source, bytes: bytes.length, limitBytes: MAX_SAVE_BYTES });
@@ -334,7 +344,7 @@ async function runSaveAs(source: SaveSource, reason: "direct" | "conflict" = "di
     if (!(await withinSaveLimit(estimated, source))) return false;
     await warnLargeSaveIfAny(estimated);
     const serializeStarted = Date.now();
-    const bytes = await serializeDoc(snapshot, entries);
+    const bytes = await serializeDoc(snapshot, entries, await appVersionForManifest());
     logInfo("save-as: serialized", { source, bytes: bytes.length, ms: Date.now() - serializeStarted });
     if (bytes.length > MAX_SAVE_BYTES) {
       logWarn("save-as: over limit after zip", { source, bytes: bytes.length, limitBytes: MAX_SAVE_BYTES });

@@ -234,6 +234,14 @@ _Avoid_: 后端、服务端
 **欢迎页（Welcome）**：
 窗口在没有打开文档时的形态：新建、打开、最近 8 条。与"空文档"不同，欢迎页不是文档。
 
+**更新器（Updater）**：
+主进程的自动更新链路：检查 `latest.json` → 后台下载 zip 并校验 → 退出时由替换脚本安装（ADR-0029）。客户端只承诺 macOS arm64、未签名。
+_Avoid_: 升级器、自动升级服务、Squirrel
+
+**格式版本（Format Version）**：
+`.sqraft` 的 `manifest.json` 里的 `formatVersion`，标识文档模型的代际。只升不降：读取端遇到比自己新的版本必须拒绝，迁移只在渲染层执行。
+_Avoid_: 文件版本、schema 版本（口语可用，术语用格式版本）
+
 **本机 MCP 端点（Loopback MCP Endpoint）**：
 `http://127.0.0.1:<port>/mcp` 的 Streamable HTTP 单端点（主进程提供，ADR-0026）。只绑 loopback、拒绝带 `Origin` 的请求、没有 token；不是对外网络服务。
 _Avoid_: 本机 IPC、Unix socket、命名管道（那是已被 ADR-0026 取代的旧传输）

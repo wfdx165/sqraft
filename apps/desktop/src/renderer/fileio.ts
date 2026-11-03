@@ -8,10 +8,18 @@ export interface AssetEntry {
   bytes: Uint8Array;
 }
 
-export async function serializeDoc(state: DocState, assets: readonly AssetEntry[] = []): Promise<Uint8Array> {
+export async function serializeDoc(
+  state: DocState,
+  assets: readonly AssetEntry[] = [],
+  appVersion = "unknown",
+): Promise<Uint8Array> {
   const files: Zippable = {
     "manifest.json": strToU8(
-      JSON.stringify({ formatVersion: state.formatVersion ?? CURRENT_FORMAT_VERSION, app: "sqraft", version: "0.0.1" }),
+      JSON.stringify({
+        formatVersion: state.formatVersion ?? CURRENT_FORMAT_VERSION,
+        app: "sqraft",
+        version: appVersion,
+      }),
     ),
     "doc.json": strToU8(JSON.stringify(state)),
     "ops.ndjson": new Uint8Array(0),
@@ -47,6 +55,13 @@ export async function parseDoc(bytes: Uint8Array): Promise<ParsedDoc> {
     }
   }
   const state = JSON.parse(strFromU8(docEntry)) as DocState;
-  return { state: migrateDoc(state, state.formatVersion ?? formatVersion), files };
+  const declared = Math.max(state.formatVersion ?? formatVersion, formatVersion);
+  // 格式版本只降不升：老版本读新文件必须明确拒绝，而不是"尽量解析"出一份坏稿（ADR-0029）
+  if (declared > CURRENT_FORMAT_VERSION) {
+    throw new Error(
+      `这份设计稿由更新版本的 Sqraft 创建（文件格式 v${declared}，当前支持 v${CURRENT_FORMAT_VERSION}）。请升级 Sqraft 后再打开。`,
+    );
+  }
+  return { state: migrateDoc(state, declared), files };
 }
 

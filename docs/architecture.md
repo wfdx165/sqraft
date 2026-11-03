@@ -262,7 +262,7 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 - 打开文件 = 载入快照 + 重放增量（确定性命令保证重放安全）；
 - 保存时若增量超过阈值则折叠为新快照；
 - 保存/读取一律**同步压缩**（`zipSync` / `unzipSync`，`fileio.ts`）：不依赖 Web Worker——打包版 CSP 不放行 `blob:`，fflate 异步 API 用的 blob worker 被拦后回调永不触发（保存曾因此静默挂死）。代价是文档很大时 UI 有可感知停顿：预检上限 300MB 兜住极端体积（超限弹窗并给出降体积建议），预估超 20MB 先 toast 预告再压缩；
-- `formatVersion` 单调递增，读取端只向前兼容；升级走显式迁移函数。
+- `formatVersion` 单调递增，读取端只向前兼容；**遇到比自己新的格式版本直接拒绝**并提示升级（ADR-0029），迁移走显式迁移函数、只在渲染层执行。
 
 ## 11. 存储层
 
@@ -356,4 +356,5 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 - **欢迎页**：以 MCP 接入为主位——服务状态（监听中 / 在线会话数）、能力一行（工具数动态取自 `@sqraft/ai-tools`）、可复制的接入片段（Claude Code / OpenCode / Cursor / 通用），然后才是新建/打开与最近 4 条。三态（未启动 / 等待接入 / 已连接）只改状态行与主按钮，见 ADR-0021 与 ADR-0026。
 - **菜单与快捷键**：系统级动作走菜单 role；文档编辑类动作仍由渲染层注册表独占，菜单点击只发送同一个动作 id（ADR-0011 的桌面补充）。
 - **MCP**：主进程协议层 + 本机 Streamable HTTP（`127.0.0.1:<port>`），详见 ADR-0026 与 §12。
-- **打包**：electron-builder，`appId com.yjsoft.sqraft`；asar 打包，没有需要放到 asar 外的可执行文件；macOS 出 arm64 dmg，Windows/Linux 配置齐备但未验证。
+- **更新**（ADR-0029）：主进程负责检查（`releases/latest/download/latest.json`，24 小时节流）、下载 zip 与 sha256 校验、退出时用 detached 脚本替换 `.app`；渲染层只显示状态、触发重启，不碰文件系统。备份 + 启动标记（60 秒）构成回滚：新版本没跑起来就换回旧包。未签名，因此不用 Squirrel.Mac，只承诺 macOS arm64；只读位置（dmg 挂载点）提前拒绝。
+- **打包**：electron-builder，`appId com.yjsoft.sqraft`；asar 打包，没有需要放到 asar 外的可执行文件；macOS 出 arm64 dmg + zip（zip 供自动更新），Windows/Linux 配置齐备但未验证。

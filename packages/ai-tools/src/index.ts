@@ -16,6 +16,7 @@ import type {
 import {
   DEFAULT_PAGE_HEIGHT,
   DEFAULT_PAGE_WIDTH,
+  CURRENT_FORMAT_VERSION,
   clampSides,
   createLayoutSpec,
   createNode,
@@ -232,6 +233,13 @@ export const tools: ToolDefinition[] = [
     name: "get_selection",
     description:
       "读取画布当前选区（用户正在选中的节点），返回活动页 id 与每个选中节点的摘要：id / name / type / parentId / 世界坐标 x,y / width / height / locked / visible，实例还带 componentId、实例子孙带 mainId。想对「用户选的东西」动手时先调它，再把 nodeId 显式传给 update_node / arrange_nodes 等工具。选区为空时给空数组与 hint。只读。",
+    readonly: true,
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "app_info",
+    description:
+      "读取当前 Sqraft 应用的只读元信息：应用名、版本、文件格式版本、运行平台。排障第一步——确认 agent 连的是哪个版本，再决定是不是版本太旧导致工具行为不一致。",
     readonly: true,
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
@@ -676,6 +684,11 @@ export interface DocumentHost {
   /** 返回是否真的新建了；用户在"保存 / 不保存 / 取消"里选取消时返回 false。 */
   newDocument(): Promise<boolean>;
   /**
+   * 应用元信息（只读）：版本来自主进程 `app.getVersion()`，平台由宿主注入。
+   * 宿主不提供时 `app_info` 明确报错，而不是编一个版本号。
+   */
+  appInfo?(): { name: string; version: string; platform: string } | Promise<{ name: string; version: string; platform: string }>;
+  /**
    * 把 base64 位图落进资源仓库，返回 assetId 与原图尺寸。
    * 只收数据、不收路径——工具层不允许读任意文件。
    */
@@ -1067,6 +1080,11 @@ export function makeExecutor(
         if ("path" in args) throw new Error("document.open 只接受系统对话框选择文件，不接受路径参数");
         const opened = await documentHost.openDocument();
         return JSON.stringify(opened ? { ok: true } : { ok: false, canceled: true });
+      }
+      case "app_info": {
+        if (!documentHost?.appInfo) throw new Error("当前宿主不支持 app_info");
+        const meta = await documentHost.appInfo();
+        return JSON.stringify({ ...meta, formatVersion: CURRENT_FORMAT_VERSION });
       }
       case "read_document": {
         const pages = getPages(store.doc).map((page) => ({

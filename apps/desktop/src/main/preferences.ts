@@ -18,6 +18,21 @@ export interface Preferences {
   recentFiles: string[];
   window?: WindowBounds;
   mcp?: McpPreferences;
+  update?: UpdatePreferences;
+}
+
+/** 更新状态里需要跨启动记住的部分：节流时间、已下载版本、7 天提醒去过重。 */
+export interface UpdatePreferences {
+  /** 上次自动检查时间（毫秒）：24 小时内不再自动查 */
+  lastCheckAt?: number;
+  /** 已下载完成、等待安装的版本 */
+  readyVersion?: string;
+  /** 进入"已就绪"的时间（毫秒）：满 7 天主动提醒一次 */
+  readySince?: number;
+  /** 已经提醒过的版本：同一版本只提醒一次 */
+  remindedVersion?: string;
+  /** 上次安装失败的版本：自动检查不再反复重下同一个坏包（手动检查仍放行） */
+  failedVersion?: string;
 }
 
 /** MCP 端口偏好：显式端口优先；自动模式记住上次成功的端口，避免每次重启重新漂移。 */
@@ -48,11 +63,17 @@ export async function loadPreferences(file: string): Promise<Preferences> {
     const raw = await readFile(file, "utf8");
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object") return { ...DEFAULT_PREFERENCES };
-    const record = parsed as { recentFiles?: unknown; window?: unknown; mcp?: unknown };
+    const record = parsed as { recentFiles?: unknown; window?: unknown; mcp?: unknown; update?: unknown };
     const recent = record.recentFiles;
     const recentFiles = Array.isArray(recent) ? recent.filter((item): item is string => typeof item === "string") : [];
     const mcp = sanitizeMcp(record.mcp);
-    return { recentFiles: recentFiles.slice(0, MAX_RECENT), window: sanitizeWindow(record.window), ...(mcp ? { mcp } : {}) };
+    const update = sanitizeUpdate(record.update);
+    return {
+      recentFiles: recentFiles.slice(0, MAX_RECENT),
+      window: sanitizeWindow(record.window),
+      ...(mcp ? { mcp } : {}),
+      ...(update ? { update } : {}),
+    };
   } catch {
     return { ...DEFAULT_PREFERENCES };
   }
@@ -65,6 +86,18 @@ function sanitizeMcp(value: unknown): McpPreferences | undefined {
   if (isValidPort(raw.port)) next.port = raw.port;
   if (isValidPort(raw.autoPort)) next.autoPort = raw.autoPort;
   return next.port === undefined && next.autoPort === undefined ? undefined : next;
+}
+
+function sanitizeUpdate(value: unknown): UpdatePreferences | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  const next: UpdatePreferences = {};
+  if (typeof raw.lastCheckAt === "number" && Number.isFinite(raw.lastCheckAt)) next.lastCheckAt = raw.lastCheckAt;
+  if (typeof raw.readyVersion === "string" && raw.readyVersion) next.readyVersion = raw.readyVersion;
+  if (typeof raw.readySince === "number" && Number.isFinite(raw.readySince)) next.readySince = raw.readySince;
+  if (typeof raw.remindedVersion === "string" && raw.remindedVersion) next.remindedVersion = raw.remindedVersion;
+  if (typeof raw.failedVersion === "string" && raw.failedVersion) next.failedVersion = raw.failedVersion;
+  return Object.keys(next).length > 0 ? next : undefined;
 }
 
 function sanitizeWindow(value: unknown): WindowBounds | undefined {
