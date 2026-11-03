@@ -34,7 +34,7 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
   2. `pnpm test && pnpm build`；
   3. `pnpm dist` 出包，装/直接跑 `.app`；
   4. 手点：文件往返（开→改→存→关→重开）+ MCP（建节点 → 截图）；
-  5. 若 Electron 升级：更新 README 里的 Chromium 版本行。
+  5. 若 Electron 升级：更新本文件「版本锁定」里的 Chromium 版本行。
 
 ## 架构不变式（违反即 bug）
 
@@ -56,6 +56,7 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 - `GLOSSARY.md` 是术语唯一真源（Frame=画板、Group=分组、命令、Token、变体=枚举型组件属性…）。不要引入同义词
 - 架构以 `docs/architecture.md` 为准；重大决策新增 ADR（`docs/adr/`，顺序编号、短格式）
 - `docs/roadmap.md` 划定范围：v1 无协作后端、无布尔运算、无富文本 runs——不要顺手实现
+- `README.md` 是对外下载页（同步到公开发行仓库）：只写产品、安装、能力与限制，**不放构建命令与架构细节**；开发手册就是本文件
 - 改行为时同步更新对应文档
 
 ## 日志

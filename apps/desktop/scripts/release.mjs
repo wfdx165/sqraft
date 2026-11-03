@@ -95,7 +95,7 @@ const manifest = {
 const manifestPath = join(releaseDir, "latest.json");
 writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
 
-const existing = spawnSync("gh", ["release", "view", tag], { cwd: repoRoot, stdio: "ignore" });
+const existing = spawnSync("gh", ["release", "view", tag, "--repo", repo], { cwd: repoRoot, stdio: "ignore" });
 if (existing.status === 0) fail(`${tag} 已经存在；版本号必须先升（latest.json 不能指向已经发布的版本）`);
 
 const notesArgs = notes.trim() ? ["--notes-file", notesPath] : ["--notes", `Sqraft ${version}`];
@@ -103,6 +103,8 @@ const args = [
   "release",
   "create",
   tag,
+  "--repo",
+  repo,
   "--title",
   `Sqraft ${version}`,
   ...notesArgs,
