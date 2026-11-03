@@ -32,17 +32,6 @@ mac:
     - target: zip
       arch:
         - arm64
-win:
-  icon: build/icon.png
-  target:
-    - nsis
-linux:
-  icon: build/icon.png
-  target:
-    - AppImage
-  category: Graphics
-  mimeTypes:
-    - application/x-sqraft
 fileAssociations:
   - ext: sqraft
     name: Sqraft Design

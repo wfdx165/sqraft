@@ -1,7 +1,7 @@
 {
   "name": "sqraft",
   "private": true,
-  "version": "0.0.1",
+  "version": "0.0.2",
   "description": "Sqraft — AI 驱动的轻量 UI 设计工具，纯单机、桌面优先",
   "packageManager": "pnpm@10.33.4",
   "pnpm": {
@@ -17,10 +17,10 @@
     "clean": "pnpm --filter @sqraft/desktop run clean",
     "dist": "pnpm --filter @sqraft/desktop run dist",
     "dist:mac": "pnpm --filter @sqraft/desktop run dist:mac",
-    "dist:win": "pnpm --filter @sqraft/desktop run dist:win",
-    "dist:linux": "pnpm --filter @sqraft/desktop run dist:linux",
     "dist:dir": "pnpm --filter @sqraft/desktop run dist:dir",
     "release": "pnpm --filter @sqraft/desktop run release",
+    "publish:release": "pnpm --filter @sqraft/desktop run publish:release",
+    "publish:readme": "pnpm --filter @sqraft/desktop run publish:readme",
     "stage:update": "pnpm --filter @sqraft/desktop run stage:update"
   },
   "engines": {

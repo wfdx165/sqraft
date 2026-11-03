@@ -1,6 +1,6 @@
 # 发布说明
 
-每个版本一个文件：`v0.1.0.md`（与 git tag 同名）。`pnpm release` 会把它当作 GitHub Release 的正文，并写进更新客户端的「关于」面板。
+每个版本一个文件：`v<version>.md`（与 git tag 同名，如 `v0.0.2.md`）。`pnpm release` 会把它当作 GitHub Release 的正文，并写进更新客户端的「关于」面板。
 
 没有这个文件也能发布，只是更新说明留空。写什么：
 

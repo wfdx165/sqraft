@@ -357,4 +357,4 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 - **菜单与快捷键**：系统级动作走菜单 role；文档编辑类动作仍由渲染层注册表独占，菜单点击只发送同一个动作 id（ADR-0011 的桌面补充）。
 - **MCP**：主进程协议层 + 本机 Streamable HTTP（`127.0.0.1:<port>`），详见 ADR-0026 与 §12。
 - **更新**（ADR-0029）：主进程负责检查（`releases/latest/download/latest.json`，24 小时节流）、下载 zip 与 sha256 校验、退出时用 detached 脚本替换 `.app`；渲染层只显示状态、触发重启，不碰文件系统。备份 + 启动标记（60 秒）构成回滚：新版本没跑起来就换回旧包。未签名，因此不用 Squirrel.Mac，只承诺 macOS arm64；只读位置（dmg 挂载点）提前拒绝。
-- **打包**：electron-builder，`appId com.yjsoft.sqraft`；asar 打包，没有需要放到 asar 外的可执行文件；macOS 出 arm64 dmg + zip（zip 供自动更新），Windows/Linux 配置齐备但未验证。
+- **打包**：electron-builder，`appId com.yjsoft.sqraft`；asar 打包，没有需要放到 asar 外的可执行文件；只构建 macOS arm64 的 dmg + zip（zip 供自动更新），Windows/Linux 的打包配置已移除。
