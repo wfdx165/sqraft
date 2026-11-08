@@ -1044,11 +1044,11 @@ function blockedDeleteMessage(doc: DocState, path: string, refs: NodeId[], value
 }
 
 /** 空文档没有页面：先建第一页（与人工"新建页面"同一套命令，仍在这一条事务里）。 */
-function ensurePage(store: DocStore): NodeId {
+function ensurePage(store: DocStore, pagePrefix = "页面"): NodeId {
   const existing = firstPageId(store.doc);
   if (existing) return existing;
   const page = createNode("page", {
-    name: nextPageName(store.doc),
+    name: nextPageName(store.doc, pagePrefix),
     x: 0,
     y: 0,
     width: DEFAULT_PAGE_WIDTH,
@@ -1066,6 +1066,8 @@ export function makeExecutor(
   documentHost?: DocumentHost,
   /** 画布当前选区（UI 状态，不进文档）；宿主不提供时 `get_selection` 返回空数组。 */
   getSelection?: () => NodeId[],
+  /** 默认名跟随宿主界面语言；不提供时用中文兜底（测试/独立运行）。 */
+  defaultName?: (kind: "page" | "component") => string,
 ): ToolExecutor {
   return async (name, args) => {
     const run = async (): Promise<string> => {
@@ -1208,7 +1210,7 @@ export function makeExecutor(
       }
       case "create_page": {
         const position = nextPagePosition(store.doc);
-        const name = args.name === undefined ? nextPageName(store.doc) : String(args.name).trim();
+        const name = args.name === undefined ? nextPageName(store.doc, defaultName?.("page") ?? "页面") : String(args.name).trim();
         if (!name) throw new Error("页面名不能为空");
         const width = args.width === undefined ? DEFAULT_PAGE_WIDTH : Number(args.width);
         const height = args.height === undefined ? DEFAULT_PAGE_HEIGHT : Number(args.height);
@@ -1248,12 +1250,12 @@ export function makeExecutor(
           ? null
           : ((args.parentId as NodeId | undefined) ?? getActivePageId?.() ?? firstPageId(store.doc));
         if (!isComponent) {
-          if (!parentId && args.parentId === undefined) parentId = ensurePage(store);
+          if (!parentId && args.parentId === undefined) parentId = ensurePage(store, defaultName?.("page") ?? "页面");
           if (!parentId || !store.doc.nodes[parentId]) throw new Error("parentId 不存在");
         }
 
         let name = args.name as string | undefined;
-        if (isComponent) name = name ?? nextComponentName(store.doc);
+        if (isComponent) name = name ?? nextComponentName(store.doc, defaultName?.("component") ?? "组件");
         // 省略坐标时：主组件排到组件区末尾，其余落在父容器左上角
         const defaultPosition = isComponent ? nextComponentPosition(store.doc) : { x: 0, y: 0 };
         if (isSlot) {
@@ -1365,7 +1367,7 @@ export function makeExecutor(
         if (!master || master.type !== "component") throw new Error(`组件 ${componentId} 不存在`);
         // 空文档没有页面：先建一页再画（与人工"新建页面"同一套命令，仍是一次撤销）
         let parentId = (args.parentId as NodeId | undefined) ?? getActivePageId?.() ?? firstPageId(store.doc);
-        if (!parentId && args.parentId === undefined) parentId = ensurePage(store);
+        if (!parentId && args.parentId === undefined) parentId = ensurePage(store, defaultName?.("page") ?? "页面");
         if (!parentId || !store.doc.nodes[parentId]) throw new Error("parentId 不存在");
         const nodeId = newId();
         store.apply(

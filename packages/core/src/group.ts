@@ -8,6 +8,7 @@ import { createNode, worldRect, type DocNode, type DocState, type NodeId, type R
 import type { Command } from "./store";
 import { topLevelIds } from "./duplicate";
 import { lockedChain } from "./arrange";
+import { AppError } from "./errors";
 
 export interface GroupParams {
   nodeIds: NodeId[];
@@ -21,12 +22,12 @@ export function expandGroup(doc: DocState, params: GroupParams): Command[] {
     const node = doc.nodes[id];
     return !!node && node.type !== "page" && !lockedChain(doc, id);
   });
-  if (ids.length === 0) throw new Error("请选择要分组的节点");
+  if (ids.length === 0) throw new AppError("core.group.empty");
   if (doc.nodes[params.groupId]) throw new Error(`节点 ${params.groupId} 已存在`);
 
   // 跨页面分组会把节点搬走，直接拒绝
   const pages = new Set(ids.map((id) => pageOf(doc, id)));
-  if (pages.size > 1) throw new Error("分组要求同一页面");
+  if (pages.size > 1) throw new AppError("core.group.crossPage");
 
   const boxes = new Map<NodeId, Rect>();
   for (const id of ids) {
@@ -42,7 +43,7 @@ export function expandGroup(doc: DocState, params: GroupParams): Command[] {
   // 目标父级：第一个节点的父级（跨父级选区会被提升到它下面，世界坐标不变）
   const first = doc.nodes[ids[0]];
   const parent = first.parentId ? doc.nodes[first.parentId] : null;
-  if (!parent) throw new Error("页面与主组件都是根节点，不能分组");
+  if (!parent) throw new AppError("core.group.root");
   const parentWorld = worldRect(doc, parent.id);
   if (!parentWorld) throw new Error(`父节点 ${parent.id} 不存在`);
 
@@ -85,9 +86,9 @@ export function expandGroup(doc: DocState, params: GroupParams): Command[] {
 /** 解组：子节点提升到组的父级、保持世界坐标、插回组原来的位置。 */
 export function expandUngroup(doc: DocState, params: { nodeId: NodeId }): Command[] {
   const group = doc.nodes[params.nodeId];
-  if (!group || group.type !== "group") throw new Error("只有分组可以解组");
+  if (!group || group.type !== "group") throw new AppError("core.ungroup.notGroup");
   const parent = group.parentId ? doc.nodes[group.parentId] : null;
-  if (!parent) throw new Error("根级分组不能解组");
+  if (!parent) throw new AppError("core.ungroup.root");
   const parentWorld = worldRect(doc, parent.id);
   if (!parentWorld) throw new Error(`父节点 ${parent.id} 不存在`);
   const index = parent.children.indexOf(group.id);

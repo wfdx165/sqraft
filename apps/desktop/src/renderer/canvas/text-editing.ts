@@ -18,6 +18,7 @@ import {
 import { worldToScreen, type Viewport } from "@sqraft/render";
 import { dispatch, docStore, select, ui } from "../store";
 import { textSizeOf } from "../text-metrics";
+import { t } from "../i18n";
 
 export interface TextEditState {
   id: NodeId;
@@ -98,7 +99,7 @@ export function useTextEditing(vp: Viewport, markDirty: () => void) {
     const a = worldToScreen(vp, r.x, r.y);
     const scale = vp.zoom;
     const style = resolveNumericStyle(docStore.doc, node.style);
-    const size = textSizeOf(node, style, node.text ?? "文本", docStore.doc);
+    const size = textSizeOf(node, style, node.text || t("node.text"), docStore.doc);
     const fixed = (node.textAutoResize ?? "auto-width") === "fixed";
     const css = cssFor(node, scale);
     const alignY = node.style.textVerticalAlign ?? "top";

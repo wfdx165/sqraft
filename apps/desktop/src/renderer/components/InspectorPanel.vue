@@ -5,6 +5,7 @@ import ImageSection from "./ImageSection.vue";
 import TokenLink from "./TokenLink.vue";
 import { EFFECT_TYPES } from "@sqraft/core";
 import { docStore, ui } from "../store";
+import { t } from "../i18n";
 
 const {
   lockedChain,
@@ -155,32 +156,31 @@ const {
   allComponents,
   overrideView,
   outerOverrideView,
-  FIELD_LABELS,
 } = useInspector();
 </script>
 
 <template>
   <div class="panel" :data-version="ui.version">
-    <header><span class="micro-label">检查器</span></header>
+    <header><span class="micro-label">{{ t("inspector.title") }}</span></header>
 
     <div v-if="ui.mode === 'pan'" class="empty">
-      <p>拖动模式 · 浏览视图</p>
-      <span>拖动画布查看页面；点「编辑」或按 V 回到编辑模式</span>
+      <p>{{ t("inspector.browseMode") }}</p>
+      <span>{{ t("inspector.browseHint") }}</span>
     </div>
 
     <template v-else-if="node">
       <section class="block meta">
         <div class="meta-row">
-          <label>{{ multi ? "选区" : "名称" }}</label>
+          <label>{{ multi ? t("inspector.selection") : t("inspector.name") }}</label>
           <input v-if="!multi" class="name-input" :value="node.name" spellcheck="false" @change="setName" />
-          <span v-else class="name-input mixed-text">已选 {{ nodes.length }} 个图层</span>
+          <span v-else class="name-input mixed-text">{{ t("inspector.selectedLayers", { count: nodes.length }) }}</span>
           <span class="type-tag">{{ multi ? "multi" : typeLabel(node) }}</span>
         </div>
         <div v-if="!multi" class="meta-row">
           <label>ID</label>
           <code class="node-id" :title="node.id">{{ node.id }}</code>
-          <button class="copy" :class="{ on: copied }" title="复制 ID" @click="copyId">
-            {{ copied ? "已复制" : "复制" }}
+          <button class="copy" :class="{ on: copied }" :title="t('inspector.copyId')" @click="copyId">
+            {{ copied ? t("common.copied") : t("common.copy") }}
           </button>
         </div>
       </section>
@@ -189,19 +189,19 @@ const {
 
       <section v-if="readonly" class="block">
         <div class="row">
-          <span class="muted">该图层已锁定；解锁后才能编辑。</span>
-          <button class="mini" @click="toggleLock">解锁</button>
+          <span class="muted">{{ t("inspector.lockedHint") }}</span>
+          <button class="mini" @click="toggleLock">{{ t("inspector.unlock") }}</button>
         </div>
       </section>
 
       <section v-if="!multi" class="block">
         <div class="label-row">
-          <span class="micro-label">位置与尺寸</span>
+          <span class="micro-label">{{ t("inspector.positionSize") }}</span>
           <div class="icon-group">
-            <button class="icon-btn" :class="{ off: !node.visible }" title="显示/隐藏" @click="toggleVisible">
+            <button class="icon-btn" :class="{ off: !node.visible }" :title="t('inspector.showHide')" @click="toggleVisible">
               {{ node.visible ? "◉" : "○" }}
             </button>
-            <button class="icon-btn" :class="{ on: node.locked }" title="锁定/解锁" @click="toggleLock">
+            <button class="icon-btn" :class="{ on: node.locked }" :title="t('inspector.lockUnlock')" @click="toggleLock">
               {{ node.locked ? "🔒" : "🔓" }}
             </button>
           </div>
@@ -241,31 +241,31 @@ const {
           </div>
         </div>
         <div v-if="node.type !== 'page'" class="grid two">
-          <label>旋转</label>
+          <label>{{ t("inspector.rotation") }}</label>
           <input class="mono" type="number" step="1" :value="fmt(node.rotation)" :disabled="readonly" @change="setRotation($event)" />
-          <label>不透明度</label>
+          <label>{{ t("inspector.opacity") }}</label>
           <input class="mono" type="number" min="0" max="100" step="1" :value="Math.round((node.opacity ?? 1) * 100)" :disabled="readonly" @change="setOpacity($event)" />
         </div>
       </section>
 
       <!-- 对齐与分布：单选对齐父内容区、多选对齐选区包围盒；自动布局子项置灰 -->
       <section v-if="showAlign" class="block">
-        <span class="micro-label">对齐</span>
+        <span class="micro-label">{{ t("inspector.align") }}</span>
         <div class="align-row">
-          <button class="icon-btn" :disabled="!canAlign" title="左对齐" @click="align('left')"><Icon name="align-left" :size="14" /></button>
-          <button class="icon-btn" :disabled="!canAlign" title="水平居中" @click="align('h-center')"><Icon name="align-h-center" :size="14" /></button>
-          <button class="icon-btn" :disabled="!canAlign" title="右对齐" @click="align('right')"><Icon name="align-right" :size="14" /></button>
-          <button class="icon-btn" :disabled="!canAlign" title="顶对齐" @click="align('top')"><Icon name="align-top" :size="14" /></button>
-          <button class="icon-btn" :disabled="!canAlign" title="垂直居中" @click="align('v-center')"><Icon name="align-v-center" :size="14" /></button>
-          <button class="icon-btn" :disabled="!canAlign" title="底对齐" @click="align('bottom')"><Icon name="align-bottom" :size="14" /></button>
-          <button class="icon-btn" :disabled="!canDistribute" title="水平等间距（至少 3 个图层）" @click="distribute('horizontal')"><Icon name="distribute-h" :size="14" /></button>
-          <button class="icon-btn" :disabled="!canDistribute" title="垂直等间距（至少 3 个图层）" @click="distribute('vertical')"><Icon name="distribute-v" :size="14" /></button>
+          <button class="icon-btn" :disabled="!canAlign" :title="t('inspector.alignLeft')" @click="align('left')"><Icon name="align-left" :size="14" /></button>
+          <button class="icon-btn" :disabled="!canAlign" :title="t('inspector.alignHCenter')" @click="align('h-center')"><Icon name="align-h-center" :size="14" /></button>
+          <button class="icon-btn" :disabled="!canAlign" :title="t('inspector.alignRight')" @click="align('right')"><Icon name="align-right" :size="14" /></button>
+          <button class="icon-btn" :disabled="!canAlign" :title="t('inspector.alignTop')" @click="align('top')"><Icon name="align-top" :size="14" /></button>
+          <button class="icon-btn" :disabled="!canAlign" :title="t('inspector.alignVCenter')" @click="align('v-center')"><Icon name="align-v-center" :size="14" /></button>
+          <button class="icon-btn" :disabled="!canAlign" :title="t('inspector.alignBottom')" @click="align('bottom')"><Icon name="align-bottom" :size="14" /></button>
+          <button class="icon-btn" :disabled="!canDistribute" :title="t('inspector.distributeH')" @click="distribute('horizontal')"><Icon name="distribute-h" :size="14" /></button>
+          <button class="icon-btn" :disabled="!canDistribute" :title="t('inspector.distributeV')" @click="distribute('vertical')"><Icon name="distribute-v" :size="14" /></button>
         </div>
-        <p v-if="!canAlign" class="hint">自动布局子项的位置由布局决定，不能手动对齐</p>
+        <p v-if="!canAlign" class="hint">{{ t("inspector.autoAlignHint") }}</p>
       </section>
 
       <section v-if="multi" class="block">
-        <span class="micro-label">批量变换</span>
+        <span class="micro-label">{{ t("inspector.batch") }}</span>
         <!-- 包围盒语义：X/Y 平移整体，W/H 等比缩放整体 -->
         <div class="grid two" v-if="selectionBounds">
           <label>X</label>
@@ -278,32 +278,32 @@ const {
           <input class="mono" type="number" step="1" :value="fmt(selectionBounds.height)" :disabled="readonly" @change="setBoundsNumber('h', $event)" />
         </div>
         <div class="grid two">
-          <label>旋转</label>
-          <input class="mono" type="number" step="1" :value="numValue(shared((n) => n.rotation))" placeholder="混合" :disabled="readonly" @change="setRotation($event)" />
-          <label>不透明度</label>
-          <input class="mono" type="number" min="0" max="100" step="1" :value="shared((n) => Math.round((n.opacity ?? 1) * 100)) === MIXED ? '' : String(shared((n) => Math.round((n.opacity ?? 1) * 100)))" placeholder="混合" :disabled="readonly" @change="setOpacity($event)" />
+          <label>{{ t("inspector.rotation") }}</label>
+          <input class="mono" type="number" step="1" :value="numValue(shared((n) => n.rotation))" :placeholder="t('inspector.mixed')" :disabled="readonly" @change="setRotation($event)" />
+          <label>{{ t("inspector.opacity") }}</label>
+          <input class="mono" type="number" min="0" max="100" step="1" :value="shared((n) => Math.round((n.opacity ?? 1) * 100)) === MIXED ? '' : String(shared((n) => Math.round((n.opacity ?? 1) * 100)))" :placeholder="t('inspector.mixed')" :disabled="readonly" @change="setOpacity($event)" />
         </div>
         <div class="row">
-          <button class="mini" :disabled="readonly" @click="applyNodes((n) => ({ visible: !n.visible }))">切换可见性</button>
-          <button class="mini" :disabled="readonly" @click="applyNodes((n) => ({ locked: !n.locked }))">切换锁定</button>
+          <button class="mini" :disabled="readonly" @click="applyNodes((n) => ({ visible: !n.visible }))">{{ t("inspector.toggleVisible") }}</button>
+          <button class="mini" :disabled="readonly" @click="applyNodes((n) => ({ locked: !n.locked }))">{{ t("inspector.toggleLock") }}</button>
         </div>
       </section>
 
       <!-- 子项布局：sizing 之外的最小/最大与绝对定位 -->
       <section v-if="!multi && supportsSizing" class="block">
-        <span class="micro-label">布局项</span>
+        <span class="micro-label">{{ t("inspector.layoutItem") }}</span>
         <div class="row">
-          <label>绝对定位</label>
+          <label>{{ t("inspector.absolute") }}</label>
           <input type="checkbox" class="checkbox" :checked="Boolean(node.layoutAbsolute)" :disabled="readonly" @change="toggleAbsolute" />
         </div>
         <div class="grid two" v-if="!node.layoutAbsolute">
-          <label>最小 W</label>
+          <label>{{ t("inspector.minW") }}</label>
           <input class="mono" type="number" :value="node.layoutMinW ?? ''" :disabled="readonly" @change="setLayoutNumber('layoutMinW', $event)" />
-          <label>最小 H</label>
+          <label>{{ t("inspector.minH") }}</label>
           <input class="mono" type="number" :value="node.layoutMinH ?? ''" :disabled="readonly" @change="setLayoutNumber('layoutMinH', $event)" />
-          <label>最大 W</label>
+          <label>{{ t("inspector.maxW") }}</label>
           <input class="mono" type="number" :value="node.layoutMaxW ?? ''" :disabled="readonly" @change="setLayoutNumber('layoutMaxW', $event)" />
-          <label>最大 H</label>
+          <label>{{ t("inspector.maxH") }}</label>
           <input class="mono" type="number" :value="node.layoutMaxH ?? ''" :disabled="readonly" @change="setLayoutNumber('layoutMaxH', $event)" />
         </div>
       </section>
@@ -311,115 +311,115 @@ const {
       <!-- 自动布局容器 -->
       <section v-if="!multi && (supportsLayout || node.type === 'instance')" class="block">
         <div class="label-row">
-          <span class="micro-label">自动布局</span>
+          <span class="micro-label">{{ t("inspector.autoLayout") }}</span>
           <button
             v-if="supportsLayout && !node.layout"
             class="mini"
             :disabled="readonly"
             @click="addLayout"
-          >+ 添加</button>
+          >{{ t("inspector.add") }}</button>
           <button
             v-else-if="supportsLayout && node.layout"
             class="mini"
             :disabled="readonly"
             @click="removeLayout"
-          >移除</button>
+          >{{ t("inspector.remove") }}</button>
         </div>
 
         <template v-if="node.layout">
           <div class="seg">
-            <button :class="{ on: node.layout.direction === 'horizontal' }" :disabled="readonly" @click="setLayout({ direction: 'horizontal' })">横向</button>
-            <button :class="{ on: node.layout.direction === 'vertical' }" :disabled="readonly" @click="setLayout({ direction: 'vertical' })">纵向</button>
+            <button :class="{ on: node.layout.direction === 'horizontal' }" :disabled="readonly" @click="setLayout({ direction: 'horizontal' })">{{ t("inspector.horizontal") }}</button>
+            <button :class="{ on: node.layout.direction === 'vertical' }" :disabled="readonly" @click="setLayout({ direction: 'vertical' })">{{ t("inspector.vertical") }}</button>
           </div>
           <div class="grid two">
-            <label>间距</label>
+            <label>{{ t("inspector.gap") }}</label>
             <div class="field-with-token">
               <input class="mono" type="number" :value="fmt(layoutView?.gap ?? 0)" :disabled="readonly" @change="setLayout({ gap: num($event) })" />
               <TokenLink :token="layoutTokenOf('gap')" :disabled="readonly" @open="openLayoutToken('gap', $event)" />
             </div>
-            <label>内边距</label>
+            <label>{{ t("inspector.padding") }}</label>
             <div class="field-with-select">
-              <input class="mono" type="number" :value="numValue(paddingUnified())" placeholder="混合" :disabled="readonly" @change="setPaddingAll" />
+              <input class="mono" type="number" :value="numValue(paddingUnified())" :placeholder="t('inspector.mixed')" :disabled="readonly" @change="setPaddingAll" />
               <TokenLink :token="allPaddingToken()" :disabled="readonly" @open="openPaddingToken('all', $event)" />
               <button class="mini corner-toggle" :disabled="readonly" @click="paddingExpanded = !paddingExpanded">
-                {{ paddingExpanded ? "统一" : "分边" }}
+                {{ paddingExpanded ? t("inspector.uniform") : t("inspector.sides") }}
               </button>
             </div>
           </div>
           <div v-if="paddingExpanded" class="grid two">
-            <label>上</label>
+            <label>{{ t("inspector.top") }}</label>
             <div class="field-with-token">
               <input class="mono" type="number" :value="fmt(paddingOf(node).top)" :disabled="readonly" @change="setPaddingSide('top', $event)" />
               <TokenLink :token="paddingTokenOf('top')" :disabled="readonly" @open="openPaddingToken('top', $event)" />
             </div>
-            <label>右</label>
+            <label>{{ t("inspector.right") }}</label>
             <div class="field-with-token">
               <input class="mono" type="number" :value="fmt(paddingOf(node).right)" :disabled="readonly" @change="setPaddingSide('right', $event)" />
               <TokenLink :token="paddingTokenOf('right')" :disabled="readonly" @open="openPaddingToken('right', $event)" />
             </div>
-            <label>下</label>
+            <label>{{ t("inspector.bottom") }}</label>
             <div class="field-with-token">
               <input class="mono" type="number" :value="fmt(paddingOf(node).bottom)" :disabled="readonly" @change="setPaddingSide('bottom', $event)" />
               <TokenLink :token="paddingTokenOf('bottom')" :disabled="readonly" @open="openPaddingToken('bottom', $event)" />
             </div>
-            <label>左</label>
+            <label>{{ t("inspector.left") }}</label>
             <div class="field-with-token">
               <input class="mono" type="number" :value="fmt(paddingOf(node).left)" :disabled="readonly" @change="setPaddingSide('left', $event)" />
               <TokenLink :token="paddingTokenOf('left')" :disabled="readonly" @open="openPaddingToken('left', $event)" />
             </div>
           </div>
           <div class="grid two">
-            <label>主轴</label>
+            <label>{{ t("inspector.mainAxis") }}</label>
             <select :value="node.layout.mainAlign" :disabled="readonly" @change="setMainAlign">
-              <option value="start">起始</option>
-              <option value="center">居中</option>
-              <option value="end">末尾</option>
-              <option value="space-between">两端对齐</option>
+              <option value="start">{{ t("inspector.start") }}</option>
+              <option value="center">{{ t("inspector.center") }}</option>
+              <option value="end">{{ t("inspector.end") }}</option>
+              <option value="space-between">{{ t("inspector.spaceBetween") }}</option>
             </select>
-            <label>交叉轴</label>
+            <label>{{ t("inspector.crossAxis") }}</label>
             <select :value="node.layout.crossAlign" :disabled="readonly" @change="setCrossAlign">
-              <option value="start">起始</option>
-              <option value="center">居中</option>
-              <option value="end">末尾</option>
-              <option value="stretch">拉伸</option>
+              <option value="start">{{ t("inspector.start") }}</option>
+              <option value="center">{{ t("inspector.center") }}</option>
+              <option value="end">{{ t("inspector.end") }}</option>
+              <option value="stretch">{{ t("inspector.stretch") }}</option>
             </select>
           </div>
           <div class="row">
-            <label>换行</label>
+            <label>{{ t("inspector.wrap") }}</label>
             <input type="checkbox" class="checkbox" :checked="node.layout.wrap" :disabled="readonly" @change="setLayout({ wrap: boolOf($event) })" />
-            <label v-if="node.layout.wrap" class="inline-label">行距</label>
+            <label v-if="node.layout.wrap" class="inline-label">{{ t("inspector.rowGap") }}</label>
             <div v-if="node.layout.wrap" class="field-with-token">
               <input class="mono" type="number" :value="fmt(layoutView?.crossGap ?? 0)" :disabled="readonly" @change="setLayout({ crossGap: num($event) })" />
               <TokenLink :token="layoutTokenOf('crossGap')" :disabled="readonly" @open="openLayoutToken('crossGap', $event)" />
             </div>
           </div>
           <div v-if="node.layout.wrap" class="grid two">
-            <label>多行</label>
+            <label>{{ t("inspector.multiline") }}</label>
             <select :value="node.layout.alignContent" :disabled="readonly" @change="setAlignContent">
-              <option value="start">起始</option>
-              <option value="center">居中</option>
-              <option value="end">末尾</option>
-              <option value="space-between">两端对齐</option>
-              <option value="stretch">拉伸</option>
+              <option value="start">{{ t("inspector.start") }}</option>
+              <option value="center">{{ t("inspector.center") }}</option>
+              <option value="end">{{ t("inspector.end") }}</option>
+              <option value="space-between">{{ t("inspector.spaceBetween") }}</option>
+              <option value="stretch">{{ t("inspector.stretch") }}</option>
             </select>
           </div>
         </template>
-        <div v-else class="row"><span class="muted">未启用自动布局</span></div>
+        <div v-else class="row"><span class="muted">{{ t("inspector.autoLayoutOff") }}</span></div>
       </section>
 
       <!-- 文本 -->
       <section v-if="allText" class="block">
         <div class="label-row">
-          <span class="micro-label">文本</span>
+          <span class="micro-label">{{ t("inspector.text") }}</span>
           <select class="inline-select" :value="node.textAutoResize ?? 'auto-width'" :disabled="readonly || multi" @change="setAutoResize">
-            <option value="auto-width">自动宽度</option>
-            <option value="auto-height">自动高度</option>
-            <option value="fixed">固定尺寸</option>
+            <option value="auto-width">{{ t("inspector.autoWidth") }}</option>
+            <option value="auto-height">{{ t("inspector.autoHeight") }}</option>
+            <option value="fixed">{{ t("inspector.fixed") }}</option>
           </select>
         </div>
-        <div v-if="multi" class="row"><span class="muted">多选：排版改动会应用到全部文本图层</span></div>
+        <div v-if="multi" class="row"><span class="muted">{{ t("inspector.multiText") }}</span></div>
         <div v-if="!multi" class="row text-row">
-          <label>文案</label>
+          <label>{{ t("inspector.content") }}</label>
           <textarea
             ref="textAreaEl"
             class="text-area"
@@ -433,44 +433,44 @@ const {
           />
         </div>
         <div class="grid two">
-          <label>字体</label>
+          <label>{{ t("inspector.font") }}</label>
           <div class="field-with-select">
             <select :value="node.style.fontFamily ?? FONT_STACKS[0].value" :disabled="readonly" @change="setTextStyle('fontFamily', $event)">
-              <option v-for="f in FONT_STACKS" :key="f.value" :value="f.value">{{ f.label }}</option>
-              <optgroup v-if="importedFamilies.length" label="已导入">
+              <option v-for="f in FONT_STACKS" :key="f.value" :value="f.value">{{ t(f.labelKey) }}</option>
+              <optgroup v-if="importedFamilies.length" :label="t('inspector.imported')">
                 <option v-for="f in importedFamilies" :key="f" :value="`'${f}', sans-serif`">{{ f }}</option>
               </optgroup>
             </select>
-            <button class="mini" :disabled="readonly" title="导入字体文件（ttf/otf/woff/woff2）" @click="fontInput?.click()">导入…</button>
+            <button class="mini" :disabled="readonly" :title="t('inspector.importFontTitle')" @click="fontInput?.click()">{{ t("inspector.import") }}</button>
           </div>
           <input ref="fontInput" type="file" accept=".ttf,.otf,.woff,.woff2" class="hidden-input" @change="importFont" />
-          <label>字重</label>
+          <label>{{ t("inspector.weight") }}</label>
           <select :value="String(node.style.fontWeight ?? 400)" :disabled="readonly" @change="setTextStyle('fontWeight', $event, Number)">
             <option v-for="w in weightOptions" :key="w" :value="String(w)">{{ w }}</option>
           </select>
-          <label>字号</label>
+          <label>{{ t("inspector.size") }}</label>
           <div class="field-with-token">
             <input class="mono" type="number" min="1" :value="fmt(styleView?.fontSize ?? 20)" :disabled="readonly" @change="setTextStyle('fontSize', $event, Number)" />
             <TokenLink :token="scalarTokenOf('fontSize')" :disabled="readonly" @open="openScalarToken('fontSize', $event)" />
           </div>
-          <label>行高</label>
+          <label>{{ t("inspector.lineHeight") }}</label>
           <div class="field-with-select">
             <input
               class="mono"
               type="number"
               :value="node.style.lineHeightUnit === 'auto' || !node.style.lineHeightUnit ? '' : fmt(styleView?.lineHeight ?? 0)"
-              placeholder="自动"
+              :placeholder="t('inspector.auto')"
               :disabled="readonly || !node.style.lineHeightUnit || node.style.lineHeightUnit === 'auto'"
               @change="setTextStyle('lineHeight', $event, Number)"
             />
             <TokenLink :token="scalarTokenOf('lineHeight')" :disabled="readonly" @open="openScalarToken('lineHeight', $event)" />
             <select :value="node.style.lineHeightUnit ?? 'auto'" :disabled="readonly" @change="setTextStyle('lineHeightUnit', $event)">
-              <option value="auto">自动</option>
+              <option value="auto">{{ t("inspector.auto") }}</option>
               <option value="px">px</option>
               <option value="percent">%</option>
             </select>
           </div>
-          <label>字距</label>
+          <label>{{ t("inspector.letterSpacing") }}</label>
           <div class="field-with-select">
             <input class="mono" type="number" :value="fmt(styleView?.letterSpacing ?? 0)" :disabled="readonly" @change="setTextStyle('letterSpacing', $event, Number)" />
             <TokenLink :token="scalarTokenOf('letterSpacing')" :disabled="readonly" @open="openScalarToken('letterSpacing', $event)" />
@@ -479,14 +479,14 @@ const {
               <option value="percent">%</option>
             </select>
           </div>
-          <label>段距</label>
+          <label>{{ t("inspector.paragraphSpacing") }}</label>
           <div class="field-with-token">
             <input class="mono" type="number" :value="fmt(styleView?.paragraphSpacing ?? 0)" :disabled="readonly" @change="setTextStyle('paragraphSpacing', $event, Number)" />
             <TokenLink :token="scalarTokenOf('paragraphSpacing')" :disabled="readonly" @open="openScalarToken('paragraphSpacing', $event)" />
           </div>
         </div>
         <div class="row">
-          <label>斜体</label>
+          <label>{{ t("inspector.italic") }}</label>
           <input
             type="checkbox"
             class="checkbox"
@@ -494,7 +494,7 @@ const {
             :disabled="readonly"
             @change="applyTextStyle({ fontStyle: boolOf($event) ? 'italic' : 'normal' })"
           />
-          <label class="inline-label">截断</label>
+          <label class="inline-label">{{ t("inspector.truncate") }}</label>
           <input
             type="checkbox"
             class="checkbox"
@@ -502,51 +502,51 @@ const {
             :disabled="readonly || (node.textAutoResize ?? 'auto-width') !== 'fixed'"
             @change="setTruncate"
           />
-          <label class="inline-label">列表</label>
+          <label class="inline-label">{{ t("inspector.list") }}</label>
           <select class="inline-select" :value="node.listType ?? 'none'" :disabled="readonly" @change="setListType">
-            <option value="none">无</option>
-            <option value="bulleted">项目符号</option>
-            <option value="numbered">编号</option>
+            <option value="none">{{ t("inspector.listNone") }}</option>
+            <option value="bulleted">{{ t("inspector.listBulleted") }}</option>
+            <option value="numbered">{{ t("inspector.listNumbered") }}</option>
           </select>
         </div>
         <div class="seg small">
-          <button :class="{ on: (node.style.textAlign ?? 'left') === 'left' }" :disabled="readonly" @click="applyTextStyle({ textAlign: 'left' })">左</button>
-          <button :class="{ on: node.style.textAlign === 'center' }" :disabled="readonly" @click="applyTextStyle({ textAlign: 'center' })">中</button>
-          <button :class="{ on: node.style.textAlign === 'right' }" :disabled="readonly" @click="applyTextStyle({ textAlign: 'right' })">右</button>
-          <button :class="{ on: node.style.textAlign === 'justify' }" :disabled="readonly" @click="applyTextStyle({ textAlign: 'justify' })">两端</button>
+          <button :class="{ on: (node.style.textAlign ?? 'left') === 'left' }" :disabled="readonly" @click="applyTextStyle({ textAlign: 'left' })">{{ t("inspector.alignTextLeft") }}</button>
+          <button :class="{ on: node.style.textAlign === 'center' }" :disabled="readonly" @click="applyTextStyle({ textAlign: 'center' })">{{ t("inspector.alignTextCenter") }}</button>
+          <button :class="{ on: node.style.textAlign === 'right' }" :disabled="readonly" @click="applyTextStyle({ textAlign: 'right' })">{{ t("inspector.alignTextRight") }}</button>
+          <button :class="{ on: node.style.textAlign === 'justify' }" :disabled="readonly" @click="applyTextStyle({ textAlign: 'justify' })">{{ t("inspector.alignTextJustify") }}</button>
         </div>
         <div class="seg small">
-          <button :class="{ on: (node.style.textVerticalAlign ?? 'top') === 'top' }" :disabled="readonly" @click="applyTextStyle({ textVerticalAlign: 'top' })">上</button>
-          <button :class="{ on: node.style.textVerticalAlign === 'middle' }" :disabled="readonly" @click="applyTextStyle({ textVerticalAlign: 'middle' })">中</button>
-          <button :class="{ on: node.style.textVerticalAlign === 'bottom' }" :disabled="readonly" @click="applyTextStyle({ textVerticalAlign: 'bottom' })">下</button>
+          <button :class="{ on: (node.style.textVerticalAlign ?? 'top') === 'top' }" :disabled="readonly" @click="applyTextStyle({ textVerticalAlign: 'top' })">{{ t("inspector.verticalTop") }}</button>
+          <button :class="{ on: node.style.textVerticalAlign === 'middle' }" :disabled="readonly" @click="applyTextStyle({ textVerticalAlign: 'middle' })">{{ t("inspector.verticalMiddle") }}</button>
+          <button :class="{ on: node.style.textVerticalAlign === 'bottom' }" :disabled="readonly" @click="applyTextStyle({ textVerticalAlign: 'bottom' })">{{ t("inspector.verticalBottom") }}</button>
         </div>
         <div class="grid two">
-          <label>大小写</label>
+          <label>{{ t("inspector.case") }}</label>
           <select :value="node.style.textCase ?? 'none'" :disabled="readonly" @change="setTextStyle('textCase', $event)">
-            <option value="none">无</option>
-            <option value="upper">大写</option>
-            <option value="lower">小写</option>
-            <option value="title">标题</option>
+            <option value="none">{{ t("inspector.caseNone") }}</option>
+            <option value="upper">{{ t("inspector.caseUpper") }}</option>
+            <option value="lower">{{ t("inspector.caseLower") }}</option>
+            <option value="title">{{ t("inspector.caseTitle") }}</option>
           </select>
-          <label>装饰</label>
+          <label>{{ t("inspector.decoration") }}</label>
           <select :value="node.style.textDecoration ?? 'none'" :disabled="readonly" @change="setTextStyle('textDecoration', $event)">
-            <option value="none">无</option>
-            <option value="underline">下划线</option>
-            <option value="strikethrough">删除线</option>
+            <option value="none">{{ t("inspector.decorationNone") }}</option>
+            <option value="underline">{{ t("inspector.decorationUnderline") }}</option>
+            <option value="strikethrough">{{ t("inspector.decorationStrikethrough") }}</option>
           </select>
         </div>
       </section>
 
       <!-- 外观 -->
       <section v-if="supportsFill || supportsStroke" class="block">
-        <span class="micro-label">外观</span>
+        <span class="micro-label">{{ t("inspector.appearance") }}</span>
         <div v-if="supportsFill" class="row">
-          <label>{{ node.type === "page" ? "背景" : "填充" }}</label>
+          <label>{{ node.type === "page" ? t("inspector.background") : t("inspector.fill") }}</label>
           <div class="color-control">
             <span class="swatch" :style="{ background: colorOf(node.style.fill) }" />
             <select :value="fillTokenOf(node)" :disabled="readonly" @change="setFill">
-              <option value="">（无）</option>
-              <option value="__custom">自定义…</option>
+              <option value="">{{ t("inspector.none") }}</option>
+              <option value="__custom">{{ t("inspector.custom") }}</option>
               <option v-for="t in tokenNames" :key="t" :value="t">{{ t }}</option>
             </select>
           </div>
@@ -559,10 +559,10 @@ const {
         <!-- 页面背景图：盖在背景色之上 -->
         <template v-if="node.type === 'page'">
           <div class="row">
-            <label>背景图</label>
+            <label>{{ t("inspector.backgroundImage") }}</label>
             <div class="color-control">
               <button class="mini" :disabled="readonly" @click="backgroundInput?.click()">
-                {{ node.backgroundImage ? "更换…" : "选择…" }}
+                {{ node.backgroundImage ? t("inspector.change") : t("inspector.choose") }}
               </button>
               <select
                 v-if="node.backgroundImage"
@@ -570,12 +570,12 @@ const {
                 :disabled="readonly"
                 @change="setBackgroundFit"
               >
-                <option value="cover">铺满</option>
-                <option value="contain">完整</option>
-                <option value="tile">平铺</option>
+                <option value="cover">{{ t("inspector.cover") }}</option>
+                <option value="contain">{{ t("inspector.contain") }}</option>
+                <option value="tile">{{ t("inspector.tile") }}</option>
               </select>
               <button v-if="node.backgroundImage" class="mini" :disabled="readonly" @click="clearBackgroundImage">
-                清除
+                {{ t("inspector.clear") }}
               </button>
             </div>
           </div>
@@ -583,12 +583,12 @@ const {
         </template>
 
         <div v-if="supportsStroke" class="row">
-          <label>描边</label>
+          <label>{{ t("inspector.stroke") }}</label>
           <div class="color-control">
             <span class="swatch" :style="{ background: colorOf(node.style.stroke) }" />
             <select :value="strokeTokenOf(node)" :disabled="readonly" @change="setStroke">
-              <option value="">（无）</option>
-              <option value="__custom">自定义…</option>
+              <option value="">{{ t("inspector.none") }}</option>
+              <option value="__custom">{{ t("inspector.custom") }}</option>
               <option v-for="t in tokenNames" :key="t" :value="t">{{ t }}</option>
             </select>
           </div>
@@ -599,54 +599,54 @@ const {
           <input class="mono hex" :value="node.style.stroke.value ?? ''" :disabled="readonly" @change="setCustomPaint('stroke', $event)" />
         </div>
         <div v-if="supportsStroke" class="row">
-          <label>线宽</label>
+          <label>{{ t("inspector.strokeWidth") }}</label>
           <div class="field-with-token">
             <input class="mono" type="number" min="0" step="0.5" :value="styleView?.strokeWidth ?? 1" :disabled="readonly" @change="setStrokeWidth($event)" />
             <TokenLink :token="scalarTokenOf('strokeWidth')" :disabled="readonly" @open="openScalarToken('strokeWidth', $event)" />
           </div>
         </div>
         <div v-if="supportsRadius" class="row">
-          <label>圆角</label>
+          <label>{{ t("inspector.radius") }}</label>
           <div class="field-with-select">
-            <input class="mono" type="number" min="0" :value="numValue(radiusUnified())" placeholder="混合" :disabled="readonly" @change="setRadiusAll" />
+            <input class="mono" type="number" min="0" :value="numValue(radiusUnified())" :placeholder="t('inspector.mixed')" :disabled="readonly" @change="setRadiusAll" />
             <TokenLink :token="allCornerToken()" :disabled="readonly" @open="openCornerToken('all', $event)" />
             <button class="mini corner-toggle" :disabled="readonly" @click="radiusExpanded = !radiusExpanded">
-              {{ radiusExpanded ? "统一" : "四角" }}
+              {{ radiusExpanded ? t("inspector.radiusUniform") : t("inspector.radiusCorners") }}
             </button>
           </div>
         </div>
         <div v-if="supportsRadius && radiusExpanded" class="grid two">
-          <label>左上</label>
+          <label>{{ t("inspector.topLeft") }}</label>
           <div class="field-with-token">
             <input class="mono" type="number" min="0" :value="fmt(radiusOf(node).topLeft)" :disabled="readonly" @change="setRadiusCorner('topLeft', $event)" />
             <TokenLink :token="cornerTokenOf('topLeft')" :disabled="readonly" @open="openCornerToken('topLeft', $event)" />
           </div>
-          <label>右上</label>
+          <label>{{ t("inspector.topRight") }}</label>
           <div class="field-with-token">
             <input class="mono" type="number" min="0" :value="fmt(radiusOf(node).topRight)" :disabled="readonly" @change="setRadiusCorner('topRight', $event)" />
             <TokenLink :token="cornerTokenOf('topRight')" :disabled="readonly" @open="openCornerToken('topRight', $event)" />
           </div>
-          <label>右下</label>
+          <label>{{ t("inspector.bottomRight") }}</label>
           <div class="field-with-token">
             <input class="mono" type="number" min="0" :value="fmt(radiusOf(node).bottomRight)" :disabled="readonly" @change="setRadiusCorner('bottomRight', $event)" />
             <TokenLink :token="cornerTokenOf('bottomRight')" :disabled="readonly" @open="openCornerToken('bottomRight', $event)" />
           </div>
-          <label>左下</label>
+          <label>{{ t("inspector.bottomLeft") }}</label>
           <div class="field-with-token">
             <input class="mono" type="number" min="0" :value="fmt(radiusOf(node).bottomLeft)" :disabled="readonly" @change="setRadiusCorner('bottomLeft', $event)" />
             <TokenLink :token="cornerTokenOf('bottomLeft')" :disabled="readonly" @open="openCornerToken('bottomLeft', $event)" />
           </div>
         </div>
         <div v-if="supportsClip" class="row">
-          <label>裁剪内容</label>
+          <label>{{ t("inspector.clip") }}</label>
           <input type="checkbox" class="checkbox" :checked="node.clip" :disabled="readonly" @change="toggleClip" />
         </div>
         <div v-if="!multi && node.type === 'path'" class="row">
-          <label>闭合</label>
+          <label>{{ t("inspector.closed") }}</label>
           <input type="checkbox" class="checkbox" :checked="Boolean(node.vector?.closed)" :disabled="readonly || !canClosePath(node)" @change="setClosed" />
         </div>
         <div v-if="!multi && node.type === 'polygon'" class="row">
-          <label>边数</label>
+          <label>{{ t("inspector.sidesCount") }}</label>
           <input
             class="mono"
             type="number"
@@ -662,15 +662,15 @@ const {
 
       <!-- 效果：投影 / 内阴影 / 图层模糊 / 背景模糊（有序，整体替换） -->
       <section v-if="supportsEffects" class="block">
-        <span class="micro-label">效果</span>
+        <span class="micro-label">{{ t("inspector.effects") }}</span>
         <div v-for="(effect, index) in effectsOf(node)" :key="index" class="effect-item">
           <div class="row">
             <label>{{ effectLabel(effect.type) }}</label>
             <div class="effect-actions">
               <button class="mini" :disabled="readonly" @click="toggleEffect(index)">
-                {{ effect.visible ? "隐藏" : "显示" }}
+                {{ effect.visible ? t("inspector.hide") : t("inspector.show") }}
               </button>
-              <button class="mini" :disabled="readonly" @click="removeEffect(index)">删除</button>
+              <button class="mini" :disabled="readonly" @click="removeEffect(index)">{{ t("inspector.delete") }}</button>
             </div>
           </div>
           <template v-if="isShadowEffectOf(effect)">
@@ -679,18 +679,18 @@ const {
               <input class="mono" type="number" step="1" :value="fmt(effect.x)" :disabled="readonly" @change="setEffectNumber(index, 'x', $event)" />
               <label>Y</label>
               <input class="mono" type="number" step="1" :value="fmt(effect.y)" :disabled="readonly" @change="setEffectNumber(index, 'y', $event)" />
-              <label>模糊</label>
+              <label>{{ t("inspector.blur") }}</label>
               <input class="mono" type="number" min="0" step="1" :value="fmt(effect.blur)" :disabled="readonly" @change="setEffectNumber(index, 'blur', $event)" />
-              <label>扩散</label>
+              <label>{{ t("inspector.spread") }}</label>
               <input class="mono" type="number" step="1" :value="fmt(effect.spread)" :disabled="readonly" @change="setEffectNumber(index, 'spread', $event)" />
             </div>
             <div class="row sub-row">
-              <label>颜色</label>
+              <label>{{ t("inspector.color") }}</label>
               <div class="color-control">
                 <span class="swatch" :style="{ background: shadowColorOf(effect) }" />
                 <select :value="effect.color.token ?? (effect.color.value ? '__custom' : '')" :disabled="readonly" @change="setEffectColorToken(index, $event)">
-                  <option value="">（默认）</option>
-                  <option value="__custom">自定义…</option>
+                  <option value="">{{ t("inspector.default") }}</option>
+                  <option value="__custom">{{ t("inspector.custom") }}</option>
                   <option v-for="t in tokenNames" :key="t" :value="t">{{ t }}</option>
                 </select>
               </div>
@@ -702,78 +702,78 @@ const {
             </div>
           </template>
           <div v-else class="row">
-            <label>半径</label>
+            <label>{{ t("inspector.radiusValue") }}</label>
             <input class="mono" type="number" min="0" step="1" :value="fmt(effect.radius)" :disabled="readonly" @change="setEffectNumber(index, 'radius', $event)" />
           </div>
         </div>
         <div class="row">
           <label />
           <select class="effect-add" :value="''" :disabled="readonly" @change="addEffect(($event.target as HTMLSelectElement).value)">
-            <option value="">+ 添加效果…</option>
+            <option value="">{{ t("inspector.addEffect") }}</option>
             <option v-for="t in EFFECT_TYPES" :key="t" :value="t">{{ effectLabel(t) }}</option>
           </select>
         </div>
       </section>
 
       <section class="block" v-if="node.type === 'slot' || canMakeSlot">
-        <span class="micro-label">插槽</span>
+        <span class="micro-label">{{ t("inspector.slot") }}</span>
         <div v-if="canMakeSlot" class="row">
-          <button class="mini wide" @click="toSlot">转为插槽</button>
+          <button class="mini wide" @click="toSlot">{{ t("inspector.toSlot") }}</button>
         </div>
         <template v-else>
           <div class="row">
             <span class="muted">
-              {{ instanceOwner ? (node.slotFilled ? "已填充实例内容" : "显示母版默认内容") : "母版默认内容" }}
+              {{ instanceOwner ? (node.slotFilled ? t("inspector.slotFilled") : t("inspector.slotDefaultShown")) : t("inspector.slotDefault") }}
             </span>
           </div>
           <div class="row" v-if="instanceOwner">
-            <button class="mini wide" :disabled="!node.slotFilled" @click="clearSlot">清空插槽，恢复默认</button>
+            <button class="mini wide" :disabled="!node.slotFilled" @click="clearSlot">{{ t("inspector.clearSlot") }}</button>
           </div>
-          <div v-else class="row"><span class="muted">实例未填充时显示这些内容</span></div>
+          <div v-else class="row"><span class="muted">{{ t("inspector.slotHint") }}</span></div>
         </template>
       </section>
 
       <section class="block" v-if="node.type === 'component' || componentContext || instanceProps">
-        <span class="micro-label">组件属性</span>
+        <span class="micro-label">{{ t("inspector.componentProps") }}</span>
 
         <template v-if="node.type === 'component'">
-          <div v-if="!componentDefs.length" class="row"><span class="muted">暂无属性；选中母版里的图层可创建</span></div>
+          <div v-if="!componentDefs.length" class="row"><span class="muted">{{ t("inspector.noProps") }}</span></div>
           <div v-for="def in componentDefs" :key="def.id" class="prop-def">
             <input class="prop-name" :value="def.name" @change="renameDef(def, $event)" />
             <span class="muted">{{ propTypeLabel(def.type) }}</span>
-            <span class="muted prop-target">{{ def.targetMainId === node.id ? "整个组件" : (docStore.doc.nodes[def.targetMainId]?.name ?? "—") }}</span>
-            <button class="mini" @click="deleteDef(def)">删除</button>
+            <span class="muted prop-target">{{ def.targetMainId === node.id ? t("inspector.wholeComponent") : (docStore.doc.nodes[def.targetMainId]?.name ?? "—") }}</span>
+            <button class="mini" @click="deleteDef(def)">{{ t("inspector.delete") }}</button>
           </div>
-          <div class="row"><button class="mini wide" @click="defineProp('boolean')">创建布尔属性（整个组件可见性）</button></div>
+          <div class="row"><button class="mini wide" @click="defineProp('boolean')">{{ t("inspector.createBooleanWhole") }}</button></div>
         </template>
 
         <template v-else-if="componentContext">
           <div v-if="targetProp" class="row">
-            <span class="muted">已是组件属性：{{ targetProp.name }}（{{ propTypeLabel(targetProp.type) }}）</span>
+            <span class="muted">{{ t("inspector.alreadyProp", { name: targetProp.name, type: propTypeLabel(targetProp.type) }) }}</span>
           </div>
           <template v-else>
             <div class="row" v-if="node.type === 'text'">
-              <button class="mini wide" @click="defineProp('text')">创建文本属性</button>
+              <button class="mini wide" @click="defineProp('text')">{{ t("inspector.createTextProp") }}</button>
             </div>
-            <div class="row"><button class="mini wide" @click="defineProp('boolean')">创建布尔属性</button></div>
+            <div class="row"><button class="mini wide" @click="defineProp('boolean')">{{ t("inspector.createBooleanProp") }}</button></div>
             <div class="row" v-if="node.type === 'instance'">
-              <button class="mini wide" @click="defineProp('instance')">创建实例替换属性</button>
+              <button class="mini wide" @click="defineProp('instance')">{{ t("inspector.createInstanceProp") }}</button>
             </div>
           </template>
         </template>
 
         <template v-else-if="instanceProps">
           <div class="row">
-            <label>组件</label>
+            <label>{{ t("inspector.component") }}</label>
             <select :value="instanceProps.instance.componentId ?? ''" @change="onSwapComponent">
               <option v-for="c in allComponents" :key="c.id" :value="c.id">{{ c.name }}</option>
             </select>
           </div>
           <div class="row">
-            <button class="mini" @click="gotoMaster">去主组件</button>
-            <button class="mini" @click="detachInstance">脱离实例</button>
+            <button class="mini" @click="gotoMaster">{{ t("inspector.gotoMaster") }}</button>
+            <button class="mini" @click="detachInstance">{{ t("inspector.detach") }}</button>
           </div>
-          <div v-if="!instanceProps.defs.length" class="row"><span class="muted">该组件没有属性</span></div>
+          <div v-if="!instanceProps.defs.length" class="row"><span class="muted">{{ t("inspector.noComponentProps") }}</span></div>
           <div v-for="def in instanceProps.defs" :key="def.id" class="row prop-row">
             <label>{{ def.name }}</label>
             <template v-if="def.type === 'text'">
@@ -787,42 +787,42 @@ const {
                 <option v-for="c in allComponents" :key="c.id" :value="c.id">{{ c.name }}</option>
               </select>
             </template>
-            <button v-if="hasPropValue(def)" class="mini" @click="setProp(def, null)">重置</button>
+            <button v-if="hasPropValue(def)" class="mini" @click="setProp(def, null)">{{ t("inspector.reset") }}</button>
           </div>
         </template>
       </section>
 
       <section class="block" v-if="outerOverrideView">
-        <span class="micro-label">外层覆盖</span>
+        <span class="micro-label">{{ t("inspector.outerOverrides") }}</span>
         <div v-for="f in outerOverrideView.fields" :key="f" class="row ovr-row">
           <label>{{ fieldLabel(f) }}</label>
-          <button class="mini" @click="resetOuterField(f)">重置</button>
+          <button class="mini" @click="resetOuterField(f)">{{ t("inspector.reset") }}</button>
         </div>
       </section>
 
       <section class="block" v-if="instanceOwner">
-        <span class="micro-label">实例覆盖</span>
+        <span class="micro-label">{{ t("inspector.instanceOverrides") }}</span>
         <div class="row">
-          <span class="muted">{{ instanceOwner.isRoot ? "当前是实例根节点" : "位于实例内部" }}</span>
+          <span class="muted">{{ instanceOwner.isRoot ? t("inspector.instanceRoot") : t("inspector.insideInstance") }}</span>
         </div>
         <div v-if="overrideView">
           <div v-for="f in overrideView.fields" :key="f" class="row ovr-row">
             <label>{{ fieldLabel(f) }}</label>
-            <button class="mini" @click="resetField(f)">重置</button>
+            <button class="mini" @click="resetField(f)">{{ t("inspector.reset") }}</button>
           </div>
         </div>
         <div v-else class="row">
-          <span class="muted">当前图层没有覆盖</span>
+          <span class="muted">{{ t("inspector.noOverrides") }}</span>
         </div>
         <div class="row" v-if="instanceOwner.count">
-          <button class="mini wide" @click="resetAllOverrides">重置全部覆盖（{{ instanceOwner.count }} 个图层）</button>
+          <button class="mini wide" @click="resetAllOverrides">{{ t("inspector.resetAll", { count: instanceOwner.count }) }}</button>
         </div>
       </section>
     </template>
 
     <div v-else class="empty">
-      <p>未选中节点</p>
-      <span>选中画布对象以编辑属性</span>
+      <p>{{ t("inspector.noSelection") }}</p>
+      <span>{{ t("inspector.selectHint") }}</span>
     </div>
   </div>
 </template>

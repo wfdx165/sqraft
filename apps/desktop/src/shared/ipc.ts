@@ -2,6 +2,7 @@
  * 主进程与渲染层之间的唯一契约：通道名 + 请求/响应形状。
  * preload 按这里的类型实现 `window.sqraft`，渲染层只依赖 `SqraftApi`。
  */
+import type { LanguagePreference, Locale } from "./i18n";
 
 export interface OpenedFile {
   path: string;
@@ -46,6 +47,14 @@ export interface AppInfo {
   name: string;
   version: string;
   dataPath: string;
+  language: LanguagePreference;
+  locale: Locale;
+}
+
+/** 语言偏好的当前解析结果。 */
+export interface LanguageState {
+  language: LanguagePreference;
+  locale: Locale;
 }
 
 export interface McpSetupInfo {
@@ -205,6 +214,10 @@ export interface SqraftApi {
   };
   app: {
     info(): Promise<AppInfo>;
+    /** 改界面语言（auto / zh-CN / en-US / ja-JP / ko-KR），主进程持久化并广播解析结果 */
+    setLanguage(preference: LanguagePreference): Promise<LanguageState>;
+    /** 语言切换后的广播（已解析的 locale） */
+    onLanguageChange(handler: (locale: Locale) => void): () => void;
     /** 在访达中显示随包分发的许可文本（Electron / Chromium / 第三方） */
     showLicenses(): Promise<void>;
     /** 写系统剪贴板（渲染层不需要剪贴板权限） */
@@ -273,6 +286,8 @@ export const CHANNELS = {
   appClipboardNodesWrite: "app:clipboard-nodes-write",
   appClipboardNodesRead: "app:clipboard-nodes-read",
   appInfo: "app:info",
+  appSetLanguage: "app:set-language",
+  appLanguageChanged: "app:language-changed",
   /** 在访达里打开许可文本目录（关于面板的「开源许可」） */
   appShowLicenses: "app:show-licenses",
   recentList: "recent:list",

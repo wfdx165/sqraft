@@ -6,6 +6,7 @@
  * 由这里决定"粘文本"还是"粘图片"。
  */
 import { hooks, ui } from "./store";
+import { t } from "./i18n";
 
 function editableTarget(): HTMLElement | null {
   const el = document.activeElement as HTMLElement | null;
@@ -51,5 +52,5 @@ export async function pasteFromClipboard(): Promise<void> {
   if (await hooks.pasteNodes()) return;
   const bytes = await window.sqraft.app.readClipboardImage();
   if (!bytes) return;
-  await hooks.insertImageBytes(bytes, "粘贴的图片");
+  await hooks.insertImageBytes(bytes, t("image.pastedName"));
 }

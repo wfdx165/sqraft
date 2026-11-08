@@ -22,6 +22,7 @@ import {
 import { MAX_ASSET_BYTES, allAssets, hasAsset, putAsset } from "../assets";
 import { docStore, select, ui } from "../store";
 import { isLocked } from "./hit";
+import { t } from "../i18n";
 
 const PAYLOAD_VERSION = 1;
 
@@ -64,7 +65,7 @@ export async function copySelectionToClipboard(): Promise<boolean> {
     await window.sqraft.app.writeClipboardNodes(JSON.stringify(payload));
   } catch (error) {
     // 写系统剪贴板失败（权限、超大载荷）不能装作复制成功：用户下一步粘贴会没反应
-    await window.sqraft.dialog.error(`复制到剪贴板失败：${String(error)}`);
+    await window.sqraft.dialog.error(t("error.copyClipboard", { detail: String(error) }));
     return false;
   }
   return true;
@@ -123,17 +124,17 @@ export async function pasteNodesFromClipboard(deps: PasteDeps): Promise<boolean>
     payload = JSON.parse(raw) as ClipboardPayload;
   } catch {
     // 类型认出来了却读不懂：说清楚，别让它悄悄退化成"粘图片/文本"再无声失败
-    await window.sqraft.dialog.error("剪贴板里的图层数据无法解析，粘贴已取消。");
+    await window.sqraft.dialog.error(t("error.clipboardParse"));
     return true;
   }
   if (!isNodePayload(payload)) {
     // 载荷带着我们的 MIME 却读不懂：多半来自更新版本的 Sqraft，说清楚比静默强
-    await window.sqraft.dialog.error("剪贴板里的内容来自更新版本的 Sqraft，无法粘贴。");
+    await window.sqraft.dialog.error(t("error.clipboardNewer"));
     return true;
   }
   const safe = sanitizePayload(payload);
   if (!safe) {
-    await window.sqraft.dialog.error("剪贴板里的图层数据已损坏，无法粘贴。");
+    await window.sqraft.dialog.error(t("error.clipboardCorrupt"));
     return true;
   }
 

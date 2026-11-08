@@ -21,6 +21,7 @@ import {
 import { openTokenPicker } from "../token-picker";
 import { docStore } from "../store";
 import { showToast } from "../toast";
+import { t } from "../i18n";
 
 export type ScalarTokenField = NumericLiteralField;
 
@@ -101,7 +102,7 @@ export function createTokenBindings(deps: TokenBindingDeps) {
       return;
     }
     if (!deps.nodes.value.some((n) => n.type === "text")) {
-      showToast("当前选区没有文本图层", "error");
+      showToast(t("error.noTextSelection"), "error");
       return;
     }
     const patch = { [tokenKey]: path ?? undefined } as Partial<NodeStyle>;
@@ -147,7 +148,7 @@ export function createTokenBindings(deps: TokenBindingDeps) {
 
   function bindPaddingToken(side: keyof Padding | "all", path: string | null): void {
     if (!deps.nodes.value.some((n) => n.layout)) {
-      showToast("当前图层没有自动布局", "error");
+      showToast(t("error.noAutoLayout"), "error");
       return;
     }
     const sides = side === "all" ? PADDING_SIDE_KEYS : [side];
@@ -174,7 +175,7 @@ export function createTokenBindings(deps: TokenBindingDeps) {
 
   function bindLayoutToken(key: "gap" | "crossGap", path: string | null): void {
     if (!deps.nodes.value.some((n) => n.layout)) {
-      showToast("当前图层没有自动布局", "error");
+      showToast(t("error.noAutoLayout"), "error");
       return;
     }
     const tokenKey = key === "gap" ? "gapToken" : "crossGapToken";

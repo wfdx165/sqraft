@@ -5,6 +5,19 @@
 import { newId } from "@sqraft/core";
 import { dispatch, docStore, select, ui } from "../store";
 import { isLocked } from "./hit";
+import { t } from "../i18n";
+
+function nextGroupName(): string {
+  const base = t("node.group");
+  const used = new Set(
+    Object.values(docStore.doc.nodes)
+      .filter((node) => node.type === "group")
+      .map((node) => node.name),
+  );
+  let i = 1;
+  while (used.has(`${base} ${i}`)) i += 1;
+  return `${base} ${i}`;
+}
 
 export function groupSelection(): void {
   const ids = ui.selection.filter((id) => {
@@ -13,7 +26,7 @@ export function groupSelection(): void {
   });
   if (ids.length === 0) return;
   const groupId = newId();
-  dispatch({ type: "node.group", params: { nodeIds: ids, groupId } }, "分组");
+  dispatch({ type: "node.group", params: { nodeIds: ids, groupId, name: nextGroupName() } }, "分组");
   if (docStore.doc.nodes[groupId]) select([groupId]);
 }
 

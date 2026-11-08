@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watchEffect } from "vue";
+import { onBeforeUnmount, onMounted, ref, watch, watchEffect } from "vue";
 import Toolbar from "./components/Toolbar.vue";
 import PagesPanel from "./components/PagesPanel.vue";
 import InspectorPanel from "./components/InspectorPanel.vue";
@@ -11,6 +11,7 @@ import WelcomeView from "./components/WelcomeView.vue";
 import ConnectionStatus from "./components/ConnectionStatus.vue";
 import McpSetupPanel from "./components/McpSetupPanel.vue";
 import AboutPanel from "./components/AboutPanel.vue";
+import SettingsPanel from "./components/SettingsPanel.vue";
 import ExportPngDialog from "./components/ExportPngDialog.vue";
 import ContextMenu from "./components/ContextMenu.vue";
 import Toast from "./components/Toast.vue";
@@ -18,11 +19,12 @@ import TokenPicker from "./components/TokenPicker.vue";
 import { exportUi, hooks, ui } from "./store";
 import { openExportDefault } from "./export-actions";
 import { bindingRev, installShortcuts, keyOf, registerShortcuts, runAction, shortcutUi, type ActionId } from "./shortcuts";
-import { closeDocument, installFileSession, newDocument } from "./file-session";
+import { closeDocument, installFileSession, newDocument, syncTitle } from "./file-session";
 import { installMcpHost } from "./mcp-host";
 import { pasteFromClipboard } from "./paste";
 import { copySelectionAction, cutSelectionAction } from "./canvas/node-clipboard";
 import { checkForUpdates, installUpdates } from "./update";
+import { locale, t } from "./i18n";
 
 /** 菜单里出现的动作：键位同步给主进程，点击回送到渲染层同一个执行器。 */
 const MENU_ACTIONS: ActionId[] = [
@@ -50,7 +52,14 @@ const MENU_ACTIONS: ActionId[] = [
 
 const mcpSetupOpen = ref(false);
 const aboutOpen = ref(false);
+const settingsOpen = ref(false);
 const platform = window.sqraft.platform;
+
+/** 切换语言后窗口标题里的「未命名 / Untitled」也要跟着变；画布标签字体也随语言换栈。 */
+watch(locale, () => {
+  if (ui.docOpen) syncTitle();
+  hooks.requestRedraw();
+});
 
 let uninstall = () => {};
 let uninstallMenu = () => {};
@@ -67,6 +76,10 @@ onMounted(() => {
     }
     if (action === "app.about") {
       aboutOpen.value = true;
+      return;
+    }
+    if (action === "app.settings") {
+      settingsOpen.value = true;
       return;
     }
     if (action === "app.checkUpdates") {
@@ -117,9 +130,9 @@ watchEffect(() => {
       <Toolbar class="float toolbar rise-in" />
       <aside class="float left glass rise-in" style="animation-delay: 40ms">
         <div class="tabs">
-          <button :class="{ on: ui.tab === 'pages' }" @click="ui.tab = 'pages'">页面</button>
-          <button :class="{ on: ui.tab === 'components' }" @click="ui.tab = 'components'">组件</button>
-          <button :class="{ on: ui.tab === 'tokens' }" @click="ui.tab = 'tokens'">设计系统</button>
+          <button :class="{ on: ui.tab === 'pages' }" @click="ui.tab = 'pages'">{{ t("panel.pages") }}</button>
+          <button :class="{ on: ui.tab === 'components' }" @click="ui.tab = 'components'">{{ t("panel.components") }}</button>
+          <button :class="{ on: ui.tab === 'tokens' }" @click="ui.tab = 'tokens'">{{ t("panel.designSystem") }}</button>
         </div>
         <div class="tab-body">
           <PagesPanel v-show="ui.tab === 'pages'" />
@@ -138,6 +151,7 @@ watchEffect(() => {
     <ShortcutsPanel v-if="shortcutUi.open" />
     <McpSetupPanel v-if="mcpSetupOpen" @close="mcpSetupOpen = false" />
     <AboutPanel v-if="aboutOpen" @close="aboutOpen = false" />
+    <SettingsPanel v-if="settingsOpen" @close="settingsOpen = false" />
     <ExportPngDialog v-if="exportUi.open" />
     <Toast />
     <TokenPicker />

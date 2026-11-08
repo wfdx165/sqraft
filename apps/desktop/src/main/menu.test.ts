@@ -13,6 +13,7 @@ vi.mock("electron", () => ({
 }));
 
 const { buildTemplate } = await import("./menu");
+const { setMainLanguage } = await import("./i18n");
 
 function flatten(items: MenuItemConstructorOptions[]): MenuItemConstructorOptions[] {
   const out: MenuItemConstructorOptions[] = [];
@@ -78,9 +79,52 @@ describe("应用菜单", () => {
     expect(labels).toEqual(["Sqraft", "文件", "编辑", "视图", "窗口", "帮助"]);
   });
 
+  it("切换到英文后菜单标签跟随", () => {
+    setMainLanguage("en-US");
+    try {
+      const labels = buildTemplate("darwin").map((item) => item.label);
+      expect(labels).toEqual(["Sqraft", "File", "Edit", "View", "Window", "Help"]);
+    } finally {
+      setMainLanguage("zh-CN");
+    }
+  });
+
+  it("「配置 MCP…」在 macOS 应用菜单里紧挨「设置…」，帮助里不再有", () => {
+    const appMenu = buildTemplate("darwin")[0];
+    const labels = Array.isArray(appMenu.submenu) ? appMenu.submenu.map((item) => item.label) : [];
+    expect(labels.slice(0, 3)).toEqual(["关于 Sqraft", "设置…", "配置 MCP…"]);
+    expect(helpSubmenu("darwin").map((item) => item.label)).not.toContain("配置 MCP…");
+  });
+
+  it("Windows/Linux 把「配置 MCP…」放进文件菜单", () => {
+    for (const platform of ["win32", "linux"] as const) {
+      const file = buildTemplate(platform).find((item) => item.label === "文件");
+      const labels = Array.isArray(file?.submenu) ? file.submenu.map((item) => item.label) : [];
+      expect(labels).toContain("配置 MCP…");
+      expect(helpSubmenu(platform).map((item) => item.label)).not.toContain("配置 MCP…");
+    }
+  });
+
+  it("Windows/Linux 的文件菜单也能打开设置", () => {
+    for (const platform of ["win32", "linux"] as const) {
+      const file = buildTemplate(platform).find((item) => item.label === "文件");
+      const item = Array.isArray(file?.submenu)
+        ? file.submenu.find((entry) => entry.label === "设置…")
+        : undefined;
+      expect(item).toBeTruthy();
+      const sent: string[] = [];
+      windows = [{ webContents: { send: (_channel: string, action: string) => sent.push(action) } }];
+      try {
+        clickItem(item);
+      } finally {
+        windows = [];
+      }
+      expect(sent).toContain("app.settings");
+    }
+  });
+
   it("开发者工具在帮助菜单，快捷键按平台区分", () => {
     expect(helpSubmenu("darwin", { showDevTools: true }).map((item) => item.label)).toEqual([
-      "配置 MCP…",
       "检查更新…",
       "打开日志目录",
       undefined,
@@ -99,7 +143,6 @@ describe("应用菜单", () => {
     for (const platform of ["darwin", "win32", "linux"] as const) {
       expect(devtoolsItem(platform, { showDevTools: false })).toBeUndefined();
       expect(helpSubmenu(platform, { showDevTools: false }).map((item) => item.label)).toEqual([
-        "配置 MCP…",
         "检查更新…",
         "打开日志目录",
         undefined,

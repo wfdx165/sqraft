@@ -4,6 +4,7 @@
  * 单例 DOM，不进入 Vue 组件树（避免布局与 z-index 干扰）。
  */
 import type { Directive } from "vue";
+import { uiFontStack } from "./font-stack";
 
 interface TipValue {
   label: string;
@@ -29,7 +30,7 @@ function ensureEl(): HTMLDivElement {
     borderRadius: "7px",
     background: "rgba(23, 23, 28, 0.92)",
     color: "#ffffff",
-    font: "500 11px/1.4 'Geist Variable', 'PingFang SC', sans-serif",
+    font: "500 11px/1.4 sans-serif",
     letterSpacing: "0.01em",
     whiteSpace: "nowrap",
     opacity: "0",
@@ -52,6 +53,8 @@ function hide() {
 
 function show(target: HTMLElement, value: TipValue) {
   const tip = ensureEl();
+  // 语言可能在中途切换：每次显示时刷新字体栈，避免 tooltip 停在旧语言的 CJK 字形上
+  tip.style.font = `500 11px/1.4 ${uiFontStack()}`;
   tip.innerHTML = "";
   const label = document.createElement("span");
   label.textContent = value.label;

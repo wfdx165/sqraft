@@ -18,8 +18,9 @@ import { patchUpdatePreferences, updatePreferences } from "../recent-state";
 import { planForLatest, shouldCheck } from "./decisions";
 import { downloadVerified } from "./download";
 import { installPathsOf, resolveInstallSupport, spawnInstallerSync, type InstallSupport } from "./install";
+import { t } from "../i18n";
 import { reconcileOnStart } from "./reconcile";
-import { isTrustedUpdateUrl, parseLatest } from "./protocol";
+import { isTrustedUpdateUrl, parseLatest, UpdateManifestError } from "./protocol";
 // 发布仓库的唯一真源：`scripts/release.mjs` 读同一份配置，避免脚本和客户端指向不同仓库
 import updateConfig from "../../../update.config.json";
 import type { UpdateAsset } from "./protocol";
@@ -61,7 +62,7 @@ function updatesDir(): string {
 }
 
 function paths() {
-  if (!support.appPath) throw new Error("无法定位应用包");
+  if (!support.appPath) throw new Error(t("update.locateAppFailed"));
   return installPathsOf(support.appPath, app.getPath("userData"));
 }
 
@@ -100,9 +101,9 @@ async function fetchLatest(): Promise<unknown> {
     signal: AbortSignal.timeout(20_000),
     headers: { accept: "application/json" },
   });
-  if (!response.ok) throw new Error(`检查更新失败：HTTP ${response.status}`);
+  if (!response.ok) throw new Error(t("update.checkHttp", { status: response.status }));
   // 自动跟随之后再看终点：只有 GitHub 自家域名可以承载元数据
-  if (!isTrustedUpdateUrl(response.url)) throw new Error("更新元数据不在 GitHub 域名下");
+  if (!isTrustedUpdateUrl(response.url)) throw new Error(t("update.untrustedMeta"));
   return response.json();
 }
 
@@ -212,11 +213,11 @@ function scheduleReminder(): void {
     void dialog
       .showMessageBox({
         type: "info",
-        buttons: ["现在重启", "稍后"],
+        buttons: [t("update.restartNow"), t("update.later")],
         defaultId: 0,
         cancelId: 1,
-        message: `新版本 ${version} 已就绪`,
-        detail: "重启 Sqraft 即可完成更新。若当前文档有未保存的修改，会先询问。",
+        message: t("update.readyTitle", { version }),
+        detail: t("update.readyDetail"),
       })
       .then((result) => {
         if (result.response === 0) restartToInstall();
@@ -229,9 +230,9 @@ function showRollbackNotice(message: string): void {
   setTimeout(() => {
     void dialog.showMessageBox({
       type: "warning",
-      buttons: ["知道了"],
+      buttons: [t("common.ok")],
       message,
-      detail: `当前仍在使用 ${app.getVersion()}。安装日志：${join(updatesDir(), "install.log")}`,
+      detail: t("update.rollbackDetail", { version: app.getVersion(), path: join(updatesDir(), "install.log") }),
     });
   }, 1_500);
 }
@@ -292,6 +293,9 @@ export async function initUpdater(): Promise<void> {
     now: Date.now(),
   });
   state = reconciled.state;
+  if (reconciled.message) {
+    state = { ...state, message: t(reconciled.message.key, reconciled.message.params) };
+  }
   if (Object.keys(reconciled.patch).length > 0) {
     await patchUpdatePreferences(reconciled.patch).catch((error: unknown) => {
       logApp("warn", "update: reconcile persist failed", { error: messageOf(error) });
@@ -299,7 +303,9 @@ export async function initUpdater(): Promise<void> {
   }
   if (reconciled.removeZip) await rm(paths().zipPath, { force: true }).catch(() => undefined);
   if (reconciled.clearFailure) await rm(paths().failedPath, { force: true }).catch(() => undefined);
-  if (reconciled.prompt) showRollbackNotice(reconciled.prompt);
+  if (reconciled.prompt) {
+    showRollbackNotice(t(reconciled.prompt.key, reconciled.prompt.params));
+  }
 
   logApp("info", "update: initialized", {
     supported: true,
@@ -325,5 +331,6 @@ export function registerUpdateChannels(): void {
 }
 
 function messageOf(error: unknown): string {
+  if (error instanceof UpdateManifestError) return t(error.key, error.params);
   return error instanceof Error ? error.message : String(error);
 }

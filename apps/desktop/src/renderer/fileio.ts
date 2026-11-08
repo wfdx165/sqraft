@@ -1,6 +1,7 @@
 /** .sqraft 文件格式：zip 容器（manifest + 快照 + 操作日志 + 图片资源）。见 architecture.md §10。 */
 import { strToU8, strFromU8, unzipSync, zipSync, type Zippable } from "fflate";
 import { CURRENT_FORMAT_VERSION, migrateDoc, type DocState } from "@sqraft/core";
+import { t } from "./i18n";
 
 export interface AssetEntry {
   /** zip 内路径，形如 `assets/<id>.png` */
@@ -43,7 +44,7 @@ export interface ParsedDoc {
 export async function parseDoc(bytes: Uint8Array): Promise<ParsedDoc> {
   const files = unzipSync(bytes);
   const docEntry = files["doc.json"];
-  if (!docEntry) throw new Error("不是有效的 .sqraft 文件：缺少 doc.json");
+  if (!docEntry) throw new Error(t("error.invalidSqraft"));
   let formatVersion = 1;
   const manifest = files["manifest.json"];
   if (manifest) {
@@ -59,7 +60,7 @@ export async function parseDoc(bytes: Uint8Array): Promise<ParsedDoc> {
   // 格式版本只降不升：老版本读新文件必须明确拒绝，而不是"尽量解析"出一份坏稿（ADR-0029）
   if (declared > CURRENT_FORMAT_VERSION) {
     throw new Error(
-      `这份设计稿由更新版本的 Sqraft 创建（文件格式 v${declared}，当前支持 v${CURRENT_FORMAT_VERSION}）。请升级 Sqraft 后再打开。`,
+      t("error.newerFormat", { version: declared, current: CURRENT_FORMAT_VERSION }),
     );
   }
   return { state: migrateDoc(state, declared), files };

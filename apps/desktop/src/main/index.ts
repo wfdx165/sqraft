@@ -10,6 +10,7 @@ import { logApp } from "./mcp/log";
 import { removeStaleCliLink } from "./mcp/setup";
 import { initLogFile } from "./log-file";
 import { rebuildMenu, registerMenuChannels } from "./menu";
+import { initMainI18n } from "./i18n";
 import { currentPreferences, initRecentFiles, requestOpen, saveWindowBounds } from "./recent-state";
 import { initUpdater, installOnQuit, registerUpdateChannels, scheduleAutoCheck } from "./updater";
 import { restoreBounds } from "./window-state";
@@ -211,9 +212,11 @@ app.whenReady().then(async () => {
   registerImageCacheChannels();
   registerCloseChannels();
   registerMenuChannels();
-  rebuildMenu();
   registerMcpChannels();
   await initRecentFiles();
+  // 偏好里没有 language 时按 auto；解析出实际语言后再建一次菜单
+  initMainI18n(currentPreferences().language ?? "auto");
+  rebuildMenu();
   // 更新器依赖偏好（节流时间、已下载版本），必须排在 initRecentFiles 之后
   await initUpdater();
   registerUpdateChannels();

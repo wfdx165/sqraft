@@ -4,10 +4,12 @@
  */
 import { createNode, defaultLayoutFor, worldRect, type DocNode, type NodeId } from "@sqraft/core";
 import { docStore } from "../store";
-import { DEFAULT_TEXT_FONT_FAMILY, DEFAULT_TEXT_FONT_SIZE, textSizeOf } from "../text-metrics";
+import { t } from "../i18n";
+import { DEFAULT_TEXT_FONT_SIZE, textSizeOf } from "../text-metrics";
+import { defaultTextFontFamily } from "../font-stack";
 import { nextPolygonName } from "./pen";
 import { containerAt, reorderIndexAt } from "./layout-drag";
-import { TOOL_NAMES, type DrawTool } from "./tools";
+import { toolName, type DrawTool } from "./tools";
 
 export interface CreateDragInput {
   tool: DrawTool;
@@ -43,7 +45,7 @@ export function buildCreatedNode(input: CreateDragInput): CreatedNode {
     isTriangle ? "polygon" : tool,
     isLine
       ? {
-          name: TOOL_NAMES[tool] ?? tool,
+          name: toolName(tool),
           x: 0,
           y: 0,
           width: 1,
@@ -66,7 +68,7 @@ export function buildCreatedNode(input: CreateDragInput): CreatedNode {
           style: { stroke: { value: "#1a1a1a" }, strokeWidth: 2 },
         }
       : {
-          name: isTriangle ? nextPolygonName(docStore, 3) : (TOOL_NAMES[tool] ?? tool),
+          name: isTriangle ? nextPolygonName(docStore, 3) : toolName(tool),
           x: x0 - parentRect.x,
           y: y0 - parentRect.y,
           width: w,
@@ -85,12 +87,12 @@ export function buildCreatedNode(input: CreateDragInput): CreatedNode {
     const style = {
       fill: { value: "#1a1a1a" },
       fontSize: DEFAULT_TEXT_FONT_SIZE,
-      fontFamily: DEFAULT_TEXT_FONT_FAMILY,
+      fontFamily: defaultTextFontFamily(),
     };
-    node.text = "文本";
+    node.text = t("node.text");
     node.textAutoResize = "auto-width";
     node.style = style;
-    const size = textSizeOf(node, style, "文本");
+    const size = textSizeOf(node, style, t("node.text"));
     node.width = size.width;
     node.height = size.height;
     startEdit = true;

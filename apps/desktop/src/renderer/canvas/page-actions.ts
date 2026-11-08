@@ -3,6 +3,7 @@
  */
 import { getPages, type NodeId } from "@sqraft/core";
 import { dispatch, docStore, hooks, ui } from "../store";
+import { t } from "../i18n";
 
 /** 至少留一页：只剩一页时禁止删除。 */
 export function canDeletePage(): boolean {
@@ -14,7 +15,7 @@ export function deletePage(pageId: NodeId): boolean {
   const page = docStore.doc.nodes[pageId];
   if (!page || page.type !== "page" || !canDeletePage()) return false;
   // 主组件是文档根节点，不在页面里：删页面不会动到母版（ADR-0025）
-  if (!window.confirm(`删除页面「${page.name}」及其全部图层？`)) return false;
+  if (!window.confirm(t("page.deleteConfirm", { name: page.name }))) return false;
   const wasActive = ui.activePageId === pageId;
   dispatch({ type: "node.delete", params: { nodeId: pageId } }, "delete-page");
   const nextId = getPages(docStore.doc)[0]?.id ?? null;

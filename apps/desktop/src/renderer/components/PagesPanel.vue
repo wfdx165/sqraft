@@ -3,7 +3,6 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import {
   createNode,
   getPages,
-  nextPageName,
   nextPagePosition,
   overridePatchOf,
   DEFAULT_PAGE_HEIGHT,
@@ -17,6 +16,7 @@ import { openNodeMenu, openPageMenu } from "../object-menu";
 import { registerShortcuts } from "../shortcuts";
 import { planLayerDrop, type DropPosition } from "../canvas/layer-drag";
 import { canExpand, isLayerExpanded } from "../canvas/layer-tree";
+import { t } from "../i18n";
 import Icon from "./Icon.vue";
 import { assetUrl } from "../assets";
 import { linkedPreviewUrl, linkedVersion } from "../linked-images";
@@ -225,8 +225,12 @@ function cancelRename() {
 
 function addPage() {
   const pos = nextPagePosition(docStore.doc);
+  const base = t("node.page");
+  const used = new Set(pages.value.map((page) => page.name));
+  let n = pages.value.length + 1;
+  while (used.has(`${base} ${n}`)) n += 1;
   const node = createNode("page", {
-    name: nextPageName(docStore.doc),
+    name: `${base} ${n}`,
     x: pos.x,
     y: pos.y,
     width: DEFAULT_PAGE_WIDTH,
@@ -302,8 +306,8 @@ function onLayerDelete(id: NodeId) {
 <template>
   <div class="panel">
     <header>
-      <span class="micro-label">页面</span>
-      <button class="add" title="新建页面" @click="addPage"><Icon name="plus" :size="13" /></button>
+      <span class="micro-label">{{ t("panel.pages") }}</span>
+      <button class="add" :title="t('pages.add')" @click="addPage"><Icon name="plus" :size="13" /></button>
     </header>
 
     <div class="search-row">
@@ -311,15 +315,15 @@ function onLayerDelete(id: NodeId) {
         ref="searchEl"
         v-model="filter"
         class="search"
-        placeholder="搜索页面…"
+        :placeholder="t('pages.searchPlaceholder')"
         spellcheck="false"
-        title="过滤页面名称"
+        :title="t('pages.searchTitle')"
       />
-      <span class="count" title="命中数 / 总页数">{{ countLabel }}</span>
+      <span class="count" :title="t('pages.countTitle')">{{ countLabel }}</span>
     </div>
 
     <div class="pages">
-      <div v-if="filteredPages.length === 0" class="empty-pages">没有匹配的页面</div>
+      <div v-if="filteredPages.length === 0" class="empty-pages">{{ t("pages.noMatch") }}</div>
       <div v-for="page in filteredPages" :key="page.id" class="page-block">
         <div
           class="page-row"
@@ -329,7 +333,7 @@ function onLayerDelete(id: NodeId) {
         >
           <button
             class="caret-btn"
-            :title="ui.expandedPageId === page.id ? '收起图层' : '展开图层'"
+            :title="ui.expandedPageId === page.id ? t('pages.collapseLayers') : t('pages.expandLayers')"
             @click.stop="toggleLayers(page.id)"
           >
             <Icon name="chevron" :size="12" class="caret" :class="{ open: ui.expandedPageId === page.id }" />
@@ -344,7 +348,7 @@ function onLayerDelete(id: NodeId) {
             @keydown.enter.prevent="commitRename"
             @keydown.esc.prevent="cancelRename"
           />
-          <span v-else class="page-name" title="双击重命名" @dblclick.stop="startRename(page)">
+          <span v-else class="page-name" :title="t('pages.renameHint')" @dblclick.stop="startRename(page)">
             <template v-for="(seg, i) in highlightOf(page.name)" :key="i">
               <span v-if="seg.hit" class="hit">{{ seg.text }}</span>
               <template v-else>{{ seg.text }}</template>
@@ -354,7 +358,7 @@ function onLayerDelete(id: NodeId) {
           <button
             v-if="canDeletePage()"
             class="act"
-            title="删除页面"
+            :title="t('pages.delete')"
             @click.stop="deletePage(page)"
           >
             <Icon name="close" :size="11" />
@@ -363,7 +367,7 @@ function onLayerDelete(id: NodeId) {
 
         <!-- 手风琴：仅活动页面展开图层 -->
         <div v-if="ui.expandedPageId === page.id" class="layers">
-          <div v-if="rows.length === 0" class="empty-layer">暂无图层</div>
+          <div v-if="rows.length === 0" class="empty-layer">{{ t("pages.noLayers") }}</div>
           <div
             v-for="row in rows"
             :key="row.node.id"
@@ -388,7 +392,7 @@ function onLayerDelete(id: NodeId) {
               v-if="canExpand(row.node)"
               class="disclosure"
               :class="{ open: isLayerExpanded(row.node, ui.expandedLayers) }"
-              :title="isLayerExpanded(row.node, ui.expandedLayers) ? '折叠子图层' : '展开子图层'"
+              :title="isLayerExpanded(row.node, ui.expandedLayers) ? t('pages.collapseChildren') : t('pages.expandChildren')"
               @click.stop="toggleLayer(row.node)"
             >
               <Icon name="chevron" :size="10" />
@@ -403,17 +407,17 @@ function onLayerDelete(id: NodeId) {
             <Icon v-else class="type" :name="iconOf[row.node.type] ?? 'rect'" :size="13" />
             <span class="name">{{ row.node.name }}</span>
             <span v-if="row.node.type === 'slot'" class="slot-state">
-              {{ row.node.slotFilled ? "已填充" : row.node.children.length ? "默认" : "空插槽" }}
+              {{ row.node.slotFilled ? t("pages.slotFilled") : row.node.children.length ? t("pages.slotDefault") : t("pages.slotEmpty") }}
             </span>
-            <span v-if="hasOverride(row.node)" class="ovr" title="有覆盖" />
+            <span v-if="hasOverride(row.node)" class="ovr" :title="t('pages.hasOverride')" />
             <button
               v-if="row.node.locked"
               class="act lock"
-              title="解锁"
+              :title="t('pages.unlock')"
               @click.stop="toggleLayerLock(row.node)"
             >🔒</button>
-            <button v-else class="act lock ghost" title="锁定" @click.stop="toggleLayerLock(row.node)">🔓</button>
-            <button v-if="!row.node.locked" class="act" title="删除" @click.stop="onLayerDelete(row.node.id)"><Icon name="close" :size="11" /></button>
+            <button v-else class="act lock ghost" :title="t('pages.lock')" @click.stop="toggleLayerLock(row.node)">🔓</button>
+            <button v-if="!row.node.locked" class="act" :title="t('pages.deleteLayer')" @click.stop="onLayerDelete(row.node.id)"><Icon name="close" :size="11" /></button>
           </div>
         </div>
       </div>

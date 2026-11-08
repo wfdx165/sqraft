@@ -14,7 +14,8 @@ import {
 } from "./model";
 
 export const DEFAULT_TEXT_FONT_SIZE = 20;
-export const DEFAULT_TEXT_FONT_FAMILY = "'Geist Variable', 'PingFang SC', sans-serif";
+export const DEFAULT_TEXT_FONT_FAMILY =
+  "'Geist Variable', 'PingFang SC', 'Hiragino Sans', 'Apple SD Gothic Neo', 'Microsoft YaHei', 'Yu Gothic', 'Malgun Gothic', sans-serif";
 
 export type MeasureText = (text: string, font: string) => number;
 
@@ -107,6 +108,33 @@ function chars(text: string): string[] {
   return [...text];
 }
 
+/** 行首禁止出现的字符（收尾标点与右括号）：日文/中文共用的轻量禁则。 */
+const NO_LINE_START = new Set([
+  ..."、。，．！？：；）］｝」』】〉》〕｣!?,.:;)]}",
+]);
+
+/** 行尾禁止出现的字符（开括号）：避免「（」落在行尾。 */
+const NO_LINE_END = new Set([..."（［｛「『【〈《〔｢([{"]);
+
+/**
+ * 轻量禁则：把行尾会违规的字符挪到下一行，或把下一行行首的收尾标点带回来。
+ * 只剩一个字时宁可让这一行溢出 1 个字宽，也不把标点甩到行首（与 Figma 的处理一致）。
+ */
+function applyKinsoku(line: string, next: string): { head: string; tail: string } {
+  const head = [...line];
+  const tail = [...next];
+  while (head.length > 0) {
+    const last = head[head.length - 1];
+    const first = tail[0];
+    const badStart = first !== undefined && NO_LINE_START.has(first);
+    const badEnd = last !== undefined && NO_LINE_END.has(last);
+    if (!badStart && !badEnd) break;
+    if (head.length === 1) return { head: head.join("") + tail.join(""), tail: "" };
+    tail.unshift(head.pop()!);
+  }
+  return { head: head.join(""), tail: tail.join("") };
+}
+
 /** 按可用宽度逐字贪心换行：优先在空格处断行，超长单词强制断开。 */
 function wrapParagraph(text: string, font: string, spacing: number, maxWidth: number, measure: MeasureText): string[] {
   if (maxWidth <= 0) return [text];
@@ -120,11 +148,18 @@ function wrapParagraph(text: string, font: string, spacing: number, maxWidth: nu
     if (line && measureLine(next, font, spacing, measure) > maxWidth) {
       // 拉丁单词尽量在空格处断开；CJK / 超长单词按字符断开
       if (ch !== " " && lastSpace > 0) {
-        lines.push(line.slice(0, lastSpace));
-        line = line.slice(lastSpace + 1) + ch;
-      } else {
+        const head = line.slice(0, lastSpace);
+        const tail = line.slice(lastSpace + 1) + ch;
+        const split = head ? applyKinsoku(head, tail) : { head, tail };
+        lines.push(split.head);
+        line = split.tail;
+      } else if (ch === " ") {
         lines.push(line);
-        line = ch === " " ? "" : ch;
+        line = "";
+      } else {
+        const split = applyKinsoku(line, ch);
+        lines.push(split.head);
+        line = split.tail;
       }
       lastSpace = line.lastIndexOf(" ");
       continue;

@@ -18,6 +18,8 @@ import { logError, logInfo, logWarn } from "./log";
 import { isValidPort, MCP_DEFAULT_PORT, MCP_FALLBACK_STEPS } from "./port";
 import { startMcpServer, type McpRuntime } from "./server";
 import { collectSetupInfo } from "./setup";
+import { t } from "../i18n";
+import { AGENT_TEXT } from "../../shared/agent-text";
 
 let runtime: McpRuntime | null = null;
 /** 启动失败原因（端口被占等）；成功时为 null */
@@ -267,7 +269,7 @@ export async function startMcp(version: string): Promise<void> {
 /** 改端口：null = 自动模式；数字 = 严格使用。会重启服务并断开所有现有会话。 */
 export async function setMcpPort(port: unknown): Promise<McpSetupInfo> {
   if (port !== null && !isValidPort(port)) {
-    throw new Error("端口必须是 1024–65535 的整数");
+    throw new Error(t("mcp.portRange"));
   }
   const previousPort = runtime?.port ?? null;
   if (runtime) {
@@ -294,7 +296,7 @@ function callRenderer(
   const window = BrowserWindow.getAllWindows()[0];
   if (!window) {
     logError(null, "call failed: no window", { tool: name });
-    return Promise.reject(new Error("Sqraft 窗口未打开，无法执行工具"));
+    return Promise.reject(new Error(AGENT_TEXT.noWindow));
   }
   const id = sequence + 1;
   sequence = id;
@@ -302,7 +304,7 @@ function callRenderer(
     const timer = setTimeout(() => {
       pending.delete(id);
       logError(null, "renderer timeout", { tool: name, after: `${PENDING_TTL_MS}ms` });
-      reject(new Error("渲染层没有在预期时间内返回结果"));
+      reject(new Error(AGENT_TEXT.rendererTimeout));
     }, PENDING_TTL_MS);
     pending.set(id, { resolve, reject, timer });
     window.webContents.send(CHANNELS.mcpCall, { id, name, args, clientLabel });

@@ -4,7 +4,6 @@ import {
   ZERO_PADDING,
   createEffect,
   createLayoutSpec,
-  EFFECT_LABELS,
   sanitizeEffect,
   findOuterOverrideOwner,
   findOverrideOwner,
@@ -36,6 +35,9 @@ import { putAsset } from "../assets";
 import { firstFamilyOf, fontFamilies, fontWeightsOf, putFont } from "../fonts";
 import { selectionBounds as boundsOf } from "../canvas/selection-bounds";
 import { createTokenBindings } from "./token-bindings";
+import { t } from "../i18n";
+import { cjkSans, cjkSerif, uiFontStack } from "../font-stack";
+import type { MessageKey } from "../../shared/i18n";
 
 /**
  * 检查器的状态与动作：模板只负责排版，逻辑集中在这里。
@@ -314,9 +316,32 @@ const tokenNames = computed(() => {
 
 /* ---------- 元信息与几何 ---------- */
 
+const NODE_TYPE_KEYS: Partial<Record<string, MessageKey>> = {
+  frame: "node.frame",
+  rect: "node.rect",
+  ellipse: "node.ellipse",
+  line: "node.line",
+  text: "node.text",
+  image: "node.image",
+  group: "node.group",
+  component: "node.component",
+  instance: "node.instance",
+  slot: "node.slot",
+  page: "node.page",
+  path: "node.path",
+};
+
+const EFFECT_KEYS: Record<EffectType, MessageKey> = {
+  "drop-shadow": "effect.dropShadow",
+  "inner-shadow": "effect.innerShadow",
+  "layer-blur": "effect.layerBlur",
+  "backdrop-blur": "effect.backdropBlur",
+};
+
 function typeLabel(n: DocNode): string {
-  if (n.type === "polygon") return (n.sides ?? 3) === 3 ? "三角形" : "多边形";
-  return n.type;
+  if (n.type === "polygon") return (n.sides ?? 3) === 3 ? t("node.triangle") : t("node.polygon");
+  const key = NODE_TYPE_KEYS[n.type];
+  return key ? t(key) : n.type;
 }
 
 function setName(e: Event): void {
@@ -430,7 +455,7 @@ function effectsOf(n: DocNode | null): Effect[] {
 }
 
 function effectLabel(type: EffectType): string {
-  return EFFECT_LABELS[type];
+  return t(EFFECT_KEYS[type]);
 }
 
 function isShadowEffectOf(effect: Effect): effect is ShadowEffect {
@@ -775,13 +800,13 @@ function setTruncate(e: Event): void {
   dispatch({ type: "node.update", params: { nodeId: n.id, patch: { truncate: boolOf(e) } } }, "inspect");
 }
 
-const FONT_STACKS = [
-  { label: "Geist（界面）", value: "'Geist Variable', 'PingFang SC', sans-serif" },
-  { label: "Geist Mono（等宽）", value: "'Geist Mono Variable', ui-monospace, 'SF Mono', monospace" },
-  { label: "系统无衬线", value: "ui-sans-serif, -apple-system, 'PingFang SC', 'Microsoft YaHei', sans-serif" },
-  { label: "系统衬线", value: "ui-serif, 'Songti SC', SimSun, serif" },
-  { label: "系统等宽", value: "ui-monospace, 'SF Mono', Menlo, monospace" },
-];
+const FONT_STACKS = computed<{ labelKey: MessageKey; value: string }[]>(() => [
+  { labelKey: "font.geist", value: uiFontStack() },
+  { labelKey: "font.geistMono", value: "'Geist Mono Variable', ui-monospace, 'SF Mono', monospace" },
+  { labelKey: "font.systemSans", value: `ui-sans-serif, -apple-system, ${cjkSans()}, sans-serif` },
+  { labelKey: "font.systemSerif", value: `ui-serif, ${cjkSerif()}, serif` },
+  { labelKey: "font.systemMono", value: "ui-monospace, 'SF Mono', Menlo, monospace" },
+]);
 
 /* ---------- 路径 / 插槽 ---------- */
 
@@ -857,8 +882,16 @@ const canMakeSlot = computed(() => {
 
 function toSlot(): void {
   if (!node.value) return;
+  const base = t("node.slot");
+  const used = new Set(
+    Object.values(docStore.doc.nodes)
+      .filter((item) => item.type === "slot")
+      .map((item) => item.name),
+  );
+  let i = 1;
+  while (used.has(`${base} ${i}`)) i += 1;
   try {
-    dispatch({ type: "slot.create", params: { nodeId: node.value.id } }, "slot");
+    dispatch({ type: "slot.create", params: { nodeId: node.value.id, name: `${base} ${i}` } }, "slot");
   } catch {
     /* 不满足约束时不改文档 */
   }
@@ -921,7 +954,7 @@ const allComponents = computed(() => {
 });
 
 function propTypeLabel(type: string): string {
-  return type === "text" ? "文本" : type === "boolean" ? "布尔" : "实例替换";
+  return type === "text" ? t("prop.text") : type === "boolean" ? t("prop.boolean") : t("prop.instance");
 }
 
 function defineProp(type: "text" | "boolean" | "instance"): void {
@@ -1065,41 +1098,40 @@ const outerOverrideView = computed(() => {
   return fields.length ? { instanceId: info.owner.id, mainId: info.key, fields } : null;
 });
 
-const FIELD_LABELS: Record<string, string> = {
-  text: "文案",
-  name: "名称",
-  width: "宽",
-  height: "高",
-  x: "X",
-  y: "Y",
-  rotation: "旋转",
-  opacity: "不透明度",
-  visible: "可见性",
-  locked: "锁定",
-  clip: "裁剪",
-  layout: "布局",
-  componentId: "组件",
-  sides: "边数",
-  vector: "路径",
-  "style.fill": "填充",
-  "style.stroke": "描边",
-  "style.strokeWidth": "线宽",
-  "style.cornerRadius": "圆角",
-  "style.fontSize": "字号",
-  "style.fontFamily": "字体",
-  "style.fontWeight": "字重",
-  "style.fontStyle": "斜体",
-  "style.lineHeight": "行高",
-  "style.letterSpacing": "字距",
-  "style.paragraphSpacing": "段距",
-  "style.textAlign": "对齐",
-  "style.textCase": "大小写",
-  "style.textDecoration": "装饰",
-  propValues: "属性值",
+const FIELD_LABEL_KEYS: Record<string, MessageKey> = {
+  text: "field.text",
+  name: "field.name",
+  width: "field.width",
+  height: "field.height",
+  rotation: "field.rotation",
+  opacity: "field.opacity",
+  visible: "field.visible",
+  locked: "field.locked",
+  clip: "field.clip",
+  layout: "field.layout",
+  componentId: "field.componentId",
+  sides: "field.sides",
+  vector: "field.vector",
+  "style.fill": "field.styleFill",
+  "style.stroke": "field.styleStroke",
+  "style.strokeWidth": "field.styleStrokeWidth",
+  "style.cornerRadius": "field.styleCornerRadius",
+  "style.fontSize": "field.styleFontSize",
+  "style.fontFamily": "field.styleFontFamily",
+  "style.fontWeight": "field.styleFontWeight",
+  "style.fontStyle": "field.styleFontStyle",
+  "style.lineHeight": "field.styleLineHeight",
+  "style.letterSpacing": "field.styleLetterSpacing",
+  "style.paragraphSpacing": "field.styleParagraphSpacing",
+  "style.textAlign": "field.styleTextAlign",
+  "style.textCase": "field.styleTextCase",
+  "style.textDecoration": "field.styleTextDecoration",
+  propValues: "field.propValues",
 };
 
 function fieldLabel(field: string): string {
-  return FIELD_LABELS[field] ?? field;
+  const key = FIELD_LABEL_KEYS[field];
+  return key ? t(key) : field;
 }
 
 function resetField(field: string): void {
@@ -1265,6 +1297,5 @@ function resetOuterField(field: string): void {
     allComponents,
     overrideView,
     outerOverrideView,
-    FIELD_LABELS,
   };
 }

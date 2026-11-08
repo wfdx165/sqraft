@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /** 数值字段的 Token 绑定入口：未绑定显示灰色回形针，已绑定高亮。 */
 import Icon from "./Icon.vue";
+import { t } from "../i18n";
 
 defineProps<{ token?: string; disabled?: boolean }>();
 const emit = defineEmits<{ open: [event: MouseEvent] }>();
@@ -11,7 +12,7 @@ const emit = defineEmits<{ open: [event: MouseEvent] }>();
     class="token-link"
     :class="{ on: Boolean(token) }"
     :disabled="disabled"
-    :title="token ? `已绑定 Token：${token}（点击换绑或解绑）` : '绑定数值 Token'"
+    :title="token ? t('tokenLink.bound', { token }) : t('tokenLink.bind')"
     type="button"
     @click.stop="emit('open', $event)"
   >

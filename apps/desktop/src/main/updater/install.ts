@@ -11,6 +11,7 @@ import { spawn } from "node:child_process";
 import { access, chmod, mkdir, rm, writeFile } from "node:fs/promises";
 import { chmodSync, mkdirSync, rmSync, writeFileSync, constants } from "node:fs";
 import { dirname, join } from "node:path";
+import { t } from "../i18n";
 
 export interface InstallPaths {
   appPath: string;
@@ -63,20 +64,20 @@ async function defaultIsWritable(dir: string): Promise<boolean> {
  */
 export async function resolveInstallSupport(options: SupportOptions): Promise<InstallSupport> {
   const writable = options.isWritable ?? defaultIsWritable;
-  if (!options.packaged) return { ok: false, reason: "开发版本不检查更新", appPath: null };
+  if (!options.packaged) return { ok: false, reason: t("update.dev"), appPath: null };
   if (options.platform !== "darwin") {
-    return { ok: false, reason: "当前系统暂不支持自动更新（只支持 macOS）", appPath: null };
+    return { ok: false, reason: t("update.reasonPlatform"), appPath: null };
   }
   if (options.arch !== "arm64") {
-    return { ok: false, reason: "当前芯片暂不支持自动更新（只支持 Apple Silicon）", appPath: null };
+    return { ok: false, reason: t("update.reasonArch"), appPath: null };
   }
   const appPath = appBundlePathOf(options.executable);
-  if (!appPath) return { ok: false, reason: "无法定位应用包，请重新安装 Sqraft", appPath: null };
+  if (!appPath) return { ok: false, reason: t("update.reasonNoApp"), appPath: null };
   if (appPath.startsWith("/Volumes/") || appPath.includes("/AppTranslocation/")) {
-    return { ok: false, reason: "Sqraft 正在只读位置运行，请先把它拖进「应用程序」再检查更新", appPath };
+    return { ok: false, reason: t("update.reasonReadOnly"), appPath };
   }
   if (!(await writable(dirname(appPath)))) {
-    return { ok: false, reason: "没有写入「应用程序」的权限，请手动下载新版覆盖安装", appPath };
+    return { ok: false, reason: t("update.reasonNoPermission"), appPath };
   }
   return { ok: true, reason: "", appPath };
 }

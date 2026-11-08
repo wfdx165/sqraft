@@ -24,6 +24,7 @@ import { IMAGE_CACHE_DIRNAME } from "./data-dir";
 import { isHttpUrl as parseHttpUrl, isLinkLocalAddress as linkLocal } from "./image-url";
 import { logApp } from "./mcp/log";
 import { imageUserAgent } from "./ua";
+import { t } from "./i18n";
 
 /** 对外请求带的 UA：去掉 Electron 词（见 ua.ts），Chrome 版本跟 Electron 走 */
 const IMAGE_UA = imageUserAgent(process.platform, process.versions.chrome ?? "", app.getVersion());
@@ -72,7 +73,7 @@ function keyOf(url: string): string {
 function messageOf(error: unknown): string {
   if (error instanceof Error) {
     // AbortError 的消息是 "This operation was aborted"，对用户不够直白
-    if (error.name === "AbortError") return "请求超时";
+    if (error.name === "AbortError") return t("image.timeout");
     return error.message;
   }
   return String(error);
@@ -99,10 +100,10 @@ async function assertHostAllowed(url: URL): Promise<void> {
   try {
     addresses = await lookup(host, { all: true, verbatim: true });
   } catch {
-    throw new Error(`无法解析域名 ${host}`);
+    throw new Error(t("image.dns", { host }));
   }
   if (addresses.some((entry) => isLinkLocalAddress(entry.address))) {
-    throw new Error("不允许访问链路本地地址");
+    throw new Error(t("image.linkLocal"));
   }
 }
 
@@ -145,7 +146,7 @@ function requestOnce(url: URL, headers: Record<string, string>, deadline: number
     const timer = setTimeout(() => {
       finish(() => {
         request.abort();
-        reject(new Error("请求超时"));
+        reject(new Error(t("image.timeout")));
       });
     }, Math.max(1, deadline - Date.now()));
 
@@ -158,7 +159,7 @@ function requestOnce(url: URL, headers: Record<string, string>, deadline: number
       if (Number.isFinite(declared) && declared > MAX_IMAGE_BYTES) {
         finish(() => {
           request.abort();
-          reject(new Error(`图片超过 ${MAX_IMAGE_LABEL} 上限`));
+          reject(new Error(t("image.tooLarge", { limit: MAX_IMAGE_LABEL })));
         });
         return;
       }
@@ -170,7 +171,7 @@ function requestOnce(url: URL, headers: Record<string, string>, deadline: number
         if (total > MAX_IMAGE_BYTES) {
           finish(() => {
             request.abort();
-            reject(new Error(`图片超过 ${MAX_IMAGE_LABEL} 上限`));
+            reject(new Error(t("image.tooLarge", { limit: MAX_IMAGE_LABEL })));
           });
           return;
         }
@@ -206,11 +207,11 @@ async function requestImage(url: URL, headers: Record<string, string>): Promise<
     const result = await requestOnce(current, headers, deadline);
     if (result.kind === "response") return result;
     const next = isHttpUrl(result.location);
-    if (!next) throw new Error("重定向到了不支持的地址");
+    if (!next) throw new Error(t("image.redirectUnsupported"));
     logApp("warn", "image url redirected", { from: current.toString(), to: next.toString() });
     current = next;
   }
-  throw new Error("重定向次数过多");
+  throw new Error(t("image.redirectTooMany"));
 }
 
 async function readMeta(path: string): Promise<CacheMeta | null> {
@@ -297,7 +298,7 @@ async function persist(
   started: number,
 ): Promise<FetchImageResult> {
   const bytes = response.bytes;
-  if (bytes.length === 0) throw new Error("服务器返回空内容");
+  if (bytes.length === 0) throw new Error(t("image.emptyResponse"));
   const contentType = headerOf(response.headers, "content-type") ?? "application/octet-stream";
   await writeCache(paths, {
     url,
@@ -316,7 +317,7 @@ async function persist(
  */
 export async function fetchRemoteImage(raw: string, force = false): Promise<FetchImageResult> {
   const url = isHttpUrl(raw);
-  if (!url) return { ok: false, reason: "只支持 http/https 图片地址" };
+  if (!url) return { ok: false, reason: t("image.onlyHttpUrl") };
 
   const normalized = url.toString();
   const key = keyOf(normalized);
@@ -342,10 +343,10 @@ export async function fetchRemoteImage(raw: string, force = false): Promise<Fetc
       }
       // 条件请求说有缓存，但缓存文件被清掉了：去掉条件头重新抓一次
       const fresh = await requestImage(url, { Accept: "image/*" });
-      if (fresh.status < 200 || fresh.status >= 300) throw new Error(`服务器返回 ${fresh.status}`);
+      if (fresh.status < 200 || fresh.status >= 300) throw new Error(t("image.serverStatus", { status: fresh.status }));
       return await persist(fresh, paths, normalized, started);
     }
-    if (response.status < 200 || response.status >= 300) throw new Error(`服务器返回 ${response.status}`);
+    if (response.status < 200 || response.status >= 300) throw new Error(t("image.serverStatus", { status: response.status }));
     return await persist(response, paths, normalized, started);
   } catch (error) {
     const reason = messageOf(error);
@@ -355,7 +356,7 @@ export async function fetchRemoteImage(raw: string, force = false): Promise<Fetc
       return ok(cached, meta!.contentType, true);
     }
     logApp("warn", "image fetch failed", { url: normalized, error: reason });
-    return { ok: false, reason: `抓取图片失败：${reason}` };
+    return { ok: false, reason: t("error.fetchImage", { detail: reason }) };
   }
 }
 
@@ -389,7 +390,7 @@ export async function clearImageCache(): Promise<number> {
 
 export function registerImageCacheChannels(): void {
   ipcMain.handle(CHANNELS.appFetchImage, async (_event, url: string, options?: { force?: boolean }): Promise<FetchImageResult> => {
-    if (typeof url !== "string") return { ok: false, reason: "图片地址必须是字符串" };
+    if (typeof url !== "string") return { ok: false, reason: t("image.urlNotString") };
     return fetchRemoteImage(url, Boolean(options?.force));
   });
   ipcMain.handle(CHANNELS.appClearImageCache, async () => ({ bytes: await clearImageCache() }));

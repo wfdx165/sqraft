@@ -10,6 +10,7 @@ import { assetUrl, putAsset } from "../assets";
 import { dispatch, ui } from "../store";
 import { linkedImageStatus, linkedNaturalSize, linkedPreviewUrl, linkedVersion, refreshLinkedImage, ensureLinkedImage } from "../linked-images";
 import { naturalSizeOf } from "../canvas/crop-drag";
+import { t } from "../i18n";
 
 const props = defineProps<{ node: DocNode }>();
 
@@ -103,18 +104,18 @@ async function onPicked(event: Event): Promise<void> {
 function applyUrl(): void {
   const raw = urlDraft.value.trim();
   if (!raw) {
-    message.value = "先粘贴一个图片地址";
+    message.value = t("image.pasteUrl");
     return;
   }
   let parsed: URL;
   try {
     parsed = new URL(raw);
   } catch {
-    message.value = "不是合法的 URL";
+    message.value = t("image.invalidUrl");
     return;
   }
   if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-    message.value = "只支持 http/https 地址";
+    message.value = t("image.onlyHttp");
     return;
   }
   message.value = "";
@@ -148,7 +149,7 @@ function fitNatural(): void {
 
 function toggleCrop(): void {
   if (!canCrop.value) {
-    message.value = "图片还没加载完，暂时不能裁切";
+    message.value = t("image.notReady");
     return;
   }
   if (cropping.value) {
@@ -171,25 +172,25 @@ function toggleMask(): void {
 <template>
   <section class="block">
     <div class="label-row">
-      <span class="micro-label">图片</span>
+      <span class="micro-label">{{ t("image.title") }}</span>
       <div class="actions">
         <button class="mini" :class="{ on: cropping }" @click="toggleCrop">
-          {{ cropping ? "退出裁切" : "裁切" }}
+          {{ cropping ? t("image.exitCrop") : t("image.crop") }}
         </button>
-        <button class="mini" @click="fileInput?.click()">替换…</button>
+        <button class="mini" @click="fileInput?.click()">{{ t("image.replace") }}</button>
       </div>
     </div>
 
     <div class="preview">
       <img v-if="preview" :src="preview" alt="" />
       <span v-else class="missing">
-        {{ linkState ? (linkState.status === "failed" ? "加载失败" : "正在加载…") : "图片缺失" }}
+        {{ linkState ? (linkState.status === "failed" ? t("image.failed") : t("image.loading")) : t("image.missing") }}
       </span>
     </div>
 
     <div class="facts">
-      <span>原图 {{ natural.width }} × {{ natural.height }}</span>
-      <span>裁切 {{ Math.round(crop.width) }} × {{ Math.round(crop.height) }}</span>
+      <span>{{ t("image.natural", { width: natural.width, height: natural.height }) }}</span>
+      <span>{{ t("image.cropSize", { width: Math.round(crop.width), height: Math.round(crop.height) }) }}</span>
     </div>
 
     <div class="url-row">
@@ -197,23 +198,23 @@ function toggleMask(): void {
         v-model="urlDraft"
         class="url-input"
         type="text"
-        placeholder="图片链接（http/https）"
+        :placeholder="t('image.urlPlaceholder')"
         @keydown.enter.prevent="applyUrl"
       />
-      <button class="mini" @click="applyUrl">{{ sourceUrl ? "换链接" : "用链接" }}</button>
+      <button class="mini" @click="applyUrl">{{ sourceUrl ? t("image.changeLink") : t("image.useLink") }}</button>
     </div>
 
     <div v-if="sourceUrl" class="link-row">
       <span class="link-text" :title="sourceUrl">{{ sourceUrl }}</span>
-      <button class="mini" @click="refetch">重新抓取</button>
-      <button class="mini" :disabled="!canCrop" @click="fitNatural">适应原尺寸</button>
+      <button class="mini" @click="refetch">{{ t("image.refetch") }}</button>
+      <button class="mini" :disabled="!canCrop" @click="fitNatural">{{ t("image.fitNatural") }}</button>
     </div>
 
     <p v-if="linkState?.status === 'failed'" class="message">{{ linkState.error }}</p>
 
     <label class="mask-row">
       <input type="checkbox" :checked="node.isMask" @change="toggleMask" />
-      <span>用作蒙版（遮罩同父级上方相邻的图层）</span>
+      <span>{{ t("image.mask") }}</span>
     </label>
 
     <p v-if="message" class="message">{{ message }}</p>

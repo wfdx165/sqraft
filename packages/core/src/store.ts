@@ -5,6 +5,7 @@
 
 import type { ComponentPropertyDef, DocNode, DocState, NodeId } from "./model";
 import { createNode, walkSubtree, worldRect } from "./model";
+import { AppError } from "./errors";
 import { applyTokenCommand } from "./token-commands";
 import { clampSides } from "./polygon";
 import {
@@ -169,7 +170,7 @@ export class DocStore {
       if (candidate.type !== "slot" || !candidate.slotFilled) continue;
       if (candidate.mainId && slots.includes(candidate.mainId)) {
         const name = this.state.nodes[candidate.mainId]?.name ?? "";
-        throw new Error(`插槽「${name}」已被实例填充，请先清空`);
+        throw new AppError("core.slot.filled", { name });
       }
     }
   }
@@ -177,22 +178,22 @@ export class DocStore {
   private expandSlotCreate(cmd: Extract<Command, { type: "slot.create" }>): Command[] {
     const node = this.state.nodes[cmd.params.nodeId];
     if (!node) throw new Error(`节点 ${cmd.params.nodeId} 不存在`);
-    if (node.type !== "frame" && node.type !== "group") throw new Error("只能把画板或分组转为插槽");
-    if (findOverrideOwner(this.state, node.id)) throw new Error("实例内部不能创建插槽");
+    if (node.type !== "frame" && node.type !== "group") throw new AppError("core.slot.onlyContainer");
+    if (findOverrideOwner(this.state, node.id)) throw new AppError("core.slot.instanceInterior");
     const componentId = this.componentAncestorId(node.id);
-    if (!componentId) throw new Error("插槽必须位于主组件内");
+    if (!componentId) throw new AppError("core.slot.mustBeMain");
 
     // 插槽不能嵌套插槽
     let cur: DocNode | undefined = node.parentId ? this.state.nodes[node.parentId] : undefined;
     while (cur) {
-      if (cur.type === "slot") throw new Error("插槽不能嵌套插槽");
+      if (cur.type === "slot") throw new AppError("core.slot.nested");
       cur = cur.parentId ? this.state.nodes[cur.parentId] : undefined;
     }
     let nested = false;
     walkSubtree(this.state, node.id, (n) => {
       if (n.id !== node.id && n.type === "slot") nested = true;
     });
-    if (nested) throw new Error("插槽不能嵌套插槽");
+    if (nested) throw new AppError("core.slot.nested");
 
     const used = new Set(
       this.slotsInComponent(componentId)
@@ -201,7 +202,7 @@ export class DocStore {
     );
     let name = cmd.params.name;
     if (name !== undefined) {
-      if (used.has(name)) throw new Error(`插槽名 "${name}" 已存在`);
+      if (used.has(name)) throw new AppError("core.slot.nameExists", { name });
     } else {
       let i = 1;
       while (used.has(`插槽 ${i}`)) i += 1;
@@ -213,7 +214,7 @@ export class DocStore {
   private expandSlotFill(cmd: Extract<Command, { type: "slot.fill" }>): Command[] {
     const slot = this.state.nodes[cmd.params.slotId];
     if (!slot || slot.type !== "slot") throw new Error(`插槽 ${cmd.params.slotId} 不存在`);
-    if (!findOverrideOwner(this.state, slot.id)) throw new Error("只能填充实例里的插槽");
+    if (!findOverrideOwner(this.state, slot.id)) throw new AppError("core.slot.onlyInstance");
     if (cmd.params.nodeIds.length === 0) return [];
 
     const out: Command[] = [];
@@ -1048,7 +1049,7 @@ export class DocStore {
                 .filter((s) => s.id !== node.id)
                 .map((s) => s.name);
               if (used.includes(String(patch.name))) {
-                throw new Error(`插槽名 "${String(patch.name)}" 已存在`);
+                throw new AppError("core.slot.nameExists", { name: String(patch.name) });
               }
             }
           }

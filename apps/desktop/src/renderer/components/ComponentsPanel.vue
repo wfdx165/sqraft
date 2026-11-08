@@ -6,6 +6,7 @@
 import { computed } from "vue";
 import { getRootComponents, type NodeId } from "@sqraft/core";
 import { docStore, hooks, select, switchMode, ui } from "../store";
+import { t } from "../i18n";
 import Icon from "./Icon.vue";
 
 const masters = computed<Array<{ id: NodeId; name: string }>>(() => {
@@ -33,26 +34,26 @@ function goto(masterId: NodeId): void {
 <template>
   <div class="panel" :data-version="ui.version">
     <header>
-      <span class="micro-label">组件</span>
+      <span class="micro-label">{{ t("panel.components") }}</span>
       <span class="count">{{ total }}</span>
     </header>
 
     <div v-if="!total" class="empty">
-      <p>还没有主组件</p>
-      <span>选中画板或分组，按 ⌥⌘K 创建</span>
+      <p>{{ t("components.emptyTitle") }}</p>
+      <span>{{ t("components.emptyHint") }}</span>
     </div>
 
     <div v-for="c in masters" :key="c.id" class="item">
       <button
         class="row-main"
-        :title="`单击定位母版，双击插入实例`"
+        :title="t('components.rowHint')"
         @click="goto(c.id)"
         @dblclick="insert(c.id)"
       >
         <Icon name="component" :size="14" />
         <span class="name">{{ c.name }}</span>
       </button>
-      <button class="insert" title="插入实例" @click="insert(c.id)">
+      <button class="insert" :title="t('components.insert')" @click="insert(c.id)">
         <Icon name="plus" :size="12" />
       </button>
     </div>

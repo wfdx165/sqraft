@@ -6,18 +6,20 @@ import { openContextMenu, type ContextMenuItem } from "../context-menu";
 import { keyOf, PANEL_BINDING, registerShortcuts, shortcutUi, type ActionId } from "../shortcuts";
 import { vTip } from "../tooltip";
 import { restartToUpdate, updateReady, updateUi } from "../update";
+import { t } from "../i18n";
+import type { MessageKey } from "../../shared/i18n";
 import appIcon from "../brand/app-icon.png";
 import Icon from "./Icon.vue";
 
-const tools: { kind: ToolKind; action: ActionId; label: string; icon: string }[] = [
-  { kind: "select", action: "mode.edit", label: "选择", icon: "select" },
-  { kind: "frame", action: "tool.frame", label: "画板", icon: "frame" },
-  { kind: "rect", action: "tool.rect", label: "矩形", icon: "rect" },
-  { kind: "ellipse", action: "tool.ellipse", label: "椭圆", icon: "ellipse" },
-  { kind: "triangle", action: "tool.triangle", label: "三角形", icon: "triangle" },
-  { kind: "line", action: "tool.line", label: "直线", icon: "line" },
-  { kind: "path", action: "tool.path", label: "钢笔", icon: "pen" },
-  { kind: "text", action: "tool.text", label: "文本", icon: "text" },
+const tools: { kind: ToolKind; action: ActionId; labelKey: MessageKey; icon: string }[] = [
+  { kind: "select", action: "mode.edit", labelKey: "toolbar.select", icon: "select" },
+  { kind: "frame", action: "tool.frame", labelKey: "node.frame", icon: "frame" },
+  { kind: "rect", action: "tool.rect", labelKey: "node.rect", icon: "rect" },
+  { kind: "ellipse", action: "tool.ellipse", labelKey: "node.ellipse", icon: "ellipse" },
+  { kind: "triangle", action: "tool.triangle", labelKey: "node.triangle", icon: "triangle" },
+  { kind: "line", action: "tool.line", labelKey: "node.line", icon: "line" },
+  { kind: "path", action: "tool.path", labelKey: "toolbar.pen", icon: "pen" },
+  { kind: "text", action: "tool.text", labelKey: "node.text", icon: "text" },
 ];
 
 /** 空文档没有页面：绘图工具不可用，先建页再画 */
@@ -57,22 +59,24 @@ function openOverflowMenu(e: MouseEvent): void {
   const items: ContextMenuItem[] = [];
   if (hiddenGroups.value.has("doc")) {
     items.push({
-      label: `当前文件：${docName.value}${docDirty.value ? "（未保存）" : ""}`,
+      label: t("toolbar.currentFile", {
+        name: `${docName.value}${docDirty.value ? t("toolbar.unsavedSuffix") : ""}`,
+      }),
       disabled: true,
       run: () => {},
     });
-    items.push({ label: "回到欢迎页", hint: keyOf("file.closeDoc"), run: () => void onClose() });
+    items.push({ label: t("toolbar.backToWelcome"), hint: keyOf("file.closeDoc"), run: () => void onClose() });
   }
   if (hiddenGroups.value.has("file")) {
-    items.push({ label: "打开…", hint: keyOf("file.open"), separator: items.length > 0, run: () => void onOpen() });
-    items.push({ label: "保存", hint: keyOf("file.save"), run: () => void onSave() });
+    items.push({ label: t("menu.open"), hint: keyOf("file.open"), separator: items.length > 0, run: () => void onOpen() });
+    items.push({ label: t("menu.save"), hint: keyOf("file.save"), run: () => void onSave() });
   }
   if (hiddenGroups.value.has("history")) {
-    items.push({ label: "撤销", hint: keyOf("edit.undo"), separator: items.length > 0, disabled: !docStore.canUndo, run: () => undo() });
-    items.push({ label: "重做", hint: keyOf("edit.redo"), disabled: !docStore.canRedo, run: () => redo() });
+    items.push({ label: t("menu.undo"), hint: keyOf("edit.undo"), separator: items.length > 0, disabled: !docStore.canUndo, run: () => undo() });
+    items.push({ label: t("menu.redo"), hint: keyOf("edit.redo"), disabled: !docStore.canRedo, run: () => redo() });
   }
   if (hiddenGroups.value.has("shortcuts")) {
-    items.push({ label: "键盘快捷键", hint: PANEL_BINDING, separator: items.length > 0, run: () => toggleShortcuts() });
+    items.push({ label: t("shortcuts.title"), hint: PANEL_BINDING, separator: items.length > 0, run: () => toggleShortcuts() });
   }
   openContextMenu({ x: e.clientX, y: e.clientY }, items);
 }
@@ -106,11 +110,11 @@ async function onClose() {
 }
 
 // 当前文件：名字 + 未保存标记（脏状态由 syncTitle 写进 fileState，保存后立刻清掉）
-const docName = computed(() => fileState.name);
+const docName = computed(() => fileState.name || t("common.untitled"));
 const docDirty = computed(() => fileState.dirty);
 const docTip = computed(() => {
-  const where = fileState.path ?? "尚未保存到磁盘";
-  return fileState.dirty ? `未保存的修改 · ${where}` : where;
+  const where = fileState.path ?? t("toolbar.notSaved");
+  return fileState.dirty ? t("toolbar.unsavedWhere", { where }) : where;
 });
 
 function toggleShortcuts() {
@@ -166,7 +170,7 @@ onBeforeUnmount(() => {
       <span v-if="docDirty" class="doc-dot" aria-hidden="true">•</span>
       <button
         class="doc-close"
-        v-tip="{ label: '关闭文档，回到欢迎页', shortcut: keyOf('file.closeDoc') }"
+        v-tip="{ label: t('toolbar.closeDocTip'), shortcut: keyOf('file.closeDoc') }"
         @click="onClose"
       >
         <Icon name="close" :size="11" />
@@ -175,20 +179,20 @@ onBeforeUnmount(() => {
     <button
       v-show="!hiddenGroups.has('doc')"
       class="doc-chip back"
-      v-tip="{ label: '关闭文档，回到欢迎页', shortcut: keyOf('file.closeDoc') }"
+      v-tip="{ label: t('toolbar.closeDocTip'), shortcut: keyOf('file.closeDoc') }"
       @click="onClose"
     >
-      <Icon name="home" :size="12" /><span>欢迎页</span>
+      <Icon name="home" :size="12" /><span>{{ t("toolbar.welcome") }}</span>
     </button>
 
     <!-- 更新就绪：唯一的常驻入口；平时不存在，不占视觉 -->
     <button
       v-if="updateReady"
       class="doc-chip update"
-      v-tip="{ label: `新版本 ${updateUi.latestVersion ?? ''} 已就绪，重启后安装` }"
+      v-tip="{ label: t('update.ready', { version: updateUi.latestVersion ?? '' }) }"
       @click="restartToUpdate"
     >
-      <Icon name="update" :size="12" /><span>重启更新</span>
+      <Icon name="update" :size="12" /><span>{{ t("about.restart") }}</span>
     </button>
 
     <span v-show="!hiddenGroups.has('doc')" class="divider" />
@@ -197,18 +201,18 @@ onBeforeUnmount(() => {
       <button
         class="mode-btn"
         :class="{ active: ui.mode === 'pan' }"
-        v-tip="{ label: '拖动画布', shortcut: keyOf('mode.pan') }"
+        v-tip="{ label: t('toolbar.dragCanvas'), shortcut: keyOf('mode.pan') }"
         @click="switchMode('pan')"
       >
-        <Icon name="hand" :size="13" /><span>拖动</span>
+        <Icon name="hand" :size="13" /><span>{{ t("toolbar.drag") }}</span>
       </button>
       <button
         class="mode-btn"
         :class="{ active: ui.mode === 'edit' }"
-        v-tip="{ label: '编辑页面', shortcut: keyOf('mode.edit') }"
+        v-tip="{ label: t('toolbar.editPage'), shortcut: keyOf('mode.edit') }"
         @click="switchMode('edit')"
       >
-        <Icon name="select" :size="13" /><span>编辑</span>
+        <Icon name="select" :size="13" /><span>{{ t("toolbar.edit") }}</span>
       </button>
     </nav>
 
@@ -216,30 +220,30 @@ onBeforeUnmount(() => {
 
     <nav class="group">
       <button
-        v-for="t in tools"
-        :key="t.kind"
+        v-for="tool in tools"
+        :key="tool.kind"
         class="icon-btn"
-        :class="{ active: ui.mode === 'edit' && ui.tool === t.kind }"
+        :class="{ active: ui.mode === 'edit' && ui.tool === tool.kind }"
         :disabled="!hasPage"
-        v-tip="{ label: hasPage ? t.label : '先新建页面', shortcut: keyOf(t.action) }"
-        @click="pickTool(t.kind)"
+        v-tip="{ label: hasPage ? t(tool.labelKey) : t('toolbar.newPageFirst'), shortcut: keyOf(tool.action) }"
+        @click="pickTool(tool.kind)"
       >
-        <Icon :name="t.icon" />
+        <Icon :name="tool.icon" />
       </button>
     </nav>
     <span v-show="!hiddenGroups.has('history')" class="divider" />
     <nav v-show="!hiddenGroups.has('history')" class="group">
-      <button class="icon-btn" v-tip="{ label: '撤销', shortcut: keyOf('edit.undo') }" :disabled="!docStore.canUndo" @click="undo">
+      <button class="icon-btn" v-tip="{ label: t('menu.undo'), shortcut: keyOf('edit.undo') }" :disabled="!docStore.canUndo" @click="undo">
         <Icon name="undo" />
       </button>
-      <button class="icon-btn" v-tip="{ label: '重做', shortcut: keyOf('edit.redo') }" :disabled="!docStore.canRedo" @click="redo">
+      <button class="icon-btn" v-tip="{ label: t('menu.redo'), shortcut: keyOf('edit.redo') }" :disabled="!docStore.canRedo" @click="redo">
         <Icon name="redo" />
       </button>
     </nav>
     <span v-show="!hiddenGroups.has('file')" class="divider" />
     <nav v-show="!hiddenGroups.has('file')" class="group">
-      <button class="icon-btn" v-tip="{ label: '打开', shortcut: keyOf('file.open') }" @click="onOpen"><Icon name="open" /></button>
-      <button class="icon-btn" v-tip="{ label: '保存', shortcut: keyOf('file.save') }" @click="onSave"><Icon name="save" /></button>
+      <button class="icon-btn" v-tip="{ label: t('toolbar.open'), shortcut: keyOf('file.open') }" @click="onOpen"><Icon name="open" /></button>
+      <button class="icon-btn" v-tip="{ label: t('menu.save'), shortcut: keyOf('file.save') }" @click="onSave"><Icon name="save" /></button>
     </nav>
     <span v-show="!hiddenGroups.has('shortcuts')" class="divider" />
 
@@ -248,7 +252,7 @@ onBeforeUnmount(() => {
       class="icon-btn"
       :class="{ active: shortcutUi.open }"
       data-shortcuts-toggle
-      v-tip="{ label: '键盘快捷键', shortcut: PANEL_BINDING }"
+      v-tip="{ label: t('shortcuts.title'), shortcut: PANEL_BINDING }"
       @click="toggleShortcuts"
     >
       <Icon name="keyboard" />
@@ -258,7 +262,7 @@ onBeforeUnmount(() => {
     <button
       v-if="hiddenGroups.size > 0"
       class="icon-btn overflow"
-      v-tip="{ label: '更多' }"
+      v-tip="{ label: t('toolbar.more') }"
       @click="openOverflowMenu"
     >
       <span class="dots">⋯</span>

@@ -1,6 +1,6 @@
 {
   "name": "@sqraft/desktop",
-  "version": "0.0.2",
+  "version": "0.0.3",
   "private": true,
   "description": "Sqraft 桌面应用",
   "main": "out/main/index.js",

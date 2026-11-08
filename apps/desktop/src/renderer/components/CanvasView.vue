@@ -116,6 +116,7 @@ import {
 import { paintInfoOverlays } from "../canvas/info-overlays";
 import { keyOf, registerShortcuts } from "../shortcuts";
 import { vTip } from "../tooltip";
+import { t } from "../i18n";
 import Icon from "./Icon.vue";
 
 /**
@@ -211,7 +212,7 @@ const hasPage = computed(() => {
 /** 空文档：建第一个页面并适配视图 */
 function createFirstPage(): void {
   const page = createNode("page", {
-    name: "页面 1",
+    name: `${t("node.page")} 1`,
     x: 0,
     y: 0,
     width: DEFAULT_PAGE_WIDTH,
@@ -751,7 +752,7 @@ function startRenameForSelection(): void {
 async function copySelectionAsPng(): Promise<void> {
   const pageId = ensureActivePage()?.id ?? null;
   if (!pageId) {
-    showToast("复制失败：当前没有页面", "error");
+    showToast(t("canvas.copyNoPage"), "error");
     return;
   }
   const ids = ui.selection.filter((id) => {
@@ -771,13 +772,13 @@ async function copySelectionAsPng(): Promise<void> {
       ensureLinkedImage,
     });
     if (!dataUrl) {
-      showToast("复制失败：内容为空或过大", "error");
+      showToast(t("canvas.copyEmpty"), "error");
       return;
     }
     const ok = await window.sqraft.app.writeClipboardImage(dataUrl);
-    showToast(ok ? "已复制 PNG 到剪贴板" : "复制失败：剪贴板不可用", ok ? "info" : "error");
+    showToast(ok ? t("canvas.copiedPng") : t("canvas.copyClipboardUnavailable"), ok ? "info" : "error");
   } catch (error) {
-    showToast(`复制失败：${String(error)}`, "error");
+    showToast(t("canvas.copyFailed", { detail: String(error) }), "error");
   }
 }
 
@@ -2468,9 +2469,9 @@ onBeforeUnmount(() => {
 
     <!-- 空文档引导：没有页面时先建页，避免画在空气里 -->
     <div v-if="!hasPage" class="empty-doc glass">
-      <span class="empty-title">这个文件还没有页面</span>
-      <span class="empty-hint">页面是设计的载体，先建一个再开始画</span>
-      <button class="empty-action" @click="createFirstPage">新建页面</button>
+      <span class="empty-title">{{ t("canvas.emptyTitle") }}</span>
+      <span class="empty-hint">{{ t("canvas.emptyHint") }}</span>
+      <button class="empty-action" @click="createFirstPage">{{ t("pages.add") }}</button>
     </div>
 
     <!-- 行内改名（页面名 / 图层名，F2） -->
@@ -2518,14 +2519,14 @@ onBeforeUnmount(() => {
     />
 
     <div class="zoom-bar glass">
-      <button v-tip="{ label: '缩小', shortcut: keyOf('view.zoomOut') }" @click="zoomStep(1 / 1.2)">−</button>
-      <button class="zoom-pct" v-tip="{ label: '选择缩放比例' }" @click="zoomMenuOpen = !zoomMenuOpen">{{ zoomPct }}%</button>
-      <button v-tip="{ label: '放大', shortcut: keyOf('view.zoomIn') }" @click="zoomStep(1.2)">＋</button>
+      <button v-tip="{ label: t('canvas.zoomOut'), shortcut: keyOf('view.zoomOut') }" @click="zoomStep(1 / 1.2)">−</button>
+      <button class="zoom-pct" v-tip="{ label: t('canvas.zoomSelect') }" @click="zoomMenuOpen = !zoomMenuOpen">{{ zoomPct }}%</button>
+      <button v-tip="{ label: t('canvas.zoomIn'), shortcut: keyOf('view.zoomIn') }" @click="zoomStep(1.2)">＋</button>
       <span class="z-divider" />
-      <button class="z-fit" v-tip="{ label: ui.mode === 'edit' ? '适配活动页' : '适配全部', shortcut: keyOf('view.fit') }" @click="fitView()">
+      <button class="z-fit" v-tip="{ label: ui.mode === 'edit' ? t('canvas.fitActive') : t('canvas.fitAll'), shortcut: keyOf('view.fit') }" @click="fitView()">
         <Icon name="fit" :size="13" />
       </button>
-      <button class="z-fit" v-tip="{ label: '查看全部', shortcut: keyOf('view.fitAll') }" @click="fitAll()">
+      <button class="z-fit" v-tip="{ label: t('canvas.viewAll'), shortcut: keyOf('view.fitAll') }" @click="fitAll()">
         <Icon name="pages" :size="13" />
       </button>
     </div>
@@ -2538,7 +2539,7 @@ onBeforeUnmount(() => {
       </button>
       <span class="z-menu-divider" />
       <button @click="fitView(); zoomMenuOpen = false">
-        <span>{{ ui.mode === "edit" ? "适配活动页" : "适配全部" }}</span>
+        <span>{{ ui.mode === "edit" ? t("canvas.fitActive") : t("canvas.fitAll") }}</span>
         <span class="check"><Icon name="fit" :size="11" /></span>
       </button>
     </div>

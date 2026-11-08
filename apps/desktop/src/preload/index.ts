@@ -5,6 +5,7 @@ import {
   type AppLogLevel,
   type CloseRequest,
   type FetchImageResult,
+  type LanguageState,
   type McpCallRequest,
   type McpCallResult,
   type McpSetupInfo,
@@ -20,6 +21,7 @@ import {
   type UnsavedChoice,
   type UpdateState,
 } from "../shared/ipc";
+import type { LanguagePreference, Locale } from "../shared/i18n";
 
 /**
  * 渲染层能接触到的全部主进程能力，只有这一处。
@@ -80,6 +82,13 @@ const api: SqraftApi = {
   },
   app: {
     info: () => ipcRenderer.invoke(CHANNELS.appInfo) as Promise<AppInfo>,
+    setLanguage: (preference: LanguagePreference) =>
+      ipcRenderer.invoke(CHANNELS.appSetLanguage, preference) as Promise<LanguageState>,
+    onLanguageChange: (handler: (locale: Locale) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, locale: Locale) => handler(locale);
+      ipcRenderer.on(CHANNELS.appLanguageChanged, listener);
+      return () => ipcRenderer.removeListener(CHANNELS.appLanguageChanged, listener);
+    },
     showLicenses: () => ipcRenderer.invoke(CHANNELS.appShowLicenses) as Promise<void>,
     copyText: (text: string) => ipcRenderer.send(CHANNELS.appCopyText, text),
     readClipboardImage: () => ipcRenderer.invoke(CHANNELS.appClipboardImage) as Promise<Uint8Array | null>,

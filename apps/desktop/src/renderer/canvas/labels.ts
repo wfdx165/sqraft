@@ -20,6 +20,7 @@ import {
   LABEL_ICON_GAP,
   LABEL_ICON_SIZE,
   labelChipWidth,
+  labelFont,
 } from "./label-metrics";
 import { LIBRARY_ACCENT } from "./selection-overlay";
 
@@ -71,13 +72,14 @@ function hookFontsReady(): void {
  */
 function labelTextWidth(name: string, vp: Viewport, ctx: CanvasRenderingContext2D | null): number {
   if (!ctx) return name.length * 11;
-  const key = `m:${name}`;
+  const key = `m:${labelFont()}:${name}`;
   const cached = measuredWidths.get(key);
   if (cached !== undefined) return cached;
   hookFontsReady();
   ctx.save();
   ctx.setTransform(vp.dpr, 0, 0, vp.dpr, 0, 0);
-  ctx.font = LABEL_FONT;
+  const font = labelFont();
+  ctx.font = font;
   const width = ctx.measureText(name).width;
   ctx.restore();
   measuredWidths.set(key, width);
@@ -154,7 +156,7 @@ function paintLabelIcon(
 export function drawRootLabels(g: CanvasRenderingContext2D, vp: Viewport, opts: RootLabelDrawOptions): void {
   g.save();
   g.setTransform(vp.dpr, 0, 0, vp.dpr, 0, 0);
-  g.font = LABEL_FONT;
+  g.font = LABEL_FONT();
   g.textBaseline = "middle";
   // 页面在前、母版在后：母版标签永远在最上层
   paintRootLabels(g, vp, opts, "page");

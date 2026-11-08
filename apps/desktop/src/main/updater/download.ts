@@ -6,6 +6,7 @@ import { dirname } from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import { isTrustedUpdateUrl } from "./protocol";
+import { t } from "../i18n";
 
 export interface DownloadRequest {
   url: string;
@@ -25,7 +26,7 @@ const MAX_REDIRECTS = 5;
 async function openStream(url: string): Promise<Response> {
   let current = url;
   for (let hop = 0; hop <= MAX_REDIRECTS; hop += 1) {
-    if (!isTrustedUpdateUrl(current)) throw new Error(`更新地址不在白名单内：${current}`);
+    if (!isTrustedUpdateUrl(current)) throw new Error(t("update.downloadUrlNotAllowed", { url: current }));
     const response = await fetch(current, {
       redirect: "manual",
       // 整包上限 10 分钟：信号会跟着响应体走，不能用"只等响应头"的超时
@@ -34,14 +35,14 @@ async function openStream(url: string): Promise<Response> {
     });
     if (response.status >= 300 && response.status < 400) {
       const location = response.headers.get("location");
-      if (!location) throw new Error(`更新地址返回 ${response.status} 但没有跳转目标`);
+      if (!location) throw new Error(t("update.redirectNoTarget", { status: response.status }));
       current = new URL(location, current).toString();
       continue;
     }
-    if (!response.ok) throw new Error(`下载失败：HTTP ${response.status}`);
+    if (!response.ok) throw new Error(t("update.downloadHttp", { status: response.status }));
     return response;
   }
-  throw new Error("更新地址跳转次数过多");
+  throw new Error(t("update.tooManyRedirects"));
 }
 
 export async function downloadVerified(request: DownloadRequest): Promise<void> {
@@ -52,7 +53,7 @@ export async function downloadVerified(request: DownloadRequest): Promise<void> 
   const response = await openStream(request.url);
   const lengthHeader = response.headers.get("content-length");
   const total = request.size ?? (lengthHeader ? Number.parseInt(lengthHeader, 10) : null) ?? null;
-  if (!response.body) throw new Error("更新包没有响应体");
+  if (!response.body) throw new Error(t("update.noBody"));
 
   const hash = createHash("sha256");
   let received = 0;
@@ -75,12 +76,12 @@ export async function downloadVerified(request: DownloadRequest): Promise<void> 
 
   if (total !== null && received !== total) {
     await rm(part, { force: true });
-    throw new Error(`更新包不完整：应有 ${total} 字节，实际 ${received} 字节`);
+    throw new Error(t("update.incomplete", { total, received }));
   }
   const digest = hash.digest("hex");
   if (digest.toLowerCase() !== request.sha256.toLowerCase()) {
     await rm(part, { force: true });
-    throw new Error("更新包校验失败（sha256 不匹配）");
+    throw new Error(t("update.shaMismatch"));
   }
   await rename(part, request.dest);
 }

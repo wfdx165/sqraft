@@ -5,6 +5,8 @@
 import { worldRect } from "@sqraft/core";
 import { worldToScreen, type Viewport } from "@sqraft/render";
 import { docStore } from "../store";
+import { t } from "../i18n";
+import { labelFont } from "../font-stack";
 import type { DropTarget } from "./drop-target";
 
 export function paintDropTarget(g: CanvasRenderingContext2D, vp: Viewport, drop: DropTarget | null): void {
@@ -24,8 +26,12 @@ export function paintDropTarget(g: CanvasRenderingContext2D, vp: Viewport, drop:
   g.strokeRect(a.x + 0.5, a.y + 0.5, b.x - a.x - 1, b.y - a.y - 1);
   g.setLineDash([]);
 
-  const label = page ? "移入页面" : node.type === "component" ? "移入组件" : "移入画板";
-  g.font = "11px 'Geist Variable', 'PingFang SC', sans-serif";
+  const label = page
+    ? t("canvas.dropIntoPage")
+    : node.type === "component"
+      ? t("canvas.dropIntoComponent")
+      : t("canvas.dropIntoFrame");
+  g.font = labelFont();
   g.textAlign = "left";
   g.textBaseline = "middle";
   const tw = g.measureText(label).width;

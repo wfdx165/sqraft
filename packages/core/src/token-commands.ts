@@ -6,6 +6,7 @@
  */
 import type { DocState, NodeId } from "./model";
 import type { Command } from "./store";
+import { AppError } from "./errors";
 import {
   hasNodeNumericTokenRef,
   mapNumericTokenRefs,
@@ -57,10 +58,10 @@ export function applyTokenCommand(state: DocState, cmd: TokenCommand, changed: S
     case "token.rename": {
       const { from, to } = cmd.params;
       // 非法改名直接抛错：静默 no-op 会留下一条"撤销了却什么也没变"的历史
-      if (from === to) throw new Error(`Token "${from}" 的目标路径与原名相同`);
+      if (from === to) throw new AppError("core.token.samePath", { from });
       const entry = state.tokens[from];
-      if (!entry) throw new Error(`Token "${from}" 不存在`);
-      if (state.tokens[to]) throw new Error(`Token "${to}" 已存在，不能重命名`);
+      if (!entry) throw new AppError("core.token.missing", { path: from });
+      if (state.tokens[to]) throw new AppError("core.token.exists", { path: to });
 
       delete state.tokens[from];
       state.tokens[to] = entry;

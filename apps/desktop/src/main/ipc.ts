@@ -15,9 +15,12 @@ import {
 import { mtimeChanged, mtimeOf, readFileSnapshot, writeFileAtomic } from "./files";
 import { basename, join } from "node:path";
 import { logApp, logRenderer } from "./mcp/log";
-import { flushPendingOpen, forgetRecentFile, listRecentFiles, requestOpen, touchRecentFile } from "./recent-state";
+import { flushPendingOpen, forgetRecentFile, listRecentFiles, requestOpen, touchRecentFile, updateLanguagePreference } from "./recent-state";
+import { getLanguagePreference, getLocale, setMainLanguage, t } from "./i18n";
+import { isLanguagePreference } from "../shared/i18n";
+import { rebuildMenu } from "./menu";
 
-const FILTERS = [{ name: "Sqraft 设计文件", extensions: ["sqraft"] }];
+const SQRAFT_FILTER = () => [{ name: t("fileFilter.sqraft"), extensions: ["sqraft"] }];
 
 function windowOf(sender: Electron.WebContents): BrowserWindow | undefined {
   return BrowserWindow.fromWebContents(sender) ?? undefined;
@@ -47,8 +50,8 @@ export function registerFileChannels(): void {
     const window = windowOf(event.sender);
     const started = Date.now();
     const result = window
-      ? await dialog.showOpenDialog(window, { properties: ["openFile"], filters: FILTERS })
-      : await dialog.showOpenDialog({ properties: ["openFile"], filters: FILTERS });
+      ? await dialog.showOpenDialog(window, { properties: ["openFile"], filters: SQRAFT_FILTER() })
+      : await dialog.showOpenDialog({ properties: ["openFile"], filters: SQRAFT_FILTER() });
     const path = result.filePaths[0];
     if (result.canceled || !path) {
       logApp("info", "file/open canceled", { ms: Date.now() - started });
@@ -61,7 +64,7 @@ export function registerFileChannels(): void {
       return { status: "ok", file };
     } catch (error) {
       logApp("error", "file/open failed", { path, error: messageOf(error), ms: Date.now() - started });
-      return { status: "error", message: `无法读取文件：${messageOf(error)}` };
+      return { status: "error", message: t("error.readFile", { detail: messageOf(error) }) };
     }
   });
 
@@ -75,7 +78,7 @@ export function registerFileChannels(): void {
     } catch (error) {
       await forgetRecentFile(path);
       logApp("error", "file/open-path failed", { path, error: messageOf(error), ms: Date.now() - started });
-      return { status: "error", message: `无法打开 ${basename(path)}：${messageOf(error)}` };
+      return { status: "error", message: t("error.openFile", { name: basename(path), detail: messageOf(error) }) };
     }
   });
 
@@ -83,7 +86,20 @@ export function registerFileChannels(): void {
     name: app.getName(),
     version: app.getVersion(),
     dataPath: app.getPath("userData"),
+    language: getLanguagePreference(),
+    locale: getLocale(),
   }));
+
+  ipcMain.handle(CHANNELS.appSetLanguage, async (_event, raw: unknown) => {
+    if (!isLanguagePreference(raw)) throw new Error("invalid language preference");
+    await updateLanguagePreference(raw);
+    const locale = setMainLanguage(raw);
+    rebuildMenu();
+    for (const win of BrowserWindow.getAllWindows()) {
+      win.webContents.send(CHANNELS.appLanguageChanged, locale);
+    }
+    return { language: raw, locale };
+  });
 
   // 许可文本随包分发（extraResources → Resources/licenses/）；dev 下没有这段资源，退回
   // electron 自带 dist 目录（里面同样有 LICENSE 与 LICENSES.chromium.html）
@@ -139,13 +155,13 @@ export function registerFileChannels(): void {
         error: messageOf(error),
         ms: Date.now() - started,
       });
-      return { status: "error", message: `保存失败：${messageOf(error)}` };
+      return { status: "error", message: t("error.saveFile", { detail: messageOf(error) }) };
     }
   });
 
   ipcMain.handle(CHANNELS.fileSaveAs, async (event, request: SaveAsRequest): Promise<SaveAsResult> => {
     const window = windowOf(event.sender);
-    const options = { defaultPath: request.suggestedName, filters: FILTERS };
+    const options = { defaultPath: request.suggestedName, filters: SQRAFT_FILTER() };
     const started = Date.now();
     const result = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options);
     if (result.canceled || !result.filePath) {
@@ -168,7 +184,7 @@ export function registerFileChannels(): void {
         error: messageOf(error),
         ms: Date.now() - started,
       });
-      return { status: "error", message: `保存失败：${messageOf(error)}` };
+      return { status: "error", message: t("error.saveFile", { detail: messageOf(error) }) };
     }
   });
 
@@ -178,7 +194,7 @@ export function registerFileChannels(): void {
       const window = windowOf(event.sender);
       const options = {
         defaultPath: request.suggestedName,
-        filters: [{ name: "PNG 图片", extensions: ["png"] }],
+        filters: [{ name: t("fileFilter.png"), extensions: ["png"] }],
       };
       const result = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options);
       if (result.canceled || !result.filePath) return { status: "canceled" };
@@ -189,7 +205,7 @@ export function registerFileChannels(): void {
         return { status: "ok", path: result.filePath, name: basename(result.filePath), mtimeMs: 0 };
       } catch (error) {
         logApp("error", "file/export-png failed", { path: result.filePath, error: messageOf(error) });
-        return { status: "error", message: `导出失败：${messageOf(error)}` };
+        return { status: "error", message: t("error.exportFile", { detail: messageOf(error) }) };
       }
     },
   );
@@ -207,11 +223,11 @@ export function registerFileChannels(): void {
     const window = windowOf(event.sender);
     const options: Electron.MessageBoxOptions = {
       type: "warning",
-      buttons: ["保存", "不保存", "取消"],
+      buttons: [t("common.save"), t("common.dontSave"), t("common.cancel")],
       defaultId: 0,
       cancelId: 2,
-      message: "当前文档有未保存的改动",
-      detail: "关闭前要保存吗？",
+      message: t("dialog.unsavedMessage"),
+      detail: t("dialog.unsavedDetail"),
     };
     unsavedDialog = (window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options))
       .then((result) => {
@@ -229,11 +245,11 @@ export function registerFileChannels(): void {
     const window = windowOf(event.sender);
     const options: Electron.MessageBoxOptions = {
       type: "warning",
-      buttons: ["覆盖", "另存为", "取消"],
+      buttons: [t("dialog.overwrite"), t("dialog.saveAs"), t("common.cancel")],
       defaultId: 1,
       cancelId: 2,
-      message: "文件已被外部修改",
-      detail: "磁盘上的内容和你打开时不一样了。要覆盖它，还是另存为新文件？",
+      message: t("dialog.overwriteMessage"),
+      detail: t("dialog.overwriteDetail"),
     };
     const result = window ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
     const choice = (["overwrite", "save-as", "cancel"] as const)[result.response] ?? "cancel";
@@ -243,7 +259,7 @@ export function registerFileChannels(): void {
 
   ipcMain.handle(CHANNELS.dialogError, async (event, message: string) => {
     const window = windowOf(event.sender);
-    const options: Electron.MessageBoxOptions = { type: "error", buttons: ["知道了"], message };
+    const options: Electron.MessageBoxOptions = { type: "error", buttons: [t("common.ok")], message };
     if (window) await dialog.showMessageBox(window, options);
     else await dialog.showMessageBox(options);
   });

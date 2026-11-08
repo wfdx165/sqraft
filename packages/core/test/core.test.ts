@@ -1242,7 +1242,7 @@ describe("组件：插槽", () => {
     const { store, content, slotClone, rect } = setup();
     store.apply({ type: "slot.fill", params: { slotId: slotClone, nodeIds: [rect.id] } });
     const before = JSON.stringify(store.doc);
-    expect(() => store.apply({ type: "node.delete", params: { nodeId: content.id } })).toThrow(/已被实例填充/);
+    expect(() => store.apply({ type: "node.delete", params: { nodeId: content.id } })).toThrow("core.slot.filled");
     expect(JSON.stringify(store.doc)).toBe(before);
 
     store.apply({ type: "slot.clear", params: { slotId: slotClone } });
@@ -1267,7 +1267,7 @@ describe("组件：插槽", () => {
     store.apply({ type: "node.create", params: { nodes: [other], parentId: master.id } });
     store.apply({ type: "slot.create", params: { nodeId: other.id, name: "footer" } });
     expect(() => store.apply({ type: "node.update", params: { nodeId: content.id, patch: { name: "footer" } } })).toThrow(
-      /已存在/,
+      "core.slot.nameExists",
     );
 
     const wrapper = createNode("frame", { name: "包裹", x: 0, y: 0, width: 100, height: 100 });
@@ -1276,17 +1276,17 @@ describe("组件：插槽", () => {
       type: "node.reparent",
       params: { nodeId: content.id, parentId: wrapper.id, x: 0, y: 0 },
     });
-    expect(() => store.apply({ type: "slot.create", params: { nodeId: wrapper.id } })).toThrow(/不能嵌套插槽/);
+    expect(() => store.apply({ type: "slot.create", params: { nodeId: wrapper.id } })).toThrow("core.slot.nested");
 
     const extra = createNode("frame", { name: "额外区", x: 0, y: 0, width: 20, height: 20 });
     store.apply({ type: "node.create", params: { nodes: [extra], parentId: master.id } });
     const extraClone = `${instanceId}:${extra.id}`;
     expect(store.doc.nodes[extraClone].type).toBe("frame");
-    expect(() => store.apply({ type: "slot.create", params: { nodeId: extraClone } })).toThrow(/实例内部/);
+    expect(() => store.apply({ type: "slot.create", params: { nodeId: extraClone } })).toThrow("core.slot.instanceInterior");
 
     const outside = createNode("frame", { name: "页面画板", x: 900, y: 0, width: 50, height: 50 });
     store.apply({ type: "node.create", params: { nodes: [outside], parentId: store.doc.rootIds[0] } });
-    expect(() => store.apply({ type: "slot.create", params: { nodeId: outside.id } })).toThrow(/主组件内/);
+    expect(() => store.apply({ type: "slot.create", params: { nodeId: outside.id } })).toThrow("core.slot.mustBeMain");
   });
 });
 
@@ -2114,6 +2114,27 @@ describe("文本行盒", () => {
     expect(layout.lines.at(-1)?.text.endsWith("…")).toBe(true);
   });
 
+  it("日文禁则：收尾标点不出现在行首、开括号不出现在行尾", () => {
+    const startForbidden = [..."、。，．！？：；）］｝」』】〉》〕"];
+    const endForbidden = [..."（［｛「『【〈《〔"];
+    const sample = "あいう。えおか、きくけこ「さしすせそ」たちつてと（なにぬねの）";
+    const layout = layoutText(sample, { fontSize: 10 }, { measure, maxWidth: 30 });
+    expect(layout.lines.length).toBeGreaterThan(3);
+    for (const line of layout.lines) {
+      if (!line.text) continue;
+      expect(startForbidden).not.toContain(line.text[0]);
+      expect(endForbidden).not.toContain(line.text[line.text.length - 1]);
+    }
+  });
+
+  it("空格断行也遵守禁则：标点不会被甩到下一行行首", () => {
+    const layout = layoutText("abc 。def", { fontSize: 10 }, { measure, maxWidth: 40 });
+    expect(layout.lines.length).toBeGreaterThan(1);
+    for (const line of layout.lines) {
+      if (line.text) expect(line.text[0]).not.toBe("。");
+    }
+  });
+
   it("行高与字距单位换算", () => {
     expect(lineHeightPx({ fontSize: 10, lineHeight: 20, lineHeightUnit: "px" })).toBe(20);
     expect(lineHeightPx({ fontSize: 10, lineHeight: 200, lineHeightUnit: "percent" })).toBe(20);
@@ -2898,7 +2919,7 @@ describe("对齐与分布（node.align / node.distribute）", () => {
     const b = rect(store, pageId, 100, 0);
     expect(() =>
       store.apply({ type: "node.distribute", params: { nodeIds: [a.id, b.id], axis: "horizontal" } }),
-    ).toThrow(/3/);
+    ).toThrow("core.distribute.needThree");
   });
 
   it("自动布局子项不能对齐（位置由布局决定）", () => {
@@ -2910,7 +2931,7 @@ describe("对齐与分布（node.align / node.distribute）", () => {
     store.apply({ type: "node.create", params: { nodes: [child], parentId: frame.id } });
 
     expect(() => store.apply({ type: "node.align", params: { nodeIds: [child.id], align: "left" } })).toThrow(
-      /自动布局/,
+      "core.arrange.autoLayout",
     );
   });
 });
@@ -3220,7 +3241,7 @@ describe("分组跨页", () => {
     store.apply({ type: "node.create", params: { nodes: [b], parentId: second.id } });
 
     expect(() => store.apply({ type: "node.group", params: { nodeIds: [a.id, b.id], groupId: "g1" } })).toThrow(
-      /同一页面/,
+      "core.group.crossPage",
     );
   });
 });

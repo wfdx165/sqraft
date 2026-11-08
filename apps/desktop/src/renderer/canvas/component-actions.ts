@@ -2,6 +2,7 @@
 import { createNode, type NodeId } from "@sqraft/core";
 import { screenToWorld, type Viewport } from "@sqraft/render";
 import { dispatch, docStore, select, switchMode, ui } from "../store";
+import { t } from "../i18n";
 
 export interface ComponentActionDeps {
   vp: Viewport;
@@ -72,8 +73,26 @@ export function createComponentFromSelection(deps: ComponentActionDeps): void {
   const nodes = ids.map((id) => docStore.doc.nodes[id]);
   const singleContainer = nodes.length === 1 && (nodes[0].type === "frame" || nodes[0].type === "group");
   const componentId = singleContainer ? ids[0] : createNode("component").id;
+  const base = t("node.component");
+  const used = new Set(
+    Object.values(docStore.doc.nodes)
+      .filter((node) => node.type === "component")
+      .map((node) => node.name),
+  );
+  let index = 1;
+  while (used.has(`${base} ${index}`)) index += 1;
   try {
-    dispatch({ type: "component.create", params: { nodeIds: ids, componentId } }, "component");
+    dispatch(
+      {
+        type: "component.create",
+        params: {
+          nodeIds: ids,
+          componentId,
+          ...(singleContainer ? {} : { name: `${base} ${index}` }),
+        },
+      },
+      "component",
+    );
   } catch {
     return;
   }

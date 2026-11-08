@@ -1,13 +1,22 @@
 /** 绘图工具的类型与默认命名。 */
-export const TOOL_NAMES: Record<string, string> = {
-  frame: "画板",
-  rect: "矩形",
-  ellipse: "椭圆",
-  triangle: "三角形",
-  line: "直线",
-  path: "路径",
-  text: "文本",
+import { t } from "../i18n";
+import type { MessageKey } from "../../shared/i18n";
+
+const TOOL_NAME_KEYS: Record<string, MessageKey> = {
+  frame: "node.frame",
+  rect: "node.rect",
+  ellipse: "node.ellipse",
+  triangle: "node.triangle",
+  line: "node.line",
+  path: "node.path",
+  text: "node.text",
 };
+
+/** 新建图层的默认名跟随界面语言。 */
+export function toolName(tool: string): string {
+  const key = TOOL_NAME_KEYS[tool];
+  return key ? t(key) : tool;
+}
 
 /** 正三角形的高宽比：⇧ 约束用（√3/2）。 */
 export const EQUILATERAL_RATIO = Math.sqrt(3) / 2;
