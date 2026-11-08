@@ -59,8 +59,13 @@ pnpm release --version 0.0.2
 pnpm release
 ```
 
-依次执行：预检 → `clean` → 类型检查 + 构建 → `Sqraft-<version>-arm64.dmg` + `.zip` →
+依次执行：预检 → `clean` → 类型检查 + 构建 → sourcemap 归档到 `release/sourcemaps/v<version>/` →
+`Sqraft-<version>-arm64.dmg` + `.zip` → `verify-pack` 成品防护验收（ADR-0030）→
 sha256 → `latest.json` → `gh release create v<version> --repo wfdx165/sqraft --draft`。
+
+`verify-pack` 不通过就直接中止：asar 里只允许 `out/**` 与 `package.json`，
+出现 `.ts` / `.map` / `node_modules`，或者压缩、fuse 状态不符合预期，都不会把包传上去。
+报错信息会指出是"依赖分类改回去了"还是"构建配置被改坏了"。
 
 draft 阶段线上不可见（`/releases/latest` 仍指向上一个版本），此时**验证不了自动更新**。
 

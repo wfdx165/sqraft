@@ -5,6 +5,8 @@ directories:
   buildResources: build
 files:
   - out/**/*
+  # hidden sourcemap 只归档到 release/sourcemaps/，成品里不能有 map（ADR-0030）
+  - "!out/**/*.map"
   - package.json
 asar: true
 # 打包后、签名前收敛 macOS 痕迹：删用不到的权限文案、helper 显示名改产品名

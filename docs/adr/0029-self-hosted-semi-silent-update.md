@@ -50,6 +50,8 @@
   一律提前拒绝并说明原因（不下载、不占用磁盘）。
 - **信任**：只接受 https + `github.com` 与 `*.githubusercontent.com`；下载时手动跟随重定向、
   每一跳都过白名单；sha256 不匹配即丢弃。`latest.json` 不做签名。
+  **未签名 ⇒ 不改包的身份无法校验**：`EnableEmbeddedAsarIntegrityValidation` 不启用
+  （哈希写在 `Info.plist` 里，改包的人顺手就能改），构建期防护的上限见 ADR-0030。
 - **UI**：工具栏胶囊（仅"已就绪"时存在）、帮助菜单「检查更新…」、关于面板（版本 / 状态 / 检查按钮 / 说明）。
 - **重启**走 `app.quit()`，由既有 `CloseGuard` 询问是否保存；用户取消则保持"已就绪"。
 - **格式版本硬门槛**：读取时 `formatVersion > CURRENT_FORMAT_VERSION` 明确拒绝并提示升级；

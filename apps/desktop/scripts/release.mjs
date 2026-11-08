@@ -127,6 +127,15 @@ function preflight({ strict, tagCheck }) {
     problems.push(`版本不一致：根 ${rootPkg.version} / desktop ${desktopPkg.version}`);
   }
 
+  // 运行时不需要任何 node_modules；有运行时依赖就会被整棵复制进 asar（ADR-0030）
+  const runtimeDeps = Object.keys(desktopPkg.dependencies ?? {});
+  if (runtimeDeps.length > 0) {
+    problems.push(
+      `apps/desktop/package.json 的 dependencies 应为空，实际有：${runtimeDeps.join("、")}` +
+        "（只在构建期用的依赖请放 devDependencies）",
+    );
+  }
+
   const ghVersion = gh(["--version"]);
   if (ghVersion.status !== 0) {
     problems.push("找不到 gh（GitHub CLI）。先执行：brew install gh && gh auth login");
@@ -236,6 +245,9 @@ function buildArtifacts() {
       env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: "false" },
     });
   }
+
+  // 成品防护验收（ADR-0030）：源码 / 依赖漏回包里就在这里中止，而不是把包传上去
+  run("node", ["scripts/verify-pack.mjs"], { cwd: desktopRoot });
 
   const files = readdirSync(releaseDir);
   const find = (suffixes) => files.find((name) => suffixes.some((suffix) => name.endsWith(suffix)));

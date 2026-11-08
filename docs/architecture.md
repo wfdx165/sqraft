@@ -358,3 +358,4 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 - **MCP**：主进程协议层 + 本机 Streamable HTTP（`127.0.0.1:<port>`），详见 ADR-0026 与 §12。
 - **更新**（ADR-0029）：主进程负责检查（`releases/latest/download/latest.json`，24 小时节流）、下载 zip 与 sha256 校验、退出时用 detached 脚本替换 `.app`；渲染层只显示状态、触发重启，不碰文件系统。备份 + 启动标记（60 秒）构成回滚：新版本没跑起来就换回旧包。未签名，因此不用 Squirrel.Mac，只承诺 macOS arm64；只读位置（dmg 挂载点）提前拒绝。
 - **打包**：electron-builder，`appId com.yjsoft.sqraft`；asar 打包，没有需要放到 asar 外的可执行文件；只构建 macOS arm64 的 dmg + zip（zip 供自动更新），Windows/Linux 的打包配置已移除。
+- **构建期防护**（ADR-0030）：三个入口都 esbuild 压缩；sourcemap 生成但不写注释，打包时排除出 asar、由 `dist` 归档到 `release/sourcemaps/<version>/`；`dependencies` 必须为空（渲染层与主进程的依赖全在构建期 bundle 进去，成品不含 `node_modules`）；`afterPack` 翻转 Electron fuse（禁 `RunAsNode` / `NODE_OPTIONS` / 调试参数，只允许从 asar 加载）。`scripts/verify-pack.mjs` 在发版链路里断言以上全部成立，不成立就中止。`.sqraft` 仍是明文 zip。

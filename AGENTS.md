@@ -16,9 +16,10 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 - 开发：`pnpm dev` → `electron-vite dev`，同时起主进程、preload 与渲染层（Vite，渲染层 HMR）。dev **默认不开**调试端口；需要只读检查时用 `SQRAFT_DEBUG_PORT=9222 pnpm dev` 显式开启（`=0` 关闭）。渲染层源码在 `apps/desktop/src/renderer`，主进程在 `src/main`，preload 在 `src/preload`
 - 类型检查 + 构建：`pnpm build` —— packages 内 `tsc` 只做类型检查（`noEmit`）；桌面应用先跑 `typecheck`（main / preload / renderer 三份 `tsc --noEmit`）再 `electron-vite build` 到 `apps/desktop/out`
 - 测试：`pnpm test` —— 递归跑有 `test` 脚本的包（`@sqraft/core`、`@sqraft/ai-tools`、`@sqraft/desktop` 的 vitest）；`@sqraft/render` 无测试运行器
-- 打包：`pnpm dist` —— 只出 macOS arm64 的 dmg 与 zip（zip 供自动更新），产物在 `apps/desktop/release/`
+- 打包：`pnpm dist` —— 只出 macOS arm64 的 dmg 与 zip（zip 供自动更新），产物在 `apps/desktop/release/`；构建后自动把 sourcemap 归档到 `release/sourcemaps/v<version>/`（不入包、不上传，见 ADR-0030）
 - 所有 `dist*` 脚本都先跑 `pnpm clean`：清空 `apps/desktop/out/` 与 `release/`，避免旧产物被打进 asar 或堆在 release 里；想保留上一次的 dmg 用 `pnpm --filter @sqraft/desktop exec node scripts/clean.mjs --keep-release`
 - 快速出包（只出 `.app`、不建 dmg，约 4s）：`pnpm dist:dir` —— 验证"打包后能不能跑 / MCP 通不通"用它
+- 成品防护验收：`pnpm --filter @sqraft/desktop run verify:pack [Sqraft.app 路径]` —— 断言 asar 里只有 `out/**` 与 `package.json`、没有源码 / map / `node_modules`、渲染层已压缩、fuse 已翻转（ADR-0030）；`pnpm release` 会自动跑，新出包后想单独确认也可以手跑
 - 发版：`pnpm release`（draft）/ `pnpm publish:release`（翻正式）/ `pnpm publish:readme`（同步下载页）；版本号日常只升 patch，完整流程见 `docs/releasing.md`
 - 单个测试：`pnpm --filter @sqraft/core exec vitest run -t "关键词"`
 - 没有 lint/format 配置（未装 ESLint/Prettier）。类型检查就是质量门槛，不要擅自引入
@@ -81,6 +82,12 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 - Electron 二进制在首次 `pnpm dev` 时才下载（`electron` 包没有 postinstall），首次启动会慢
 - 打包不需要把任何可执行文件放到 asar 外（旧 CLI 已删除）；未签名构建要用 `CSC_IDENTITY_AUTO_DISCOVERY=false`
 - `electron-builder.yml` 里 `npmRebuild: false` 与 `electronDist: node_modules/electron/dist` 是提速项：项目没有原生模块，且复用已解压的 Electron。加原生依赖时必须去掉 `npmRebuild: false`
+- **`apps/desktop/package.json` 的 `dependencies` 必须是空的**（ADR-0030）：三个 `@sqraft/*`、`vue`、fontsource、`fflate` 全由 Vite 在构建期 bundle 进 `out/`，主进程与 preload 运行时只 require `electron` + Node 内置模块。一旦把某个包写回 `dependencies`，electron-builder 会把整棵依赖树（含源码与 `.map`）复制进 asar，`verify:pack` 与 `pnpm release` 的预检都会拦下
+- 成品 `app.asar` 里只允许出现 `out/**` 与 `package.json`：`minify` 或 `sourcemap: "hidden"` 被改回默认值、`files` 里漏了 `!out/**/*.map`，都会以"包里又有了可读源码"的形式复发。改构建配置后跑一次 `pnpm --filter @sqraft/desktop run verify:pack`
+- sourcemap 只活在 `release/sourcemaps/v<version>/`：`pnpm clean` 会连带删掉 `release/`，所以**别在发版前手工清理 `release/`**——那是最后一个还能还原线上崩溃栈的地方
+- `@electron/fuses` 开了 `strictlyRequireAllFuses`：Electron 升级新增 fuse 时构建会失败（Electron 45 已有 9 个），升级时要先读新版 fuse 列表再补配置，不要把它关掉
+- 打包版用不了 `--inspect`、`ELECTRON_RUN_AS_NODE`、`NODE_OPTIONS`：fuse 已关（ADR-0030）。排障只能靠日志（`~/Library/Logs/Sqraft/`）与渲染层上报
+- 打包版与 `/Applications` 里的已装版本共用同一个 `userData` 单实例锁，且 `main/index.ts` 会 `app.setPath("userData", …)` 覆盖 `--user-data-dir`：用户开着 Sqraft 时，另起一个 `.app` 会拿不到锁、立刻 `exit 0`。这不是 fuse 或签名坏了，别误判
 - macOS 用 `hiddenInset` 标题栏：左栏顶部为红绿灯让出 58px，左上 340×46 是拖拽区（`-webkit-app-region: drag`），改布局时别把这块盖住（标题栏只留拖拽，不放控件）。当前文件名与「回欢迎页」是工具栏品牌名右侧的两个胶囊（`Toolbar.vue`）
 - 数据目录：平台惯例的 `userData`（macOS `~/Library/Application Support/Sqraft`，Windows `%APPDATA%\Sqraft`），dev 与打包版共用；里面是偏好、最近文件、排障用的 `mcp.json`、链接图缓存 `image-cache/`。日志单独走 `app.getPath("logs")`（macOS `~/Library/Logs/Sqraft/`）。首次启动由 `data-dir.ts` 同步把旧的 `~/.sqraft` 一次性迁过来（**可再生的浏览器缓存与 socket 残留留在旧目录不动**，失败不阻断启动）
 - MCP 端点：`http://127.0.0.1:<port>/mcp`（Streamable HTTP，ADR-0026）。只绑 loopback、拒绝带 `Origin` 的请求、无 token；默认端口 7331，显式端口被占即报错，自动模式才顺延。应用必须保持运行，没有 CLI 拉起
