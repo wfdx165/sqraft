@@ -29,7 +29,7 @@ Sqraft 是闭源软件：源码在私有 Gitea，公开发行仓库只放安装�
 
 1. **压缩**：`main` / `preload` / `renderer` 全开 `build.minify`（esbuild），CSS 同步压缩。
 2. **sourcemap**：不生成（`build.sourcemap: false`）。线上堆栈默认不可读；需要排障时
-   按私有仓的发布 tag 检出代码、临时打开 sourcemap 重建一次。不做归档、不上传。
+   按发版时自己记录的源码提交检出代码、临时打开 sourcemap 重建一次。不做归档、不上传。
 3. **成品零 `node_modules`**：三个 `@sqraft/*`、`vue`、两个 fontsource 移到 `devDependencies`
    ——它们只被 Vite 打包期消费，主进程/preload 运行时不引用。`dependencies` 为空即整棵树不进 asar。
 4. **Electron fuse（引入 `@electron/fuses` 2.1.3，唯一新增的构建期依赖）**：
@@ -80,9 +80,9 @@ MCP 工具名与 JSON 字段字符串、`.sqraft` 的 `formatVersion` 契约。�
 ## Consequences
 
 - 成品包里不再有任何 TypeScript 源码或 `.map`；`asar extract` 只能拿到压缩后的 bundle。
-- 线上崩溃栈不可读；排障时按私有仓的发布 tag 检出代码、临时开 sourcemap 重建。发版前在
-  私有仓打并推送 `vX` tag，`latest.json` 记录 commit；预检要求 tag 指向 HEAD 且 HEAD 已推送，
-  tag 与源码才一一对应，重建出来的堆栈才可信。
+- 线上崩溃栈不可读；排障时按发版时自己记录的源码提交检出代码、临时开 sourcemap 重建。
+  `pnpm release` 不要求 `vX` tag，`latest.json` 也不记录 commit——包与源码的对应关系改由人工
+  维护（发版后自行打 tag 或记下提交），脚本只保证"发布说明存在 + 测试通过"。
 - 打包版不能再 `--inspect` 或 `ELECTRON_RUN_AS_NODE`；只影响排障手段，不影响功能。
 - `dependencies` 为空是一条新的构建约束：以后给主进程/preload 加依赖时，若 Vite 没有 bundle 它，
   运行时会缺模块。`verify-pack.mjs` 能发现"包里多了 node_modules"，发现不了"bundle 里少了依赖"，

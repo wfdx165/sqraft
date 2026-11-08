@@ -27,7 +27,7 @@ gh auth status         # 确认账号对 wfdx165/sqraft 有写权限
 - 版本号唯一真源是 `apps/desktop/package.json`；根 `package.json` 不带 `version` 字段。
 - **完全手动**：直接编辑那个字段，`pnpm release` 只读不写，也不接受 `--bump` / `--version` 参数。
 - 不做预发布版本，每次发版一律 patch。
-- 版本号改完、更新说明写好之后**必须先提交并推送，再打源码 tag**：`pnpm release` 要求工作区干净、HEAD 与 tag 都已推送。
+- 发版门槛只有两件与源码仓库无关的事：**发布说明必须存在且非空**、`pnpm test` 通过。脚本不检查分支、工作区或 tag。
 
 ## 每次发版
 
@@ -35,22 +35,11 @@ gh auth status         # 确认账号对 wfdx165/sqraft 有写权限
 
 编辑 `apps/desktop/package.json` 的 `version`，例如 `0.0.3`。没有脚本代劳——这是唯一真源。
 
-### 2. 写更新说明
+### 2. 写发布说明
 
 编辑 `docs/releases/v0.0.3.md`（复制上一版改名即可）。这份内容会同时出现在 GitHub Release 和客户端「关于」面板里。
 
-两个文件都改好后提交并推送，再给源码提交打 tag——`pnpm release` 要求工作区干净、HEAD 已推送、tag 已推送：
-
-```bash
-git add apps/desktop/package.json docs/releases/v0.0.3.md
-git commit -m "chore: 发布 0.0.3"
-git push origin main
-
-git tag -a v0.0.3 -m "Sqraft 0.0.3"
-git push origin v0.0.3
-```
-
-> tag 建好后如果还要改代码，必须重新提交并移动 tag（`git tag -f v0.0.3` + `git push -f origin v0.0.3`），否则预检会拒绝"tag 不指向 HEAD"。
+文件缺失、或内容只有空白，`pnpm release` 直接中止；没有跳过开关。说明文件不必提交——脚本不读 git 状态。
 
 ### 3. 出包 + 创建 draft
 
@@ -58,15 +47,15 @@ git push origin v0.0.3
 pnpm release
 ```
 
-依次执行：预检（工作区干净、HEAD 已推送、源码 tag 指向 HEAD、版本大于最新已发布版本、gh 可用）→ `pnpm test` → `clean` →
+依次执行：预检（发布说明存在、版本大于最新已发布版本、发行仓没有同名 release、gh 可用且仓库 public）→ `pnpm test` → `clean` →
 类型检查 + 构建 → `Sqraft-<version>-arm64.dmg` + `Sqraft-<version>-arm64-mac.zip` → `verify-pack` 成品防护验收（ADR-0030）→
-sha256 → `latest.json`（含 commit）→ `gh release create v<version> --repo wfdx165/sqraft --draft`。
+sha256 → `latest.json` → `gh release create v<version> --repo wfdx165/sqraft --draft`。
 
 `pnpm release` 不接受版本参数：版本只认 `apps/desktop/package.json`。
-工作区不干净、HEAD 未推送、源码 tag 缺失或测试失败都会直接中止，不会出包。
+发布说明缺失或测试失败都会直接中止，不会出包。
 
-`pnpm release` 不会替你打源码 tag。发行仓的 `v<version>` tag 由 `gh release create` 另外创建，
-两者同名但不是同一个仓库；排障要检出的是私有仓那个 tag。
+脚本**不看本地仓库**：在哪个分支、工作区是否干净、有没有源码 tag，都不影响发版。
+发行仓的 `v<version>` tag 由 `gh release create` 创建；如果还需要源码层面的版本标记，请自行在私有仓打 tag。
 
 `verify-pack` 不通过也会中止：asar 里只允许 `out/**` 与 `package.json`，
 出现 `.ts` / `.map` / `node_modules`，或者压缩、fuse 状态不符合预期，都不会把包传上去。
@@ -78,7 +67,7 @@ draft 阶段线上不可见（`/releases/latest` 仍指向上一个版本），�
 
 - `pnpm release --skip-build`：复用 `release/` 里已有产物（跳过测试）
 - `pnpm release --publish`：构建后直接正式发布（跳过 draft）
-- `pnpm release --preflight`：只跑检查（工作区干净 + HEAD/tag 已推送），不构建
+- `pnpm release --preflight`：只跑检查（发布说明 + GitHub 侧），不构建
 
 ### 4. 验收 draft
 
@@ -122,8 +111,10 @@ curl -s https://github.com/wfdx165/sqraft/releases/latest/download/latest.json |
 pnpm publish:readme
 ```
 
-临时 clone 发行仓库 → 覆盖 `README.md` 与 `docs/images/` → 有变化才提交并推 `main`；
-空仓库首次会自动建分支。
+四份 README 会一起同步：`README.md`（英文首屏）、`README.zh-CN.md`、`README.ja-JP.md`、`README.ko-KR.md`。
+
+临时 clone 发行仓库 → 删掉远端旧的 `README.*.md` → 覆盖四份 README 与 `docs/images/` → 有变化才提交并推 `main`；
+空仓库首次会自动建分支。同步前会校验：四份文件齐全、首行语言切换链接完整、二级标题数量一致，不一致直接中止。
 
 ## 第一个版本（0.0.2）的特殊之处
 
@@ -134,7 +125,7 @@ pnpm publish:readme
 ## 自动更新验证（发 0.0.3 时）
 
 1. 用 `0.0.2` 的 dmg 装好应用；
-2. 发 `0.0.3`（改版本号 → 写说明 → 提交并推送 → 打 tag 并推送 → `release` → `publish:release`）；
+2. 发 `0.0.3`（改版本号 → 写说明 → `release` → `publish:release`）；
 3. 打开已装的 `0.0.2`：菜单 **帮助 → 检查更新…**（手动检查不受 24 小时节流限制）；
 4. 应看到后台下载 → 工具栏出现「重启更新」→ 保存守卫 → 重启 → 关于面板显示 `0.0.3`；
 5. 回滚演练：退出应用 → `pnpm stage:update` → 启动 → 重启更新，确认替换与备份清理；
@@ -148,10 +139,8 @@ pnpm publish:readme
 | 预检报 401/403 | `gh auth status`，必要时 `gh auth login`；确认对仓库有写权限 |
 | 仓库不是 public | 改成 public（否则更新链路必然 404） |
 | `release vX 已存在` | 先改 `apps/desktop/package.json` 的 version；或删掉旧 release 与同名 tag 再重试 |
-| 预检报"工作区不干净" | 先提交版本号与更新说明；`release/`、`out/` 已被忽略，不影响 |
-| 预检报"HEAD 尚未推送" | 先 `git push origin main` |
-| 预检报"缺少源码 tag" / "tag 未推送" | 按第 2 步执行 `git tag -a vX -m "Sqraft X"` 与 `git push origin vX` |
-| 预检报"tag 不指向当前 HEAD" | 重新提交后移动 tag：`git tag -f vX` + `git push -f origin vX` |
+| 预检报"缺少发布说明" | 写 `docs/releases/vX.Y.Z.md`（可复制上一版）；不能为空 |
+| 预检报"版本必须大于最新已发布版本" | 改 `apps/desktop/package.json` 的 version，发版一律 patch |
 | 构建失败 | 版本号已改好，修完直接重跑 `pnpm release` |
 | 资产缺失 / 体积异常 | 删掉 draft 重跑，不要手动补传（sha256 必须和包一致） |
 | 发布后才发现包坏了 | 用户侧会回滚；发下一个 patch 版本修复，不回滚 tag |
@@ -163,9 +152,8 @@ pnpm publish:readme
 
 ```json
 {
-  "version": "0.0.2",
-  "commit": "7fce817…",
-  "publishedAt": "2026-11-03T09:00:00.000Z",
+  "version": "0.0.3",
+  "publishedAt": "2026-11-08T09:00:00.000Z",
   "notes": "…",
   "assets": {
     "mac-arm64": { "url": "…zip", "size": 123, "sha256": "…" },
@@ -175,5 +163,6 @@ pnpm publish:readme
 ```
 
 - 仓库地址的唯一真源：`apps/desktop/update.config.json`（客户端与脚本读同一份）
-- 更新说明：`docs/releases/v<version>.md`
+- 发布说明：`docs/releases/v<version>.md`（必须存在且非空）
+- 下载页 README 有四份，改一份要同步其余三份（`pnpm publish:readme` 会校验）
 - 客户端检查地址：`https://github.com/<repo>/releases/latest/download/latest.json`

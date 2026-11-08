@@ -23,9 +23,9 @@
 
 - 版本号唯一真源是 `apps/desktop/package.json`（`0.x` 语义化，手动修改）；根 `package.json`
   不带 `version`。客户端用 `app.getVersion()`，dmg/zip 名、`latest.json`、关于面板都取这一个值。
-- 源码仓（私有 Gitea）与发行仓（公开 GitHub）分开：发版前在源码仓打并推送 `vX` tag，
-  `pnpm release` 校验 tag 指向 HEAD；`latest.json` 记录 commit。发行仓的同名 tag 由
-  `gh release create` 创建，两者同名但不是同一个仓库。
+- 源码仓（私有 Gitea）与发行仓（公开 GitHub）分开：`pnpm release` 只面向发行仓，
+  不检查源码仓的分支、工作区或 tag，`latest.json` 也不记录 commit；发行仓的 `vX` tag 由
+  `gh release create` 创建。包与源码的对应关系由人工维护（需要时自行打 tag 或记下提交）。
 - 产物是 **dmg + zip**：dmg 给手动安装，zip 给自动替换（`electron-builder.yml` 两个 target）。
 - `pnpm release`（`scripts/release.mjs`）一条命令：打包 → 算 sha256 → 生成 `latest.json` →
   `gh release create`。默认 **draft**（用来核对 notes 与资产），`--publish` 直接发。

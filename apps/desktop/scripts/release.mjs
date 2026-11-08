@@ -4,8 +4,9 @@
  * 版本号完全手动：唯一真源是 apps/desktop/package.json，本脚本只读不写，
  * 也不接受任何版本参数——避免"参数写一个版本、包里是另一个"。
  * 发版前手动完成：改 apps/desktop/package.json 的 version → 写
- * docs/releases/vX.Y.Z.md → 提交并推送 → 打并推送源码 tag `vX`
- * （发行仓的同名 tag 由 `gh release create` 另建）。
+ * docs/releases/vX.Y.Z.md。说明文件缺失或为空即中止。
+ * 脚本不检查本地 git 状态（分支、工作区、tag 都不参与判断）；发行仓的同名
+ * tag 由 `gh release create` 创建，源码 tag 由需要的人自行管理。
  *
  * 用法（仓库根执行）：
  *   pnpm release                              # 测试 → 构建 → 创建 draft release
@@ -14,8 +15,7 @@
  *   pnpm release --preflight                  # 只跑检查，不构建
  *   pnpm publish:release                      # 把现有 draft 翻成正式发布，不重建
  *
- * 发布门槛：工作区必须干净、pnpm test 必须通过；任一不满足即中止。
- * 源码追溯：发版前在私有仓打 tag `vX` 并推送；预检要求 tag 指向 HEAD 且 HEAD 已推送到 origin。
+ * 发布门槛：发布说明必须存在且非空、pnpm test 必须通过；任一不满足即中止。
  * 版本策略：0.0.1 是内部开发版；0.0.2 是首个公开版；之后每次发版 patch。
  * 仅支持 macOS arm64；仓库地址来自 apps/desktop/update.config.json（客户端读同一份）。
  */
@@ -41,10 +41,11 @@ const HELP = `用法：
   pnpm release --skip-build                 复用 release/ 里已有产物（跳过测试）
   pnpm release --preflight                  只跑检查
   pnpm publish:release                      把现有 draft 翻成正式发布（不重建）
-  pnpm publish:readme                       同步 README 与截图到发行仓库
+  pnpm publish:readme                       同步四语言 README 与截图到发行仓库
 
 版本号：手动改 apps/desktop/package.json；release 不接受版本参数。
-发布门槛：工作区干净 + HEAD 已推送 + 源码 tag 已推送 + pnpm test 通过。
+发布门槛：docs/releases/vX.md 存在且非空 + pnpm test 通过 + GitHub 凭证可用。
+本地 git 状态（分支 / 工作区 / tag）不参与判断；源码 tag 由需要的人自行管理。
 版本策略：0.0.1 内部开发版；0.0.2 首个公开版；之后每次 patch。`;
 
 if (has("--help") || has("-h")) {
@@ -97,79 +98,34 @@ function gh(commandArgs, options = {}) {
   return spawnSync("gh", commandArgs, { cwd: repoRoot, encoding: "utf8", ...options });
 }
 
-function git(commandArgs) {
-  return spawnSync("git", commandArgs, { cwd: repoRoot, encoding: "utf8" });
-}
-
 /* ---------- 预检 ---------- */
 
 /**
  * `strict` = 发布前检查：任何一项不满足都中止。
- * `tagCheck`：absent = 发布前不能已有 tag；exists = 发布 draft 前必须已有；skip = 不检查。
- * `requireClean`：出包/预检要求工作区干净（draft 翻正式不重新构建，不要求）。
+ * `tagCheck`：absent = 发布前不能已有 release；exists = 发布 draft 前必须已有；skip = 不检查。
+ * `requireNotes`：发版（预检 / 出包）要求发布说明存在且非空；draft 翻正式不重复检查。
+ *
+ * 这里只看 GitHub 侧与本地文件，不看 git 分支、工作区或 tag：发版的产出是 GitHub 上的
+ * 一次 release，源码怎么管理不归这个脚本判断。
  */
-function preflight({ strict, tagCheck, requireClean = false }) {
+function preflight({ strict, tagCheck, requireNotes = false }) {
   const problems = [];
-  const notes = [];
-  if (requireClean) {
-    const status = git(["status", "--porcelain"]);
-    if (status.status !== 0) {
-      problems.push("git status 失败，无法确认工作区是否干净");
-    } else if (status.stdout.trim()) {
-      problems.push(`工作区不干净，先提交或清理：\n${status.stdout.trim()}`);
-    }
 
-    // 源码追溯：HEAD 必须已推送到 origin，源码 tag 必须存在、指向 HEAD 且已推送
-    const head = git(["rev-parse", "HEAD"]);
-    const headSha = head.status === 0 ? head.stdout.trim() : "";
-    const baseRef = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
-    const branch = baseRef.status === 0 ? baseRef.stdout.trim().replace(/^origin\//, "") : "main";
-    const remote = git(["ls-remote", "--heads", "origin", branch]);
-    const remoteSha = remote.status === 0 ? (remote.stdout.trim().split(/\s+/)[0] ?? "") : "";
-
-    if (!headSha || !remoteSha) {
-      problems.push("无法确认 HEAD 与 origin 的同步状态（检查 origin 是否可访问）");
-    } else if (headSha !== remoteSha) {
+  if (requireNotes) {
+    const notes = existsSync(notesPath) ? readFileSync(notesPath, "utf8") : "";
+    if (!notes.trim()) {
       problems.push(
-        `HEAD ${headSha.slice(0, 7)} 尚未推送到 origin/${branch}（远端 ${remoteSha.slice(0, 7)}）；先 git push`,
+        `缺少发布说明 ${notesPath}（或内容为空）；复制 docs/releases/v0.0.2.md 改名后填写`,
       );
     }
+  }
 
-    const localTag = git(["rev-parse", "-q", "--verify", `refs/tags/${tag}^{commit}`]);
-    const tagSha = localTag.status === 0 ? localTag.stdout.trim() : "";
-    if (!tagSha) {
-      problems.push(
-        `缺少源码 tag ${tag}；先执行 git tag -a ${tag} -m "Sqraft ${version}" 并 git push origin ${tag}`,
-      );
-    } else if (headSha && tagSha !== headSha) {
-      problems.push(
-        `源码 tag ${tag} 不指向当前 HEAD（${tagSha.slice(0, 7)} ≠ ${headSha.slice(0, 7)}）；先修正 tag`,
-      );
-    }
-
-    // annotated tag 用 ^{} 取 commit；轻量 tag 没有 peeled 行，退回普通引用
-    const peeled = git(["ls-remote", "--tags", "origin", `refs/tags/${tag}^{}`]);
-    const plain = git(["ls-remote", "--tags", "origin", `refs/tags/${tag}`]);
-    const remoteTagSha = peeled.status === 0 && peeled.stdout.trim()
-      ? peeled.stdout.trim().split(/\s+/)[0]
-      : plain.status === 0
-        ? (plain.stdout.trim().split(/\s+/)[0] ?? "")
-        : "";
-    if (!remoteTagSha) {
-      problems.push(`源码 tag ${tag} 未推送到 origin；执行 git push origin ${tag}`);
-    } else if (headSha && remoteTagSha !== headSha) {
-      problems.push(
-        `远端源码 tag ${tag} 不指向当前 HEAD（${remoteTagSha.slice(0, 7)} ≠ ${headSha.slice(0, 7)}）；先修正并强制推送 tag`,
-      );
-    }
-
-    // 版本只能往前走：手改成更小的号会让下载页回退
-    const latest = gh(["api", `repos/${repo}/releases/latest`, "--jq", ".tag_name"]);
-    if (latest.status === 0) {
-      const latestVersion = latest.stdout.trim().replace(/^v/, "");
-      if (latestVersion && compareVersions(version, latestVersion) <= 0) {
-        problems.push(`版本 ${version} 必须大于最新已发布版本 ${latestVersion}；否则下载页会指向旧版本`);
-      }
+  // 版本只能往前走：手改成更小的号会让下载页回退
+  const latest = gh(["api", `repos/${repo}/releases/latest`, "--jq", ".tag_name"]);
+  if (latest.status === 0) {
+    const latestVersion = latest.stdout.trim().replace(/^v/, "");
+    if (latestVersion && compareVersions(version, latestVersion) <= 0) {
+      problems.push(`版本 ${version} 必须大于最新已发布版本 ${latestVersion}；否则下载页会指向旧版本`);
     }
   }
 
@@ -216,9 +172,6 @@ function preflight({ strict, tagCheck, requireClean = false }) {
     }
   }
 
-  if (strict && !existsSync(notesPath)) notes.push(`没有 ${notesPath}，本次发布不带更新说明`);
-
-  for (const line of notes) console.warn(`release: 提示：${line}`);
   if (problems.length > 0) {
     if (strict) fail(problems.join("\nrelease: "));
     for (const problem of problems) console.warn(`release: 警告：${problem}`);
@@ -263,15 +216,10 @@ function sha256(path) {
 }
 
 async function writeManifest({ dmg, zip }) {
-  const head = git(["rev-parse", "HEAD"]);
-  if (head.status !== 0) fail("读不到当前 commit，无法写入 latest.json");
-  const commit = head.stdout.trim();
-  const notes = existsSync(notesPath) ? readFileSync(notesPath, "utf8") : "";
-  if (!notes.trim()) console.warn(`release: 没有 ${notesPath}，这次发布不带更新说明`);
+  const notes = readFileSync(notesPath, "utf8");
   const assetUrl = (name) => `https://github.com/${repo}/releases/download/${tag}/${encodeURIComponent(name)}`;
   const manifest = {
     version,
-    commit,
     publishedAt: new Date().toISOString(),
     notes,
     assets: {
@@ -317,7 +265,7 @@ async function waitForLatest() {
 /* ---------- 主流程 ---------- */
 
 if (preflightOnly) {
-  preflight({ strict: true, tagCheck: "absent", requireClean: true });
+  preflight({ strict: true, tagCheck: "absent", requireNotes: true });
   console.log(`release: 预检通过（${tag} → ${repo}）`);
   process.exit(0);
 }
@@ -339,7 +287,7 @@ if (publishDraft) {
   process.exit(0);
 }
 
-preflight({ strict: true, tagCheck: "absent", requireClean: true });
+preflight({ strict: true, tagCheck: "absent", requireNotes: true });
 const artifacts = buildArtifacts();
 const { manifestPath, assets } = await writeManifest(artifacts);
 
@@ -351,7 +299,8 @@ const createArgs = [
   repo,
   "--title",
   `Sqraft ${version}`,
-  ...(existsSync(notesPath) ? ["--notes-file", notesPath] : ["--notes", `Sqraft ${version}`]),
+  "--notes-file",
+  notesPath,
   ...(publish ? [] : ["--draft"]),
   ...assets.map((name) => join(releaseDir, name)),
   manifestPath,

@@ -1,62 +1,65 @@
+**English** · [中文](README.zh-CN.md) · [日本語](README.ja-JP.md) · [한국어](README.ko-KR.md)
+
 # Sqraft
 
-> AI 驱动的轻量 UI 设计工具 —— 桌面应用、本地文件、不联网也能画。
+> AI-friendly, lightweight UI design tool — a desktop app with local files that works offline.
 
-用画板、组件、自动布局和设计 Token 做界面；同时把这些能力通过 **MCP** 暴露给 Claude Code、Cursor 等 agent，让"用自然语言改稿"成为一等入口。
+Design interfaces with frames, components, auto layout and design tokens; the same capabilities are exposed over **MCP** to agents such as Claude Code and Cursor, so "edit the design in natural language" is a first-class entry point.
 
-应用是纯单机的：没有账号、没有云、不调用任何模型。设计稿就是磁盘上的一个 `.sqraft` 文件。
+The app is fully local: no account, no cloud, no model calls. A design is simply a `.sqraft` file on disk.
 
-![Sqraft 编辑器](docs/images/editor.png)
+![Sqraft editor](docs/images/editor.png)
 
-## 下载
+## Download
 
-### [⬇ 下载最新版](https://github.com/wfdx165/sqraft/releases/latest)
+### [⬇ Download the latest version](https://github.com/wfdx165/sqraft/releases/latest)
 
-**macOS · Apple Silicon（M 系列）** · 约 120 MB · 未签名
+**macOS · Apple Silicon (M series)** · about 120 MB · unsigned
 
-- 只提供 macOS arm64 安装包；Intel Mac、Windows、Linux 暂不支持
-- 每个版本同时提供 `.dmg`（手动安装）与 `.zip`（自动更新用）；在 Releases 页面的 **Assets** 里选 `Sqraft-<版本>-arm64.dmg`
-- 历史版本与更新说明见 [Releases](https://github.com/wfdx165/sqraft/releases)
+- macOS arm64 only; Intel Macs, Windows and Linux are not supported
+- Every release ships both `.dmg` (manual install) and `.zip` (used by the updater); pick `Sqraft-<version>-arm64.dmg` under **Assets** on the Releases page
+- Older versions and release notes: [Releases](https://github.com/wfdx165/sqraft/releases)
 
-## 安装
+## Install
 
-1. 打开下载的 `.dmg`，把 **Sqraft** 拖进「应用程序」
-2. 首次打开会被 Gatekeeper 拦下（应用未签名），按提示分两种：
-   - 提示「无法验证开发者」：在应用上**右键 → 打开**，或到「系统设置 → 隐私与安全性」点「仍要打开」
-   - 提示「Sqraft 已损坏」：不是文件损坏，看下面的命令
-3. 之后启动时会自动检查更新：有新版本会后台下载，工具栏出现「重启更新」，退出或点它即可完成升级
+1. Open the downloaded `.dmg` and drag **Sqraft** into Applications
+2. Gatekeeper blocks the first launch (the app is unsigned); you will see one of two prompts:
+   - "Cannot verify the developer": right-click the app → **Open**, or allow it under System Settings → Privacy & Security
+   - "Sqraft is damaged": the file is fine, run the command below
+3. Afterwards the app checks for updates on launch: new versions download in the background, a "Restart to update" button appears in the toolbar, and quitting or clicking it finishes the upgrade
 
-如果遇到「已损坏」提示，把 App 拖进「应用程序」后打开终端执行：
+If you see the "damaged" prompt, drag the app into Applications first, then run:
 
 ```bash
 xattr -dr com.apple.quarantine /Applications/Sqraft.app
 ```
 
-再打开即可。后续更新由应用自己下载，不带隔离标记，不会再出现这个提示。
+Open it again and it works. Later updates are downloaded by the app itself without the quarantine flag, so this prompt does not come back.
 
-不想自动更新也没关系：菜单 **帮助 → 检查更新…** 可以随时手动查。
+If you would rather not auto-update, **Help → Check for Updates…** checks manually at any time.
 
-## 能做什么
+## What you can do
 
-- **矢量画布**：矩形、椭圆、多边形、直线、钢笔路径、文本；无限画布 + 多页面
-- **自动布局**：方向、间距、四边内边距、hug / fill / fixed、换行、拖拽重排
-- **组件系统**：主组件、实例、插槽、实例覆盖与替换
-- **设计 Token**：颜色与数值（字号、圆角、间距……），改一处全局生效
-- **改稿操作**：多选、框选、对齐分布、层级拖拽、分组、参考线、吸附
-- **效果**：投影、内阴影、图层模糊、背景模糊
-- **图片**：拖入、粘贴、裁切、蒙版、链接图（本地缓存）
-- **AI 改稿**：agent 通过 MCP 直接建节点、改样式、截图自检；一次工具调用 = 一步撤销
-- **导出**：PNG（支持倍率）
+- **Vector canvas**: rectangles, ellipses, polygons, lines, pen paths, text; infinite canvas with multiple pages
+- **Auto layout**: direction, gap, padding, hug / fill / fixed, wrapping, drag to reorder
+- **Components**: main components, instances, slots, instance overrides and swapping
+- **Design tokens**: colors and numbers (font size, radius, spacing…); change once and it applies everywhere
+- **Editing**: multi-select, marquee, align and distribute, drag to reparent, grouping, guides, snapping
+- **Effects**: drop shadow, inner shadow, layer blur, background blur
+- **Images**: drag in, paste, crop, mask, linked images (cached locally)
+- **AI editing**: agents create nodes, change styles and screenshot the result over MCP; one tool call = one undo step
+- **Export**: PNG (with scale)
+- **Interface languages**: 中文 / English / 日本語 / 한국어, with optional automatic system-language detection
 
-## 接入 AI
+## Connect AI
 
-Sqraft 自身不调用模型，也不需要 API Key。应用运行时会在本机开一个 MCP 端点，把你已有的 agent 接上来：
+Sqraft never calls a model and needs no API key. While the app is running it serves an MCP endpoint on localhost, so you can attach the agent you already use:
 
 ```
 http://127.0.0.1:7331/mcp
 ```
 
-应用需要保持运行（没有命令行工具，也不会由客户端拉起）。端口被占用时会自动顺延，实际地址在欢迎页和「帮助 → 配置 MCP…」里。
+The app must stay running (there is no CLI, and clients cannot launch it). If the port is taken the app moves to the next free one; the actual address is shown on the welcome page and under **Sqraft → Configure MCP…** (in the File menu on Windows/Linux).
 
 <details>
 <summary>Claude Code</summary>
@@ -84,7 +87,7 @@ claude mcp add --transport http sqraft http://127.0.0.1:7331/mcp
 </details>
 
 <details>
-<summary>Cursor / 其它 mcpServers 客户端</summary>
+<summary>Cursor / other mcpServers clients</summary>
 
 ```jsonc
 {
@@ -96,28 +99,28 @@ claude mcp add --transport http sqraft http://127.0.0.1:7331/mcp
 
 </details>
 
-端点只监听 `127.0.0.1`、拒绝带 `Origin` 的请求，但**没有 token**：同一台机器上的其它进程也能连接。多客户端请求会串行执行。
+The endpoint only listens on `127.0.0.1` and rejects requests carrying an `Origin` header, but it has **no token**: any other process on the same machine can connect. Concurrent requests from multiple clients run one at a time.
 
-## 本地优先
+## Local-first
 
-- 设计稿是磁盘上的 `.sqraft` 文件（zip 容器：快照 + 图片资源），不依赖云服务
-- 没有账号、没有后端、没有遥测；外部请求只有两类：检查更新，以及你自己添加的链接图
-- 操作日志写在系统日志目录（macOS：`~/Library/Logs/Sqraft/`），菜单 **帮助 → 打开日志目录** 可直达
-- 卸载即删除应用；数据目录与偏好留在 `~/Library/Application Support/Sqraft/`，可一并删除
+- A design is a `.sqraft` file on disk (a zip container: snapshot + image assets); no cloud service involved
+- No account, no backend, no telemetry; the only outbound requests are update checks and linked images you added yourself
+- Operation logs go to the system log directory (macOS: `~/Library/Logs/Sqraft/`); **Help → Open Logs Folder** takes you there
+- Uninstalling removes the app; data and preferences stay in `~/Library/Application Support/Sqraft/` and can be deleted as well
 
-## 系统要求与已知限制
+## Requirements and known limitations
 
-- **macOS Apple Silicon**；Intel Mac 不支持
-- 应用**未签名、未公证**：首次打开需要手动放行（见「安装」）
-- 自动更新只在 macOS arm64 上提供；Windows / Linux 目前没有构建
-- 没有多人协作、没有账户体系、没有云端同步
+- **macOS Apple Silicon**; Intel Macs are not supported
+- The app is **unsigned and not notarized**: the first launch needs a manual allow (see Install)
+- Auto-update is only available on macOS arm64; there are no Windows or Linux builds
+- No real-time collaboration, no accounts, no cloud sync
 
-## 授权与反馈
+## License and feedback
 
-Sqraft 是闭源软件，源代码不公开；安装包可自由下载安装使用。
+Sqraft is closed-source software: the source code is not public, and the installer is free to download and use.
 
-遇到问题或想要新功能：在 [Issues](https://github.com/wfdx165/sqraft/issues) 里反馈，或直接联系给你安装包的人。
+For bugs or feature requests, open an [issue](https://github.com/wfdx165/sqraft/issues) or contact whoever gave you the installer.
 
 ---
 
-Sqraft = **Square**（方形）+ **Craft**（工艺）。
+Sqraft = **Square** + **Craft**.
