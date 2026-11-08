@@ -5,17 +5,18 @@
  */
 
 import { createNode, type DocNode, type DocState, type NodeOverride, type NodeStyle, type NodeId } from "./model";
+import { AppError } from "./errors";
 
-/** 主组件默认名：「组件 N」，全文档不重复。 */
-export function nextComponentName(state: DocState): string {
+/** 主组件默认名：「组件 N」，全文档不重复；界面可传本地化前缀。 */
+export function nextComponentName(state: DocState, prefix = "组件"): string {
   const used = new Set(
     Object.values(state.nodes)
       .filter((n) => n.type === "component")
       .map((n) => n.name),
   );
   let i = 1;
-  while (used.has(`组件 ${i}`)) i += 1;
-  return `组件 ${i}`;
+  while (used.has(`${prefix} ${i}`)) i += 1;
+  return `${prefix} ${i}`;
 }
 
 /**
@@ -67,7 +68,7 @@ export function materializeInstance(
 ): DocNode[] {
   const master = state.nodes[componentId];
   if (!master || master.type !== "component") {
-    throw new Error(`组件 ${componentId} 不存在`);
+    throw new AppError("core.component.missing", { id: componentId });
   }
 
   const out: DocNode[] = [];

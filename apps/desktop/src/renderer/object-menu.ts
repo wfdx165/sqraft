@@ -8,6 +8,7 @@ import { copySelectionAction } from "./canvas/node-clipboard";
 import { canDeletePage, deletePage } from "./canvas/page-actions";
 import { keyOf } from "./shortcuts";
 import { docStore, hooks, select, ui } from "./store";
+import { t } from "./i18n";
 
 /** 节点所属页面（页面才是 rootIds 里的那一层）。 */
 function pageOf(nodeId: NodeId): NodeId | null {
@@ -27,7 +28,7 @@ export function openPageMenu(pageId: NodeId, position: { x: number; y: number })
   select([pageId]);
   const items: ContextMenuItem[] = [
     {
-      label: "适配该页",
+      label: t("objectMenu.fitPage"),
       hint: keyOf("view.fit"),
       run: () => {
         ui.activePageId = pageId;
@@ -36,13 +37,13 @@ export function openPageMenu(pageId: NodeId, position: { x: number; y: number })
     },
     {
       // 页面选中时没有图层选区，复制路径回退成“整页 2× 带背景”，与 ⌘⇧C 一致
-      label: "复制为 PNG",
+      label: t("objectMenu.copyPng"),
       hint: keyOf("edit.copyImage"),
       run: () => hooks.copySelectionPng(),
     },
-    { label: "重命名", hint: keyOf("edit.rename"), separator: true, run: () => hooks.startRenameOf(pageId) },
+    { label: t("common.rename"), hint: keyOf("edit.rename"), separator: true, run: () => hooks.startRenameOf(pageId) },
     {
-      label: "删除页面",
+      label: t("pages.delete"),
       danger: true,
       separator: true,
       disabled: !canDeletePage(),
@@ -66,16 +67,16 @@ export function openNodeMenu(nodeId: NodeId, position: { x: number; y: number })
   const ids = ui.selection.filter((id) => docStore.doc.nodes[id]);
   const onlyOne = ids.length === 1;
   const items: ContextMenuItem[] = [
-    { label: "复制", hint: keyOf("edit.copy"), run: () => void copySelectionAction() },
-    { label: "复制为 PNG", hint: keyOf("edit.copyImage"), run: () => hooks.copySelectionPng() },
+    { label: t("common.copy"), hint: keyOf("edit.copy"), run: () => void copySelectionAction() },
+    { label: t("objectMenu.copyPng"), hint: keyOf("edit.copyImage"), run: () => hooks.copySelectionPng() },
     {
-      label: "重命名",
+      label: t("common.rename"),
       hint: keyOf("edit.rename"),
       separator: true,
       disabled: !onlyOne,
       run: () => hooks.startRenameOf(nodeId),
     },
-    { label: "删除", hint: "Del", danger: true, run: () => hooks.deleteSelectionNow() },
+    { label: t("common.delete"), hint: "Del", danger: true, run: () => hooks.deleteSelectionNow() },
   ];
   openContextMenu(position, items);
 }

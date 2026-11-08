@@ -6,6 +6,7 @@
  */
 import { computed, reactive } from "vue";
 import type { UpdateState } from "../shared/ipc";
+import { t } from "./i18n";
 import { showToast } from "./toast";
 
 export const updateUi = reactive<UpdateState>({
@@ -45,7 +46,7 @@ export async function checkForUpdates(manual = true): Promise<void> {
   try {
     const next = await window.sqraft.update.check(manual);
     apply(next);
-    if (next.phase === "up-to-date") showToast(`已是最新版本 ${next.currentVersion}`);
+    if (next.phase === "up-to-date") showToast(t("update.latest", { version: next.currentVersion }));
     if (next.phase === "error" && next.message) showToast(next.message, "error");
     if (next.phase === "unsupported" || next.phase === "dev") {
       if (next.message) showToast(next.message);
@@ -64,21 +65,21 @@ export function restartToUpdate(): void {
 export function updateStatusText(): string {
   switch (updateUi.phase) {
     case "dev":
-      return "开发版本不检查更新";
+      return t("update.dev");
     case "unsupported":
-      return updateUi.message ?? "当前平台暂不支持自动更新";
+      return updateUi.message ?? t("update.unsupported");
     case "checking":
-      return "正在检查更新…";
+      return t("update.checking");
     case "downloading":
-      return `正在下载 ${Math.round(updateUi.progress * 100)}%`;
+      return t("update.downloading", { percent: Math.round(updateUi.progress * 100) });
     case "ready":
-      return `新版本 ${updateUi.latestVersion ?? ""} 已就绪，重启后安装`;
+      return t("update.ready", { version: updateUi.latestVersion ?? "" });
     case "up-to-date":
-      return "已是最新版本";
+      return t("update.upToDate");
     case "error":
-      return updateUi.message ?? "检查更新失败";
+      return updateUi.message ?? t("update.failed");
     default:
-      return updateUi.supported ? "尚未检查更新" : (updateUi.message ?? "当前不可用");
+      return updateUi.supported ? t("update.notChecked") : (updateUi.message ?? t("update.unavailable"));
   }
 }
 

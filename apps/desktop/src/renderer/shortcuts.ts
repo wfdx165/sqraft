@@ -8,6 +8,8 @@
  */
 import { reactive, ref } from "vue";
 import { logInfo, logWarn } from "./log";
+import { t } from "./i18n";
+import type { MessageKey } from "../shared/i18n";
 
 export type ActionId =
   | "mode.pan"
@@ -54,73 +56,73 @@ export type ActionId =
   | "file.exportPng"
   | "file.closeDoc";
 
-export type ActionGroup = "模式" | "工具" | "编辑" | "组件" | "视图" | "其它";
+export type ActionGroup = "mode" | "tool" | "edit" | "component" | "view" | "other";
 
 export interface ShortcutAction {
   id: ActionId;
   group: ActionGroup;
-  label: string;
+  labelKey: MessageKey;
   /** 默认键位的规范写法（见 bindingOfEvent） */
   default: string;
 }
 
-export const GROUP_ORDER: ActionGroup[] = ["模式", "工具", "编辑", "组件", "视图", "其它"];
+export const GROUP_ORDER: ActionGroup[] = ["mode", "tool", "edit", "component", "view", "other"];
 
 /**
  * `V` 同时是"编辑模式"与"选择工具"：合并成一个动作，避免两条同键记录。
  */
 export const ACTIONS: ShortcutAction[] = [
-  { id: "mode.pan", group: "模式", label: "拖动模式", default: "H" },
-  { id: "mode.edit", group: "模式", label: "编辑模式 / 选择", default: "V" },
-  { id: "tool.frame", group: "工具", label: "画板", default: "F" },
-  { id: "tool.rect", group: "工具", label: "矩形", default: "R" },
-  { id: "tool.ellipse", group: "工具", label: "椭圆", default: "O" },
-  { id: "tool.triangle", group: "工具", label: "三角形", default: "G" },
-  { id: "tool.line", group: "工具", label: "直线", default: "L" },
-  { id: "tool.path", group: "工具", label: "钢笔", default: "P" },
-  { id: "tool.text", group: "工具", label: "文本", default: "T" },
-  { id: "edit.copy", group: "编辑", label: "复制", default: "⌘C" },
-  { id: "edit.copyImage", group: "编辑", label: "复制为图片（PNG）", default: "⌘⇧C" },
-  { id: "edit.selectAll", group: "编辑", label: "全选当前页", default: "⌘A" },
-  { id: "edit.rename", group: "编辑", label: "重命名图层", default: "F2" },
-  { id: "edit.group", group: "编辑", label: "分组", default: "⌘G" },
-  { id: "edit.ungroup", group: "编辑", label: "解组", default: "⌘⇧G" },
-  { id: "edit.cut", group: "编辑", label: "剪切", default: "⌘X" },
-  { id: "edit.undo", group: "编辑", label: "撤销", default: "⌘Z" },
-  { id: "edit.redo", group: "编辑", label: "重做", default: "⌘⇧Z" },
-  { id: "edit.delete", group: "编辑", label: "删除选中", default: "Delete" },
-  { id: "edit.duplicate", group: "编辑", label: "原地复制", default: "⌘D" },
-  { id: "edit.moveForward", group: "编辑", label: "上移一层", default: "⌘]" },
-  { id: "edit.moveBackward", group: "编辑", label: "下移一层", default: "⌘[" },
-  { id: "edit.moveToFront", group: "编辑", label: "置顶", default: "⌘⌥]" },
-  { id: "edit.moveToBack", group: "编辑", label: "置底", default: "⌘⌥[" },
-  { id: "edit.paste", group: "编辑", label: "粘贴", default: "⌘V" },
-  { id: "component.create", group: "组件", label: "创建组件", default: "⌘⌥K" },
-  { id: "component.detach", group: "组件", label: "脱离实例", default: "⌘⌥B" },
-  { id: "view.zoomIn", group: "视图", label: "放大", default: "⌘+" },
-  { id: "view.zoomOut", group: "视图", label: "缩小", default: "⌘−" },
-  { id: "view.zoomReset", group: "视图", label: "缩放回到 100%", default: "⌘0" },
-  { id: "view.fit", group: "视图", label: "适配页面", default: "⇧1" },
-  { id: "view.fitAll", group: "视图", label: "查看全部", default: "⇧2" },
-  { id: "view.toggleGrid", group: "视图", label: "显示网格", default: "⌘'" },
-  { id: "view.toggleSnap", group: "视图", label: "启用吸附", default: "⌘⌥'" },
-  { id: "view.toggleGuides", group: "视图", label: "显示参考线", default: "⌘;" },
-  { id: "focus.pageSearch", group: "其它", label: "聚焦页面搜索", default: "⌘F" },
-  { id: "file.new", group: "其它", label: "新建文档", default: "⌘N" },
-  { id: "file.open", group: "其它", label: "打开文件", default: "⌘O" },
-  { id: "file.insertImage", group: "其它", label: "插入图片", default: "⇧⌘I" },
-  { id: "file.save", group: "其它", label: "保存文件", default: "⌘S" },
-  { id: "file.saveAs", group: "其它", label: "另存为", default: "⇧⌘S" },
-  { id: "file.exportPng", group: "其它", label: "导出 PNG", default: "⌘⇧E" },
-  { id: "file.closeDoc", group: "其它", label: "关闭文档", default: "⌘W" },
+  { id: "mode.pan", group: "mode", labelKey: "shortcut.modePan", default: "H" },
+  { id: "mode.edit", group: "mode", labelKey: "shortcut.modeEdit", default: "V" },
+  { id: "tool.frame", group: "tool", labelKey: "node.frame", default: "F" },
+  { id: "tool.rect", group: "tool", labelKey: "node.rect", default: "R" },
+  { id: "tool.ellipse", group: "tool", labelKey: "node.ellipse", default: "O" },
+  { id: "tool.triangle", group: "tool", labelKey: "node.triangle", default: "G" },
+  { id: "tool.line", group: "tool", labelKey: "node.line", default: "L" },
+  { id: "tool.path", group: "tool", labelKey: "toolbar.pen", default: "P" },
+  { id: "tool.text", group: "tool", labelKey: "node.text", default: "T" },
+  { id: "edit.copy", group: "edit", labelKey: "menu.copy", default: "⌘C" },
+  { id: "edit.copyImage", group: "edit", labelKey: "shortcut.copyImage", default: "⌘⇧C" },
+  { id: "edit.selectAll", group: "edit", labelKey: "shortcut.selectAllPage", default: "⌘A" },
+  { id: "edit.rename", group: "edit", labelKey: "shortcut.renameLayer", default: "F2" },
+  { id: "edit.group", group: "edit", labelKey: "shortcut.group", default: "⌘G" },
+  { id: "edit.ungroup", group: "edit", labelKey: "shortcut.ungroup", default: "⌘⇧G" },
+  { id: "edit.cut", group: "edit", labelKey: "menu.cut", default: "⌘X" },
+  { id: "edit.undo", group: "edit", labelKey: "menu.undo", default: "⌘Z" },
+  { id: "edit.redo", group: "edit", labelKey: "menu.redo", default: "⌘⇧Z" },
+  { id: "edit.delete", group: "edit", labelKey: "shortcut.deleteSelection", default: "Delete" },
+  { id: "edit.duplicate", group: "edit", labelKey: "shortcut.duplicate", default: "⌘D" },
+  { id: "edit.moveForward", group: "edit", labelKey: "shortcut.moveForward", default: "⌘]" },
+  { id: "edit.moveBackward", group: "edit", labelKey: "shortcut.moveBackward", default: "⌘[" },
+  { id: "edit.moveToFront", group: "edit", labelKey: "shortcut.moveToFront", default: "⌘⌥]" },
+  { id: "edit.moveToBack", group: "edit", labelKey: "shortcut.moveToBack", default: "⌘⌥[" },
+  { id: "edit.paste", group: "edit", labelKey: "menu.paste", default: "⌘V" },
+  { id: "component.create", group: "component", labelKey: "shortcut.createComponent", default: "⌘⌥K" },
+  { id: "component.detach", group: "component", labelKey: "shortcut.detachInstance", default: "⌘⌥B" },
+  { id: "view.zoomIn", group: "view", labelKey: "menu.zoomIn", default: "⌘+" },
+  { id: "view.zoomOut", group: "view", labelKey: "menu.zoomOut", default: "⌘−" },
+  { id: "view.zoomReset", group: "view", labelKey: "shortcut.zoomReset", default: "⌘0" },
+  { id: "view.fit", group: "view", labelKey: "menu.fit", default: "⇧1" },
+  { id: "view.fitAll", group: "view", labelKey: "menu.fitAll", default: "⇧2" },
+  { id: "view.toggleGrid", group: "view", labelKey: "menu.showGrid", default: "⌘'" },
+  { id: "view.toggleSnap", group: "view", labelKey: "menu.enableSnap", default: "⌘⌥'" },
+  { id: "view.toggleGuides", group: "view", labelKey: "menu.showGuides", default: "⌘;" },
+  { id: "focus.pageSearch", group: "other", labelKey: "shortcut.focusPageSearch", default: "⌘F" },
+  { id: "file.new", group: "other", labelKey: "shortcut.newDoc", default: "⌘N" },
+  { id: "file.open", group: "other", labelKey: "shortcut.openFile", default: "⌘O" },
+  { id: "file.insertImage", group: "other", labelKey: "shortcut.insertImage", default: "⇧⌘I" },
+  { id: "file.save", group: "other", labelKey: "shortcut.saveFile", default: "⌘S" },
+  { id: "file.saveAs", group: "other", labelKey: "shortcut.saveAs", default: "⇧⌘S" },
+  { id: "file.exportPng", group: "other", labelKey: "shortcut.exportPng", default: "⌘⇧E" },
+  { id: "file.closeDoc", group: "other", labelKey: "shortcut.closeDoc", default: "⌘W" },
 ];
 
 /** 固定键位：不可修改，面板底部作为只读参考展示。 */
 export const PANEL_BINDING = "⌘/";
-export const FIXED_HINTS: { keys: string; label: string }[] = [
-  { keys: "Esc", label: "取消 / 逐级退出" },
-  { keys: PANEL_BINDING, label: "快捷键设置" },
-  { keys: "⌘Enter", label: "提交文案" },
+export const FIXED_HINTS: { keys: string; labelKey: MessageKey }[] = [
+  { keys: "Esc", labelKey: "shortcut.fixedCancel" },
+  { keys: PANEL_BINDING, labelKey: "shortcut.fixedPanel" },
+  { keys: "⌘Enter", labelKey: "shortcut.fixedCommit" },
 ];
 
 /** 系统菜单/角色占用，绑了也轮不到我们。 */
@@ -209,12 +211,12 @@ export function resetAll(): void {
 
 /** 返回错误文案；空串表示可以绑定。 */
 export function validateBinding(id: ActionId, binding: string): string {
-  if (!binding) return "请按下一个组合键";
-  if (binding === PANEL_BINDING) return `${PANEL_BINDING} 固定用于打开快捷键面板`;
-  if (binding === "Esc") return "Esc 固定用于取消";
-  if (RESERVED.has(binding)) return `${binding} 被系统菜单占用，不能绑定`;
+  if (!binding) return t("shortcut.needCombo");
+  if (binding === PANEL_BINDING) return t("shortcut.panelFixed", { keys: PANEL_BINDING });
+  if (binding === "Esc") return t("shortcut.escFixed");
+  if (RESERVED.has(binding)) return t("shortcut.reserved", { keys: binding });
   const taken = ACTIONS.find((a) => a.id !== id && keyOf(a.id) === binding);
-  if (taken) return `已被「${taken.label}」使用`;
+  if (taken) return t("shortcut.taken", { label: t(taken.labelKey) });
   return "";
 }
 

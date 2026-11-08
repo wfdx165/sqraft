@@ -7,6 +7,7 @@ import { computed, onMounted, ref } from "vue";
 import { newDocument, openDocument, openDocumentPath } from "../file-session";
 import { MCP_TOOL_COUNT, mcpUi } from "../mcp-host";
 import { mcpSetup } from "../mcp-setup";
+import { t } from "../i18n";
 import {
   MCP_CLIENTS,
   actionText,
@@ -25,10 +26,12 @@ const message = ref("");
 const client = ref<McpClient>("claude");
 
 const state = computed(() => welcomeMcpState(info.value, mcpUi.clients));
-const statusText = computed(() => (mcpUi.busy ? "agent 正在修改文档…" : statusLine(mcpUi)));
+const statusText = computed(() => (mcpUi.busy ? t("welcome.busy") : statusLine(mcpUi)));
 const snippet = computed(() => clientSnippet(info.value, client.value));
 const driftText = computed(() =>
-  mcpUi.driftFrom ? `端口 ${mcpUi.driftFrom} 被占用，已改用 ${mcpUi.port}；请更新已配置的客户端。` : "",
+  mcpUi.driftFrom
+    ? t("welcome.drift", { from: mcpUi.driftFrom, to: mcpUi.port })
+    : "",
 );
 
 async function refreshRecent(): Promise<void> {
@@ -39,7 +42,7 @@ onMounted(() => {
   void refreshRecent();
   // 与配置面板共用同一份配置：面板里改完端口会直接反映到这里
   void mcpSetup.ensure().then((next) => {
-    if (!next) message.value = "读取接入配置失败，可以打开端口设置重试。";
+    if (!next) message.value = t("welcome.readFailed");
   });
 });
 
@@ -79,7 +82,7 @@ function switchClient(next: McpClient): void {
         <span class="mark">S</span>
         <div class="titles">
           <h1>Sqraft</h1>
-          <p>为 AI 原生而设计的 UI/UX 工具</p>
+          <p>{{ t("welcome.tagline") }}</p>
         </div>
       </header>
 
@@ -88,9 +91,9 @@ function switchClient(next: McpClient): void {
           <span class="dot" :class="{ off: !mcpUi.listening, busy: mcpUi.busy }" />
           <span>{{ statusText }}</span>
         </div>
-        <p class="capability">{{ MCP_TOOL_COUNT }} 个工具 · agent 可读写当前画布</p>
+        <p class="capability">{{ t("welcome.capability", { count: MCP_TOOL_COUNT }) }}</p>
 
-        <div class="clients" role="tablist" aria-label="客户端">
+        <div class="clients" role="tablist" :aria-label="t('welcome.clients')">
           <button
             v-for="item in MCP_CLIENTS"
             :key="item.id"
@@ -101,14 +104,14 @@ function switchClient(next: McpClient): void {
             type="button"
             @click="switchClient(item.id)"
           >
-            {{ item.label }}
+            {{ item.id === "generic" ? t("mcp.clientGeneric") : item.label }}
           </button>
         </div>
 
         <div class="command">
           <code :title="snippet">{{ snippet }}</code>
           <button class="copy" type="button" :disabled="!snippet" @click="copySnippet">
-            {{ copied ? "已复制" : "复制" }}
+            {{ copied ? t("common.copied") : t("common.copy") }}
           </button>
         </div>
 
@@ -118,8 +121,8 @@ function switchClient(next: McpClient): void {
           <button v-if="state !== 'connected'" class="install" type="button" @click="runPrimary">
             {{ actionText(state) }}
           </button>
-          <span v-else class="ready">agent 已接入，可以直接下指令</span>
-          <button class="link" type="button" @click="emit('open-mcp-setup')">端口设置 / 全部客户端</button>
+          <span v-else class="ready">{{ t("welcome.connected") }}</span>
+          <button class="link" type="button" @click="emit('open-mcp-setup')">{{ t("welcome.mcpSetup") }}</button>
         </div>
 
         <p v-if="message" class="message">{{ message }}</p>
@@ -129,12 +132,12 @@ function switchClient(next: McpClient): void {
 
       <div class="start">
         <div class="actions">
-          <button class="primary" type="button" @click="newDocument">新建文档</button>
-          <button class="ghost" type="button" @click="openDocument">打开…</button>
+          <button class="primary" type="button" @click="newDocument">{{ t("welcome.newDoc") }}</button>
+          <button class="ghost" type="button" @click="openDocument">{{ t("welcome.open") }}</button>
         </div>
 
         <div v-if="recent.length > 0" class="recent">
-          <div class="recent-title">最近打开</div>
+          <div class="recent-title">{{ t("welcome.recent") }}</div>
           <ul>
             <li v-for="item in recent" :key="item.path">
               <button class="recent-item" :title="item.path" @click="openRecent(item.path)">

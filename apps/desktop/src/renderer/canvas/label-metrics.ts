@@ -1,8 +1,11 @@
 /**
  * 根节点名称标签的几何常量：绘制（`labels.ts`）、命中与尺寸徽标避让（`selection-overlay.ts`）
  * 必须用同一份数字，否则标签和点击区域会错位。
+ *
+ * 字体是函数而不是常量：切换界面语言后要换成对应 CJK 字形栈，
+ * 绘制与测量都调用它才能保持同宽。
  */
-export const LABEL_FONT = "11px 'Geist Variable', 'PingFang SC', sans-serif";
+export { labelFont, labelFont as LABEL_FONT } from "../font-stack";
 /** chip 高度 */
 export const LABEL_CHIP_HEIGHT = 20;
 /** chip 顶边离节点顶边的屏幕距离 */

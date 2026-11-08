@@ -12,13 +12,14 @@ import { resetLinkedImages } from "./linked-images";
 import { fontEntryName, fontTable, fontsForSave, loadFonts, registerDocFonts, resetFonts } from "./fonts";
 import { showToast } from "./toast";
 import { logError, logInfo, logWarn } from "./log";
+import { t } from "./i18n";
 
 /** 保存入口来源：区分快捷键/菜单、工具栏、关窗流程，排查"点了没反应"时先看这里。 */
 export type SaveSource = "direct" | "action" | "toolbar" | "close" | "replace";
 
 export const fileState = reactive({
   path: null as string | null,
-  name: "未命名",
+  name: "",
   mtimeMs: 0,
   /**
    * 自上次落盘以来是否有改动。
@@ -49,7 +50,7 @@ const WARN_SAVE_BYTES = 20 * 1024 * 1024;
  * （摊在 userData/image-cache/，ADR-0027），改链接是最有效的手段之一。
  */
 function overLimitMessage(): string {
-  return `文件超过 ${MAX_SAVE_BYTES / 1024 / 1024}MB，已取消保存。占体积的主要是内嵌图片与字体：压缩或删掉大图、把嵌入图改成链接图（字节不进文件）、减少内嵌字体后重试。`;
+  return t("file.tooLarge", { mb: MAX_SAVE_BYTES / 1024 / 1024 });
 }
 
 /** 保存时把仓库里的图片一并写进 zip（不在文档里的孤儿资源也一并带上，避免撤销后丢图）。 */
@@ -86,7 +87,7 @@ function estimatedBytesOf(
  */
 async function warnLargeSaveIfAny(estimated: number): Promise<void> {
   if (estimated <= WARN_SAVE_BYTES) return;
-  showToast(`文档较大（约 ${Math.ceil(estimated / 1024 / 1024)}MB），正在保存…`);
+  showToast(t("file.largeSaving", { mb: Math.ceil(estimated / 1024 / 1024) }));
   await new Promise((resolve) => setTimeout(resolve, 60));
 }
 
@@ -99,7 +100,7 @@ async function withinSaveLimit(estimated: number, source: SaveSource): Promise<b
 }
 
 function suggestedName(): string {
-  return fileState.name === "未命名" ? "untitled.sqraft" : fileState.name;
+  return fileState.name || "untitled.sqraft";
 }
 
 function errorText(error: unknown): string {
@@ -128,7 +129,7 @@ export async function newDocument(): Promise<boolean> {
   resetFonts();
   docStore.replace(createEmptyDoc());
   fileState.path = null;
-  fileState.name = "未命名";
+  fileState.name = "";
   fileState.mtimeMs = 0;
   ui.docOpen = true;
   ui.activePageId = firstPageId(docStore.doc);
@@ -151,7 +152,7 @@ export async function closeDocument(): Promise<void> {
   resetFonts();
   docStore.replace(createEmptyDoc());
   fileState.path = null;
-  fileState.name = "未命名";
+  fileState.name = "";
   fileState.mtimeMs = 0;
   ui.docOpen = false;
   ui.selection = [];
@@ -220,7 +221,7 @@ async function adoptFile(file: { path: string; name: string; mtimeMs: number; by
     return true;
   } catch (error) {
     logError("open: failed", { path: file.path, error: errorText(error), stack: errorStack(error) });
-    await bridge.dialog.error(`无法打开这个文件：${errorText(error)}`);
+    await bridge.dialog.error(t("file.openError", { detail: errorText(error) }));
     return false;
   }
 }
@@ -317,7 +318,7 @@ async function runSave(source: SaveSource): Promise<boolean> {
   } catch (error) {
     // 序列化/写盘任何一步抛错都必须让用户看见：静默失败会让"保存"和"关窗"一起失灵
     logError("save: threw", { source, error: errorText(error), stack: errorStack(error), ms: Date.now() - started });
-    await bridge.dialog.error(`保存失败：${errorText(error)}`).catch(() => undefined);
+    await bridge.dialog.error(t("file.saveError", { detail: errorText(error) })).catch(() => undefined);
     return false;
   }
 }
@@ -370,7 +371,7 @@ async function runSaveAs(source: SaveSource, reason: "direct" | "conflict" = "di
     return markSaved(result.mtimeMs, source);
   } catch (error) {
     logError("save-as: threw", { source, error: errorText(error), stack: errorStack(error) });
-    await bridge.dialog.error(`另存为失败：${errorText(error)}`).catch(() => undefined);
+    await bridge.dialog.error(t("file.saveAsError", { detail: errorText(error) })).catch(() => undefined);
     return false;
   }
 }
@@ -394,7 +395,7 @@ let lastName = "";
 
 /** 把脏状态与文件名同步给主进程（用于窗口标题与关闭拦截）。 */
 export function syncTitle(): void {
-  const name = ui.docOpen ? fileState.name : "";
+  const name = ui.docOpen ? (fileState.name || t("common.untitled")) : "";
   const dirty = ui.docOpen && docStore.isDirty;
   // 先写响应式状态（工具栏胶囊读它），再决定要不要通知主进程
   fileState.dirty = dirty;
@@ -468,7 +469,7 @@ export function installFileSession(): void {
         }
       } catch (error) {
         logError("close: threw", { quit, error: errorText(error), stack: errorStack(error) });
-        await bridge.dialog.error(`关闭前保存失败：${errorText(error)}`).catch(() => undefined);
+        await bridge.dialog.error(t("file.closeSaveError", { detail: errorText(error) })).catch(() => undefined);
       } finally {
         closeState.busy = false;
         // 没走成也一定要回一句：主进程的挂起不解除的话，之后的关闭请求会被永久丢弃，

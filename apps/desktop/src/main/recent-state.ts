@@ -4,6 +4,7 @@
  */
 import { app, BrowserWindow } from "electron";
 import { join } from "node:path";
+import type { LanguagePreference } from "../shared/i18n";
 import { CHANNELS } from "../shared/ipc";
 import {
   addRecent,
@@ -54,6 +55,12 @@ export async function updateMcpPreferences(patch: {
 
 export async function saveWindowBounds(bounds: WindowBounds): Promise<void> {
   preferences = { ...preferences, window: bounds };
+  await savePreferences(preferencesFile(), preferences);
+}
+
+/** 语言偏好：`auto` 也显式写盘，避免"没字段 = auto"与"用户主动选 auto"混淆。 */
+export async function updateLanguagePreference(language: LanguagePreference): Promise<void> {
+  preferences = { ...preferences, language };
   await savePreferences(preferencesFile(), preferences);
 }
 

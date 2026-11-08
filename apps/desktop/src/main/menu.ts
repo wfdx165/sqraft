@@ -12,6 +12,7 @@ import { basename } from "node:path";
 import { CHANNELS } from "../shared/ipc";
 import { clearImageCache } from "./image-cache";
 import { logFileDir } from "./log-file";
+import { t } from "./i18n";
 
 /** 渲染层同步过来的、面向菜单的动作键位（默认值兜底）。 */
 let bindings: Record<string, string> = {};
@@ -78,6 +79,29 @@ function actionItem(action: string, label: string, mac: boolean): MenuItemConstr
   return item;
 }
 
+/** 「设置…」：macOS 快捷键 ⌘,；其他平台用 Ctrl+, 写进文件菜单。 */
+function settingsItem(mac: boolean): MenuItemConstructorOptions {
+  return {
+    label: t("menu.settings"),
+    accelerator: mac ? "Command+," : "CommandOrControl+,",
+    click: () => {
+      const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+      target?.webContents.send(CHANNELS.menuCommand, "app.settings");
+    },
+  };
+}
+
+/** 「配置 MCP…」：入口归到应用菜单的「设置…」旁边（非 mac 放「文件」菜单）。 */
+function mcpSetupItem(): MenuItemConstructorOptions {
+  return {
+    label: t("menu.configureMcp"),
+    click: () => {
+      const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+      target?.webContents.send(CHANNELS.menuCommand, "app.mcpSetup");
+    },
+  };
+}
+
 /**
  * 「关闭窗口」：显式绑定 ⇧⌘W。
  * 绝不能用 `role: "close"`——它自带 Cmd/Ctrl+W 并直接注册，会在渲染层之前吃掉 ⌘W，
@@ -102,7 +126,7 @@ export interface TemplateOptions {
 /** 开发者工具：右侧停靠，再点一次关闭（与 Chrome 一致）。 */
 function devToolsMenuItem(mac: boolean): MenuItemConstructorOptions {
   return {
-    label: "开发者工具",
+    label: t("menu.devTools"),
     // Windows/Linux 不用 Ctrl+Shift+I：渲染层把 ctrlKey 当 ⌘，那个组合是「插入图片」
     accelerator: mac ? "Command+Alt+I" : "F12",
     click: () => {
@@ -128,48 +152,52 @@ export function buildTemplate(
       label: app.name,
       submenu: [
         {
-          label: "关于 Sqraft",
+          label: t("menu.about"),
           click: () => {
             const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
             target?.webContents.send(CHANNELS.menuCommand, "app.about");
           },
         },
+        settingsItem(mac),
+        mcpSetupItem(),
         { type: "separator" },
-        { role: "services", label: "服务" },
+        { role: "services", label: t("menu.services") },
         { type: "separator" },
-        { role: "hide", label: "隐藏 Sqraft" },
-        { role: "hideOthers", label: "隐藏其他" },
-        { role: "unhide", label: "全部显示" },
+        { role: "hide", label: t("menu.hideApp") },
+        { role: "hideOthers", label: t("menu.hideOthers") },
+        { role: "unhide", label: t("menu.showAll") },
         { type: "separator" },
-        { role: "quit", label: "退出 Sqraft" },
+        { role: "quit", label: t("menu.quitApp") },
       ],
     });
   }
 
   template.push({
-    label: "文件",
+    label: t("menu.file"),
     submenu: [
-      actionItem("file.new", "新建", mac),
-      actionItem("file.open", "打开…", mac),
-      actionItem("file.insertImage", "插入图片…", mac),
-      actionItem("file.save", "保存", mac),
-      actionItem("file.saveAs", "另存为…", mac),
-      actionItem("file.exportPng", "导出 PNG…", mac),
+      actionItem("file.new", t("menu.new"), mac),
+      actionItem("file.open", t("menu.open"), mac),
+      actionItem("file.insertImage", t("menu.insertImage"), mac),
+      actionItem("file.save", t("menu.save"), mac),
+      actionItem("file.saveAs", t("menu.saveAs"), mac),
+      actionItem("file.exportPng", t("menu.exportPng"), mac),
       { type: "separator" },
+      ...(mac ? [] : [settingsItem(mac), mcpSetupItem()]),
+      ...(mac ? [] : [{ type: "separator" as const }]),
       {
         // 链接图片的字节不在文件里，只能靠本机缓存：给一个手动清理入口（上限 500MB，LRU 自动淘汰）
-        label: "清除图片缓存",
+        label: t("menu.clearImageCache"),
         click: () => {
           void (async () => {
             const bytes = await clearImageCache();
             const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
             const options: Electron.MessageBoxOptions = {
               type: "info",
-              buttons: ["知道了"],
+              buttons: [t("common.ok")],
               message:
                 bytes > 0
-                  ? `已清除 ${Math.max(1, Math.round(bytes / 1024 / 1024))}MB 图片缓存`
-                  : "图片缓存已经是空的",
+                  ? t("menu.imageCacheCleared", { mb: Math.max(1, Math.round(bytes / 1024 / 1024)) })
+                  : t("menu.imageCacheEmpty"),
             };
             if (target) await dialog.showMessageBox(target, options);
             else await dialog.showMessageBox(options);
@@ -178,10 +206,10 @@ export function buildTemplate(
       },
       { type: "separator" },
       {
-        label: "打开最近",
+        label: t("menu.openRecent"),
         submenu:
           recentFiles.length === 0
-            ? [{ label: "（暂无）", enabled: false }]
+            ? [{ label: t("menu.noRecent"), enabled: false }]
             : recentFiles.map((path) => ({
                 label: basename(path),
                 click: () => {
@@ -191,58 +219,58 @@ export function buildTemplate(
               })),
       },
       { type: "separator" },
-      actionItem("file.closeDoc", "关闭文档", mac),
+      actionItem("file.closeDoc", t("menu.closeDoc"), mac),
       { type: "separator" },
-      closeWindowItem("关闭窗口"),
-      ...(mac ? [] : [{ role: "quit" as const, label: "退出" }]),
+      closeWindowItem(t("menu.closeWindow")),
+      ...(mac ? [] : [{ role: "quit" as const, label: t("menu.quit") }]),
     ],
   });
 
   template.push({
-    label: "编辑",
+    label: t("menu.edit"),
     submenu: [
-      actionItem("edit.undo", "撤销", mac),
-      actionItem("edit.redo", "重做", mac),
+      actionItem("edit.undo", t("menu.undo"), mac),
+      actionItem("edit.redo", t("menu.redo"), mac),
       { type: "separator" },
-      actionItem("edit.cut", "剪切", mac),
-      actionItem("edit.copy", "复制", mac),
-      actionItem("edit.paste", "粘贴", mac),
-      actionItem("edit.selectAll", "全选", mac),
+      actionItem("edit.cut", t("menu.cut"), mac),
+      actionItem("edit.copy", t("menu.copy"), mac),
+      actionItem("edit.paste", t("menu.paste"), mac),
+      actionItem("edit.selectAll", t("menu.selectAll"), mac),
     ],
   });
 
   template.push({
-    label: "视图",
+    label: t("menu.view"),
     submenu: [
-      actionItem("view.zoomIn", "放大", mac),
-      actionItem("view.zoomOut", "缩小", mac),
-      actionItem("view.zoomReset", "实际大小", mac),
+      actionItem("view.zoomIn", t("menu.zoomIn"), mac),
+      actionItem("view.zoomOut", t("menu.zoomOut"), mac),
+      actionItem("view.zoomReset", t("menu.zoomReset"), mac),
       { type: "separator" },
-      actionItem("view.fit", "适配页面", mac),
-      actionItem("view.fitAll", "查看全部", mac),
+      actionItem("view.fit", t("menu.fit"), mac),
+      actionItem("view.fitAll", t("menu.fitAll"), mac),
       { type: "separator" },
-      actionItem("view.toggleGrid", "显示网格", mac),
-      actionItem("view.toggleSnap", "启用吸附", mac),
-      actionItem("view.toggleGuides", "显示参考线", mac),
+      actionItem("view.toggleGrid", t("menu.showGrid"), mac),
+      actionItem("view.toggleSnap", t("menu.enableSnap"), mac),
+      actionItem("view.toggleGuides", t("menu.showGuides"), mac),
       { type: "separator" },
-      { role: "togglefullscreen", label: "进入全屏幕" },
+      { role: "togglefullscreen", label: t("menu.enterFullscreen") },
     ],
   });
 
   template.push({
-    label: "窗口",
+    label: t("menu.window"),
     submenu: mac
       ? [
-          { role: "minimize", label: "最小化" },
-          { role: "zoom", label: "缩放" },
+          { role: "minimize", label: t("menu.minimize") },
+          { role: "zoom", label: t("menu.zoom") },
           { type: "separator" },
-          { role: "front", label: "全部置于顶层" },
+          { role: "front", label: t("menu.bringAllToFront") },
         ]
       : [
-          { role: "minimize", label: "最小化" },
+          { role: "minimize", label: t("menu.minimize") },
           // 不带 accelerator：⇧⌘W 已在"文件"里注册，注册两次会互相抢
           {
-            label: "关闭",
+            label: t("menu.close"),
             click: () => {
               const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
               target?.close();
@@ -253,15 +281,8 @@ export function buildTemplate(
 
   const help: MenuItemConstructorOptions[] = [
     {
-      label: "配置 MCP…",
-      click: () => {
-        const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
-        target?.webContents.send(CHANNELS.menuCommand, "app.mcpSetup");
-      },
-    },
-    {
       // 更新是半静默的（ADR-0029）：自动检查之外，给一个"我现在就想查"的入口
-      label: "检查更新…",
+      label: t("menu.checkUpdates"),
       click: () => {
         const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
         target?.webContents.send(CHANNELS.menuCommand, "app.checkUpdates");
@@ -269,7 +290,7 @@ export function buildTemplate(
     },
     {
       // 打包版从 Finder 启动时日志只落文件，入口要能被找到
-      label: "打开日志目录",
+      label: t("menu.openLogs"),
       click: () => {
         const dir = logFileDir();
         if (dir) void shell.openPath(dir);
@@ -280,7 +301,7 @@ export function buildTemplate(
   help.push(
     { type: "separator" },
     {
-      label: "关于 Sqraft",
+      label: t("menu.about"),
       click: () => {
         const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
         target?.webContents.send(CHANNELS.menuCommand, "app.about");
@@ -288,7 +309,7 @@ export function buildTemplate(
     },
   );
 
-  template.push({ label: "帮助", submenu: help });
+  template.push({ label: t("menu.help"), submenu: help });
 
   return template;
 }

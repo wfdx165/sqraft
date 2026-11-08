@@ -378,12 +378,12 @@ export function nextComponentPosition(state: DocState): { x: number; y: number }
   return { x: Math.max(...components.map((c) => c.x + c.width)) + PAGE_GAP, y: origin.y };
 }
 
-/** 生成不重复的页面默认名："页面 N"。 */
-export function nextPageName(state: DocState): string {
+/** 生成不重复的页面默认名："页面 N"；界面可传本地化前缀。 */
+export function nextPageName(state: DocState, prefix = "页面"): string {
   const used = new Set(getPages(state).map((p) => p.name));
   let n = getPages(state).length + 1;
-  while (used.has(`页面 ${n}`)) n += 1;
-  return `页面 ${n}`;
+  while (used.has(`${prefix} ${n}`)) n += 1;
+  return `${prefix} ${n}`;
 }
 
 export interface Rect {

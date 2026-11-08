@@ -20,6 +20,7 @@ describe("启动状态恢复", () => {
     expect(result.state.phase).toBe("idle");
     expect(result.patch).toEqual({});
     expect(result.removeZip).toBe(false);
+    expect(result.message).toBeNull();
     expect(result.prompt).toBeNull();
   });
 
@@ -32,10 +33,14 @@ describe("启动状态恢复", () => {
       }),
     );
     expect(result.state.phase).toBe("error");
-    expect(result.state.message).toContain("0.2.0");
+    expect(result.state.message).toBeNull();
+    expect(result.message).toEqual({
+      key: "update.rollback",
+      params: { failed: "0.2.0", current: "0.1.0" },
+    });
     expect(result.removeZip).toBe(true);
     expect(result.clearFailure).toBe(true);
-    expect(result.prompt).toContain("已回滚");
+    expect(result.prompt).toEqual({ key: "update.rollbackPrompt", params: { failed: "0.2.0" } });
     // 清掉 ready 相关字段，并记住失败版本，避免自动检查反复重下
     expect(result.patch).toEqual({
       readyVersion: undefined,

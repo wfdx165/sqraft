@@ -6,6 +6,7 @@
  * 片段按客户端外壳不同，内容都是同一个 URL。
  */
 import type { McpSetupInfo } from "../shared/ipc";
+import { t } from "./i18n";
 
 export type McpWelcomeState = "offline" | "idle" | "connected";
 
@@ -16,7 +17,7 @@ export const MCP_CLIENTS: ReadonlyArray<{ id: McpClient; label: string }> = [
   { id: "claude", label: "Claude Code" },
   { id: "opencode", label: "OpenCode" },
   { id: "cursor", label: "Cursor" },
-  { id: "generic", label: "通用" },
+  { id: "generic", label: "Generic" },
 ];
 
 /** 某个客户端的接入片段；配置还没读到时返回空串（按钮据此禁用） */
@@ -44,19 +45,19 @@ export function welcomeMcpState(info: McpSetupInfo | null, clients: readonly unk
 /** 状态行：监听状态 + 在线人数；启动失败时带原因（端口被占最常见） */
 export function statusLine(status: { listening: boolean; clients: readonly unknown[]; error?: string | null }): string {
   if (!status.listening) {
-    return status.error ? `MCP 服务未启动 · ${status.error}` : "MCP 服务未启动";
+    return status.error ? t("mcp.status.offlineWithError", { error: status.error }) : t("mcp.status.offline");
   }
-  if (status.clients.length > 0) return `MCP 服务监听中 · 已连接 ${status.clients.length} 个 agent`;
-  return "MCP 服务监听中 · 等待 agent 接入";
+  if (status.clients.length > 0) return t("mcp.status.connected", { count: status.clients.length });
+  return t("mcp.status.listening");
 }
 
 export function actionText(state: McpWelcomeState): string {
   switch (state) {
     case "offline":
-      return "检查端口";
+      return t("mcp.action.offline");
     case "idle":
-      return "复制接入命令";
+      return t("mcp.action.idle");
     case "connected":
-      return "已连接";
+      return t("mcp.action.connected");
   }
 }

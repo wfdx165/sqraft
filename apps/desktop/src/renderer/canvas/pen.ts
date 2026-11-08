@@ -7,6 +7,7 @@ import type { DocStore, NodeId, VectorAnchor, VectorPath } from "@sqraft/core";
 import { createNode, makeAnchor, worldRect } from "@sqraft/core";
 import { worldToScreen, type Viewport } from "@sqraft/render";
 import type { Command } from "@sqraft/core";
+import { t } from "../i18n";
 
 export interface PenDraft {
   pageId: NodeId;
@@ -53,19 +54,20 @@ export interface PenDeps {
 
 /** 路径默认名：路径 N（同类节点内不重复）。 */
 export function nextPathName(docStore: DocStore): string {
+  const base = t("node.path");
   const used = new Set(
     Object.values(docStore.doc.nodes)
       .filter((n) => n.type === "path")
       .map((n) => n.name),
   );
   let i = 1;
-  while (used.has(`路径 ${i}`)) i += 1;
-  return `路径 ${i}`;
+  while (used.has(`${base} ${i}`)) i += 1;
+  return `${base} ${i}`;
 }
 
 /** 多边形默认名：sides=3 叫三角形，其余叫多边形，各自编号。 */
 export function nextPolygonName(docStore: DocStore, sides: number): string {
-  const base = sides === 3 ? "三角形" : "多边形";
+  const base = sides === 3 ? t("node.triangle") : t("node.polygon");
   const used = new Set(
     Object.values(docStore.doc.nodes)
       .filter((n) => n.type === "polygon" && n.name.startsWith(base))

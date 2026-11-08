@@ -7,6 +7,7 @@
 import { createNode, type DocNode, type NodeId } from "@sqraft/core";
 import { putAsset } from "../assets";
 import { docStore, select } from "../store";
+import { t } from "../i18n";
 
 export interface ImageInsertDeps {
   /** 当前视口（世界坐标原点 + 像素尺寸 + 缩放） */
@@ -41,7 +42,7 @@ export async function insertImages(
   const under = anchor ? deps.pageAt(anchor.x, anchor.y) : null;
   const page = (under ? docStore.doc.nodes[under] : null) ?? deps.activePage() ?? deps.pageAtViewportCenter();
   if (!page || page.type !== "page") {
-    await window.sqraft.dialog.error("当前没有可插入图片的页面");
+    await window.sqraft.dialog.error(t("error.noPageForImage"));
     return;
   }
   const pageId = page.id;
@@ -65,7 +66,7 @@ export async function insertImages(
     const height = Math.max(1, Math.round(asset.height * scale));
     nodes.push(
       createNode("image", {
-        name: file.name.replace(/\.[^.]+$/, "") || "图片",
+        name: file.name.replace(/\.[^.]+$/, "") || t("node.image"),
         parentId: pageId,
         x: cursorX,
         y: cursorY,

@@ -4,6 +4,53 @@ Sqraft 是一款面向个人与小团队的**轻量级 UI 设计工具**：纯�
 
 本文件是领域词汇表：定义项目语言的 canonical 含义。所有代码、文档、对话中的术语以此为准。
 
+## 多语言术语（界面文案）
+
+英文、日文、韩文界面都采用 Figma 的官方词汇，不另造同义词；改文案时以此为准：
+
+| 中文 | English | 日本語 | 한국어 |
+|---|---|---|---|
+| 画板 | Frame | フレーム | 프레임 |
+| 页面 | Page | ページ | 페이지 |
+| 分组 | Group | グループ | 그룹 |
+| 矩形 | Rectangle | 長方形 | 사각형 |
+| 椭圆 | Ellipse | 楕円 | 타원 |
+| 直线 | Line | 線 | 선 |
+| 多边形 | Polygon | 多角形 | 다각형 |
+| 路径 | Path | パス | 패스 |
+| 文本 | Text | テキスト | 텍스트 |
+| 图片 | Image | 画像 | 이미지 |
+| 组件 | Component | コンポーネント | 컴포넌트 |
+| 实例 | Instance | インスタンス | 인스턴스 |
+| 插槽 | Slot | スロット | 슬롯 |
+| 变体 | Variant | バリアント | 배리언트 |
+| 自动布局 | Auto layout | オートレイアウト | 오토 레이아웃 |
+| 填充 | Fill | 塗り | 채우기 |
+| 描边 | Stroke | 線 | 선 |
+| 圆角 | Corner radius | 角の半径 | 모서리 반경 |
+| 投影 | Drop shadow | ドロップシャドウ | 드롭 섀도우 |
+| 内阴影 | Inner shadow | 内側の影 | 내부 그림자 |
+| 图层模糊 | Layer blur | レイヤーのぼかし | 레이어 블러 |
+| 背景模糊 | Background blur | 背景のぼかし | 배경 블러 |
+| 缩放 | Zoom | ズーム | 확대/축소 |
+| 适配 | Fit | フィット | 맞추기 |
+| 参考线 | Guide | ガイド | 가이드 |
+| 吸附 | Snap | スナップ | 스냅 |
+| 网格 | Grid | グリッド | 그리드 |
+| 检查器 | Inspector | インスペクター | 인스펙터 |
+| 图层 | Layer | レイヤー | 레이어 |
+| 设计系统 | Design system | デザインシステム | 디자인 시스템 |
+| Token | Token | トークン | 토큰 |
+| 未命名 | Untitled | 無題 | 제목 없음 |
+
+规则：`Frame` 不写 `Artboard`，`Auto layout` 不写 `Auto Layout`，`Slot` 不写 `Placeholder`；日/韩同样使用上述 Figma 术语。新增词先补这张表，再进字典。
+
+## 字体与日文排版
+
+- 界面与画布新建文本按界面语言选 CJK 字体栈：中文 PingFang SC / Microsoft YaHei，日文 Hiragino Sans / Yu Gothic / Meiryo，韩文 Apple SD Gothic Neo / Malgun Gothic。已有文档的 `fontFamily` 不改。
+- 日文换行使用轻量禁则：收尾标点不出现在行首，开括号不出现在行尾；不做完整 JIS X 4051，必要时允许一行溢出 1 个字宽。
+
+
 ## 画布与文档
 
 **画布（Canvas）**：

@@ -15,6 +15,7 @@ import type { McpClientInfo } from "../../shared/ipc";
 import { logError, logInfo, logWarn, singleLine } from "./log";
 import { MCP_MAX_PORT } from "./port";
 import { ClientGoneError, QueueTimeoutError, SerialQueue } from "./queue";
+import { t } from "../i18n";
 import {
   FALLBACK_PROTOCOL,
   isSupportedProtocol,
@@ -80,6 +81,12 @@ export interface McpServerOptions {
 
 class BodyTooLargeError extends Error {}
 
+/**
+ * 启动 MCP HTTP 服务。
+ *
+ * 端口/监听错误会进入 McpSetupInfo.error，由设置面板显示，因此走 `t()` 跟随界面语言；
+ * 协议层（Origin / Host / session 等）的错误是发给 agent 的，保持独立文案，不要在这里本地化。
+ */
 export async function startMcpServer(options: McpServerOptions): Promise<McpRuntime> {
   const bindHost = options.bindHost ?? "127.0.0.1";
   const queue = new SerialQueue();
@@ -328,18 +335,24 @@ export async function startMcpServer(options: McpServerOptions): Promise<McpRunt
       if (code !== "EADDRINUSE" || offset === fallbackSteps) {
         await closeServer(server);
         const range =
-          fallbackSteps === 0 ? `端口 ${requestedPort}` : `端口 ${requestedPort}–${requestedPort + fallbackSteps}`;
+          fallbackSteps === 0
+            ? t("mcp.portInUse", { port: requestedPort })
+            : t("mcp.portRangeInUse", { from: requestedPort, to: requestedPort + fallbackSteps });
         throw new Error(
           code === "EADDRINUSE"
-            ? `${range} 被占用`
-            : `无法监听 ${bindHost}:${candidate}：${error instanceof Error ? error.message : String(error)}`,
+            ? range
+            : t("mcp.listenFailed", {
+                host: bindHost,
+                port: candidate,
+                detail: error instanceof Error ? error.message : String(error),
+              }),
         );
       }
     }
   }
   if (!listening) {
     await closeServer(server);
-    throw new Error(`端口 ${requestedPort} 起没有可用端口（上限 ${maxPort}）`);
+    throw new Error(t("mcp.noPort", { from: requestedPort, to: maxPort }));
   }
 
   const expiry = setInterval(tick, Math.max(10, Math.min(30_000, Math.floor(idleMs / 2))));

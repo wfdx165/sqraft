@@ -5,6 +5,8 @@
 import { worldRect, type NodeId } from "@sqraft/core";
 import { worldToScreen, type Viewport } from "@sqraft/render";
 import { docStore } from "../store";
+import { t } from "../i18n";
+import { labelFont } from "../font-stack";
 
 export function paintSlotPlaceholders(
   g: CanvasRenderingContext2D,
@@ -30,7 +32,7 @@ export function paintSlotPlaceholders(
         g.strokeRect(a.x + 0.5, a.y + 0.5, b.x - a.x - 1, b.y - a.y - 1);
         g.setLineDash([]);
         g.fillStyle = "rgba(79, 70, 229, 0.85)";
-        g.font = "11px 'Geist Variable', 'PingFang SC', sans-serif";
+        g.font = labelFont();
         g.textAlign = "center";
         g.textBaseline = "middle";
         g.fillText(node.name, (a.x + b.x) / 2, (a.y + b.y) / 2);
@@ -58,9 +60,9 @@ export function paintDropSlot(g: CanvasRenderingContext2D, vp: Viewport, slotId:
   g.strokeRect(a.x + 0.5, a.y + 0.5, b.x - a.x - 1, b.y - a.y - 1);
   g.setLineDash([]);
   g.fillStyle = "#4f46e5";
-  g.font = "11px 'Geist Variable', 'PingFang SC', sans-serif";
+  g.font = labelFont();
   g.textAlign = "center";
   g.textBaseline = "middle";
-  g.fillText("填入插槽", (a.x + b.x) / 2, (a.y + b.y) / 2);
+  g.fillText(t("canvas.fillSlot"), (a.x + b.x) / 2, (a.y + b.y) / 2);
   g.restore();
 }

@@ -7,6 +7,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue"
 import { tokenNumberOf } from "@sqraft/core";
 import { closeTokenPicker, pickToken, tokenPicker } from "../token-picker";
 import { docStore, ui } from "../store";
+import { t } from "../i18n";
 
 const el = ref<HTMLDivElement | null>(null);
 const searchEl = ref<HTMLInputElement | null>(null);
@@ -42,7 +43,7 @@ const options = computed<Option[]>(() => {
     label: token.path,
     value: String(token.value),
   }));
-  if (tokenPicker.current) list.unshift({ path: null, label: "解绑", value: "恢复字面量" });
+  if (tokenPicker.current) list.unshift({ path: null, label: t("tokenPicker.unbind"), value: t("tokenPicker.restoreLiteral") });
   return list;
 });
 
@@ -139,14 +140,14 @@ onBeforeUnmount(() => {
     ref="el"
     class="token-picker glass"
     role="dialog"
-    aria-label="绑定数值 Token"
+    :aria-label="t('tokenLink.bind')"
     :style="{ left: left + 'px', top: top + 'px' }"
   >
     <input
       ref="searchEl"
       v-model="query"
       class="search"
-      placeholder="搜索数值 Token…"
+      :placeholder="t('tokenPicker.search')"
       spellcheck="false"
       @keydown.esc.prevent="closeTokenPicker"
     />
@@ -164,7 +165,7 @@ onBeforeUnmount(() => {
         <span class="value">{{ option.value }}</span>
       </button>
       <p v-if="visible.length === 0" class="empty">
-        {{ numberTokens.length === 0 ? "还没有数值 Token，可在设计系统面板新建" : "没有匹配的数值 Token" }}
+        {{ numberTokens.length === 0 ? t("tokenPicker.empty") : t("tokenPicker.noMatch") }}
       </p>
     </div>
   </div>

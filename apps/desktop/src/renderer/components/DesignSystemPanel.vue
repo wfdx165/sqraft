@@ -15,6 +15,8 @@ import {
   type TokenEntry,
 } from "@sqraft/core";
 import { dispatch, docStore, ui } from "../store";
+import { t } from "../i18n";
+import { localizeError } from "../errors";
 import Icon from "./Icon.vue";
 
 interface Row {
@@ -27,7 +29,7 @@ const collapsed = ref<Record<string, boolean>>({});
 
 function prefixOf(path: string): string {
   const i = path.indexOf("/");
-  return i > 0 ? path.slice(0, i) : "其它";
+  return i > 0 ? path.slice(0, i) : t("tokens.otherGroup");
 }
 
 const groups = computed(() => {
@@ -118,8 +120,8 @@ function startAdd(groupPrefix?: string) {
 
 /** 路径校验：新增与改名共用（至少两段、无空格/空段、不重复）。 */
 function validatePath(path: string): string {
-  if (!tokenPathOf(path)) return "路径需至少两段且不含空格，如 color/brand";
-  if (docStore.doc.tokens[path]) return "该路径已存在，直接改值即可";
+  if (!tokenPathOf(path)) return t("tokens.pathError");
+  if (docStore.doc.tokens[path]) return t("tokens.pathExists");
   return "";
 }
 
@@ -132,7 +134,7 @@ function submitAdd() {
   }
   const value = draft.value.value.trim();
   if (draft.value.type === "color" ? !isValidColor(value) : !isValidNumber(value)) {
-    addError.value = draft.value.type === "color" ? "颜色需为 #hex / rgb() / rgba()" : "请输入有效数字";
+    addError.value = draft.value.type === "color" ? t("tokens.colorInvalid") : t("tokens.numberInvalid");
     return;
   }
   dispatch(
@@ -207,8 +209,11 @@ const confirmText = computed(() => {
   if (!path) return "";
   const entry = docStore.doc.tokens[path];
   // Token 被别处删掉/撤销后行本身会消失；兜底是为了不渲染出「冻结为 」
-  if (!entry) return "该 Token 已不存在";
-  return `${tokenRefsOf(docStore.doc, path).length} 个节点在用，删除会把它们冻结为 ${String(entry.value)}`;
+  if (!entry) return t("tokens.deleteMissing");
+  return t("tokens.deleteConfirm", {
+    count: tokenRefsOf(docStore.doc, path).length,
+    value: String(entry.value),
+  });
 });
 
 function requestDelete(path: string): void {
@@ -234,12 +239,12 @@ function runPlan(path: string, plan: Extract<TokenDeletePlan, { status: "ready" 
   confirmingPath.value = null;
   if (renamingPath.value === path) cancelRename();
   void docStore
-    .transact("删除 Token", () => {
+    .transact(t("tokens.delete"), () => {
       for (const cmd of plan.commands) dispatch(cmd);
     })
     // 引用里含锁定节点时命令会被拒绝：把原因摊到面板底部，别静默失败
     .catch((error: unknown) => {
-      renameError.value = error instanceof Error ? error.message : String(error);
+      renameError.value = localizeError(error);
     });
 }
 </script>
@@ -247,7 +252,7 @@ function runPlan(path: string, plan: Extract<TokenDeletePlan, { status: "ready" 
 <template>
   <div class="tokens">
     <header class="top">
-      <input v-model="filter" class="search" placeholder="筛选 Token…" spellcheck="false" />
+      <input v-model="filter" class="search" :placeholder="t('tokens.searchPlaceholder')" spellcheck="false" />
       <span class="count">{{ total }}</span>
     </header>
 
@@ -283,7 +288,7 @@ function runPlan(path: string, plan: Extract<TokenDeletePlan, { status: "ready" 
               />
               <span v-else class="path" :title="row.path">{{ row.path }}</span>
 
-              <button v-if="renamingPath !== row.path" class="edit-path" title="双击改名" @click="startRename(row.path)">
+              <button v-if="renamingPath !== row.path" class="edit-path" :title="t('tokens.renameHint')" @click="startRename(row.path)">
                 <Icon name="pencil" :size="11" />
               </button>
 
@@ -298,7 +303,7 @@ function runPlan(path: string, plan: Extract<TokenDeletePlan, { status: "ready" 
               <button
                 v-if="renamingPath !== row.path"
                 class="remove"
-                title="删除 Token"
+                :title="t('tokens.delete')"
                 @click="requestDelete(row.path)"
                 @dblclick.stop
               >
@@ -308,15 +313,15 @@ function runPlan(path: string, plan: Extract<TokenDeletePlan, { status: "ready" 
 
             <div v-if="confirmingPath === row.path" class="confirm">
               <span class="confirm-text">{{ confirmText }}</span>
-              <button class="mini danger" @click="confirmDelete(row.path)">删除</button>
-              <button class="mini" @click="confirmingPath = null">取消</button>
+              <button class="mini danger" @click="confirmDelete(row.path)">{{ t("common.delete") }}</button>
+              <button class="mini" @click="confirmingPath = null">{{ t("common.cancel") }}</button>
             </div>
           </template>
         </template>
       </section>
 
-      <p v-if="total === 0" class="empty">还没有 Token</p>
-      <p v-else-if="groups.length === 0" class="empty">无匹配 Token</p>
+      <p v-if="total === 0" class="empty">{{ t("tokens.empty") }}</p>
+      <p v-else-if="groups.length === 0" class="empty">{{ t("tokens.noMatch") }}</p>
     </div>
 
     <footer class="foot">
@@ -325,18 +330,18 @@ function runPlan(path: string, plan: Extract<TokenDeletePlan, { status: "ready" 
         <div class="add-line">
           <input v-model="draft.path" class="path-input mono" placeholder="color/brand" spellcheck="false" autofocus />
           <select v-model="draft.type" class="type">
-            <option value="color">颜色</option>
-            <option value="number">数值</option>
+            <option value="color">{{ t("tokens.typeColor") }}</option>
+            <option value="number">{{ t("tokens.typeNumber") }}</option>
           </select>
         </div>
         <div class="add-line">
           <input v-model="draft.value" class="value-input mono" :placeholder="draft.type === 'color' ? '#3366ff' : '12'" spellcheck="false" />
-          <button type="submit" class="mini primary">添加</button>
-          <button type="button" class="mini" @click="adding = false">取消</button>
+          <button type="submit" class="mini primary">{{ t("common.add") }}</button>
+          <button type="button" class="mini" @click="adding = false">{{ t("common.cancel") }}</button>
         </div>
         <p v-if="addError" class="add-error">{{ addError }}</p>
       </form>
-      <button v-else class="add" @click="startAdd()"><Icon name="plus" :size="12" />新增 Token</button>
+      <button v-else class="add" @click="startAdd()"><Icon name="plus" :size="12" />{{ t("tokens.add") }}</button>
     </footer>
   </div>
 </template>

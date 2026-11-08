@@ -3,6 +3,7 @@
  * 纯函数 + 显式路径，测试只需临时目录，不依赖 Electron。
  */
 import { readFile } from "node:fs/promises";
+import { isLanguagePreference, type LanguagePreference } from "../shared/i18n";
 import { isValidPort } from "./mcp/port";
 import { writeFileAtomic } from "./files";
 
@@ -16,6 +17,7 @@ export interface WindowBounds {
 
 export interface Preferences {
   recentFiles: string[];
+  language?: LanguagePreference;
   window?: WindowBounds;
   mcp?: McpPreferences;
   update?: UpdatePreferences;
@@ -63,13 +65,21 @@ export async function loadPreferences(file: string): Promise<Preferences> {
     const raw = await readFile(file, "utf8");
     const parsed = JSON.parse(raw) as unknown;
     if (!parsed || typeof parsed !== "object") return { ...DEFAULT_PREFERENCES };
-    const record = parsed as { recentFiles?: unknown; window?: unknown; mcp?: unknown; update?: unknown };
+    const record = parsed as {
+      recentFiles?: unknown;
+      language?: unknown;
+      window?: unknown;
+      mcp?: unknown;
+      update?: unknown;
+    };
     const recent = record.recentFiles;
     const recentFiles = Array.isArray(recent) ? recent.filter((item): item is string => typeof item === "string") : [];
+    const language = isLanguagePreference(record.language) ? record.language : undefined;
     const mcp = sanitizeMcp(record.mcp);
     const update = sanitizeUpdate(record.update);
     return {
       recentFiles: recentFiles.slice(0, MAX_RECENT),
+      ...(language ? { language } : {}),
       window: sanitizeWindow(record.window),
       ...(mcp ? { mcp } : {}),
       ...(update ? { update } : {}),

@@ -52,6 +52,16 @@
   color-scheme: light;
 }
 
+/* 界面语言 → CJK 字体栈：日文汉字与中文汉字码位相同，字形由字体决定。
+   en-US 沿用中文回退（英文由 Geist 命中，CJK 只影响偶发的汉字）。 */
+html[lang="ja-JP"] {
+  --font: "Geist Variable", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", "Meiryo", sans-serif;
+}
+
+html[lang="ko-KR"] {
+  --font: "Geist Variable", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif;
+}
+
 html,
 body,
 #app {

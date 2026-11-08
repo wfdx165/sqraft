@@ -5,6 +5,7 @@
  * 不引入解析依赖，退化为用文件名当字族名、字重 400（用户可在导入后改）。
  */
 import type { DocState, NodeId } from "@sqraft/core";
+import { t } from "./i18n";
 
 export interface FontEntry {
   /** 内容哈希，同时是 zip 里的文件名 */
@@ -133,19 +134,19 @@ export async function putFont(
   bytes: Uint8Array,
   fileName: string,
 ): Promise<{ ok: true; record: FontRecord } | { ok: false; reason: string }> {
-  if (bytes.length === 0) return { ok: false, reason: "字体文件是空的" };
-  if (bytes.length > MAX_FONT_BYTES) return { ok: false, reason: "字体超过 5MB 上限" };
+  if (bytes.length === 0) return { ok: false, reason: t("error.emptyFont") };
+  if (bytes.length > MAX_FONT_BYTES) return { ok: false, reason: t("error.fontTooLarge") };
   const total = [...records.values()].reduce((sum, record) => sum + record.bytes.length, 0);
-  if (total + bytes.length > MAX_FONT_TOTAL) return { ok: false, reason: "这个文档的字体总量超过 20MB 上限" };
+  if (total + bytes.length > MAX_FONT_TOTAL) return { ok: false, reason: t("error.fontTotalTooLarge") };
   const mime = sniffFontMime(bytes);
-  if (!mime) return { ok: false, reason: "不支持的字体格式（支持 ttf / otf / woff / woff2）" };
+  if (!mime) return { ok: false, reason: t("error.unsupportedFont") };
 
   const assetId = await fontIdFor(bytes);
   const existing = records.get(assetId);
   if (existing) return { ok: true, record: existing };
 
   const meta = parseFontMeta(bytes) ?? {
-    family: fileName.replace(/\.[^.]+$/, "") || "自定义字体",
+    family: fileName.replace(/\.[^.]+$/, "") || t("font.customFamily"),
     weight: 400,
     style: "normal" as const,
   };

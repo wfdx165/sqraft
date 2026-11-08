@@ -11,6 +11,7 @@ import { ref } from "vue";
 import type { ResolvedImage } from "@sqraft/render";
 import { hooks } from "./store";
 import { decodeImageBytes, decodedSizeOf, MAX_ASSET_SIDE, releaseImage, sniffMime } from "./assets";
+import { t } from "./i18n";
 
 /** 解码缓存上限（按解码后的 RGBA 字节算） */
 const DECODE_BUDGET = 128 * 1024 * 1024;
@@ -102,12 +103,12 @@ async function load(url: string, force = false): Promise<ResolvedImage | null> {
     } catch (error) {
       // 桥断了（preload 未就绪/主进程异常）：别让一个 rejected promise 让状态永远停在 loading
       if (stale()) return null;
-      return markFailed(url, `抓取图片失败：${error instanceof Error ? error.message : String(error)}`);
+      return markFailed(url, t("error.fetchImage", { detail: error instanceof Error ? error.message : String(error) }));
     }
     if (stale()) return null;
     if (!result.ok) return markFailed(url, result.reason);
     const mime = sniffMime(result.bytes);
-    if (!mime) return markFailed(url, "不是可识别的图片格式");
+    if (!mime) return markFailed(url, t("error.unrecognizedImage"));
     // IPC 回来的 Uint8Array 底层可能是 SharedArrayBuffer：Blob 需要一个独立的 ArrayBuffer
     const buffer = new ArrayBuffer(result.bytes.byteLength);
     new Uint8Array(buffer).set(result.bytes);
@@ -122,7 +123,7 @@ async function load(url: string, force = false): Promise<ResolvedImage | null> {
       }
       if (Math.max(image.width, image.height) > MAX_ASSET_SIDE) {
         URL.revokeObjectURL(objectUrl);
-        return markFailed(url, `图片边长超过 ${MAX_ASSET_SIDE}px 上限`);
+        return markFailed(url, t("error.imageSideTooLarge", { px: MAX_ASSET_SIDE }));
       }
       entries.set(url, {
         status: "ready",
@@ -137,7 +138,7 @@ async function load(url: string, force = false): Promise<ResolvedImage | null> {
     } catch {
       URL.revokeObjectURL(objectUrl);
       if (stale()) return null;
-      return markFailed(url, "图片解码失败，文件可能已损坏");
+      return markFailed(url, t("error.imageDecode"));
     }
   })().finally(() => inflight.delete(url));
   inflight.set(url, task);

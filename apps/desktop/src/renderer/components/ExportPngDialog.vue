@@ -4,6 +4,7 @@ import { computed, ref } from "vue";
 import { exportUi, hooks } from "../store";
 import { fileState } from "../file-session";
 import { pngFileName } from "../export-name";
+import { t } from "../i18n";
 
 const busy = ref(false);
 const error = ref("");
@@ -23,7 +24,7 @@ async function run(): Promise<void> {
   try {
     const dataUrl = await hooks.renderExport({ scale: exportUi.scale });
     if (!dataUrl) {
-      error.value = "导出失败：当前没有可导出的内容";
+      error.value = t("export.nothing");
       return;
     }
     const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
@@ -41,14 +42,14 @@ async function run(): Promise<void> {
 
 <template>
   <div class="scrim" @click.self="close">
-    <div class="sheet glass" role="dialog" aria-label="导出 PNG">
+    <div class="sheet glass" role="dialog" :aria-label="t('export.title')">
       <header>
-        <span class="title">导出 PNG</span>
+        <span class="title">{{ t("export.title") }}</span>
         <button class="close" @click="close">✕</button>
       </header>
 
       <div class="row">
-        <span class="label">倍率</span>
+        <span class="label">{{ t("export.scale") }}</span>
         <div class="scales">
           <button
             v-for="scale in [1, 2, 3]"
@@ -62,12 +63,12 @@ async function run(): Promise<void> {
         </div>
       </div>
 
-      <p class="hint">选区导出透明背景；没有选区时导出活动页（带页面背景）。</p>
+      <p class="hint">{{ t("export.hint") }}</p>
       <p v-if="error" class="error">{{ error }}</p>
 
       <footer>
-        <button class="ghost" @click="close">取消</button>
-        <button class="primary" :disabled="busy" @click="run">{{ busy ? "导出中…" : "导出…" }}</button>
+        <button class="ghost" @click="close">{{ t("common.cancel") }}</button>
+        <button class="primary" :disabled="busy" @click="run">{{ busy ? t("export.exporting") : t("export.export") }}</button>
       </footer>
     </div>
   </div>

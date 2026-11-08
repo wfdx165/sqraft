@@ -17,6 +17,7 @@ import {
   validateBinding,
   type ActionGroup,
 } from "../shortcuts";
+import { t } from "../i18n";
 import Icon from "./Icon.vue";
 
 const confirmReset = ref(false);
@@ -97,18 +98,18 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="kb-overlay" @pointerdown.self="close">
-    <div class="kb-dialog glass" role="dialog" aria-label="键盘快捷键" @pointerdown.stop>
+    <div class="kb-dialog glass" role="dialog" :aria-label="t('shortcuts.title')" @pointerdown.stop>
       <header class="head">
         <div class="titles">
-          <span class="title">键盘快捷键</span>
-          <span class="hint">{{ shortcutUi.recording ? "按下新的组合键…" : "点击任意键位即可修改" }}</span>
+          <span class="title">{{ t("shortcuts.title") }}</span>
+          <span class="hint">{{ shortcutUi.recording ? t("shortcuts.recordHint") : t("shortcuts.editHint") }}</span>
         </div>
-        <button class="close" aria-label="关闭" @click="close"><Icon name="close" :size="14" /></button>
+        <button class="close" :aria-label="t('common.close')" @click="close"><Icon name="close" :size="14" /></button>
       </header>
 
       <div class="cols">
         <section v-for="g in groups" :key="g.group" class="group">
-          <span class="micro-label">{{ g.group }}</span>
+          <span class="micro-label">{{ t(`shortcut.group.${g.group}`) }}</span>
           <div
             v-for="a in g.items"
             :key="a.id"
@@ -116,8 +117,8 @@ onBeforeUnmount(() => {
             :class="{ recording: shortcutUi.recording === a.id }"
             @click="startRecord(a.id)"
           >
-            <span class="label">{{ a.label }}</span>
-            <span v-if="shortcutUi.recording === a.id" class="kbd recording-kbd">按下…</span>
+            <span class="label">{{ t(a.labelKey) }}</span>
+            <span v-if="shortcutUi.recording === a.id" class="kbd recording-kbd">{{ t("shortcuts.press") }}</span>
             <span v-else class="kbd" :class="{ custom: !isDefault(a.id) }">{{ keyOf(a.id) }}</span>
           </div>
         </section>
@@ -128,12 +129,12 @@ onBeforeUnmount(() => {
       <footer class="foot">
         <div class="fixed">
           <span v-for="f in FIXED_HINTS" :key="f.keys" class="fixed-item">
-            <span class="kbd ghost">{{ f.keys }}</span>{{ f.label }}
+            <span class="kbd ghost">{{ f.keys }}</span>{{ t(f.labelKey) }}
           </span>
         </div>
         <button class="reset" :class="{ confirm: confirmReset }" :disabled="!changed" @click="onReset">
           <Icon name="undo" :size="12" />
-          {{ confirmReset ? "确认恢复？" : "恢复默认" }}
+          {{ confirmReset ? t("shortcuts.confirmReset") : t("shortcuts.resetDefault") }}
         </button>
       </footer>
     </div>

@@ -8,6 +8,7 @@
  */
 import type { ResolvedImage } from "@sqraft/render";
 import { hooks } from "./store";
+import { t } from "./i18n";
 
 export interface AssetRecord {
   id: string;
@@ -167,12 +168,12 @@ function ensureDecoded(record: AssetRecord): Promise<ResolvedImage> {
 export async function putAsset(
   bytes: Uint8Array,
 ): Promise<{ ok: true; id: string; mime: string; width: number; height: number } | { ok: false; reason: string }> {
-  if (bytes.length === 0) return { ok: false, reason: "文件是空的" };
+  if (bytes.length === 0) return { ok: false, reason: t("error.emptyFile") };
   if (bytes.length > MAX_ASSET_BYTES) {
-    return { ok: false, reason: `图片超过 ${Math.round(MAX_ASSET_BYTES / 1024 / 1024)}MB 上限` };
+    return { ok: false, reason: t("error.imageTooLarge", { mb: Math.round(MAX_ASSET_BYTES / 1024 / 1024) }) };
   }
   const mime = sniffMime(bytes);
-  if (!mime) return { ok: false, reason: "不支持的图片格式（支持 PNG / JPEG / WebP / GIF / SVG）" };
+  if (!mime) return { ok: false, reason: t("error.unsupportedImage") };
 
   const id = await assetIdFor(bytes);
   let record = records.get(id);
@@ -189,11 +190,11 @@ export async function putAsset(
       image = await ensureDecoded(owned);
     } catch {
       if (created) dropRecord(owned);
-      return { ok: false, reason: "图片解码失败，文件可能已损坏" };
+      return { ok: false, reason: t("error.imageDecode") };
     }
     if (Math.max(image.width, image.height) > MAX_ASSET_SIDE) {
       if (created) dropRecord(owned);
-      return { ok: false, reason: `图片边长超过 ${MAX_ASSET_SIDE}px 上限` };
+      return { ok: false, reason: t("error.imageSideTooLarge", { px: MAX_ASSET_SIDE }) };
     }
     failed.delete(id);
     remember(owned, image);

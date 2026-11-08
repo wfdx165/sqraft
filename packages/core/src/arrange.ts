@@ -7,6 +7,7 @@
 import { worldRect, type DocNode, type DocState, type NodeId, type Rect } from "./model";
 import type { Command } from "./store";
 import { resolveNumericLayout } from "./token-resolve";
+import { AppError } from "./errors";
 
 export type ReorderAction = "forward" | "backward" | "front" | "back";
 
@@ -139,7 +140,7 @@ export function expandAlign(doc: DocState, params: AlignParams): Command[] {
 /** 分布：至少 3 个，按包围盒等间距，两端节点不动。 */
 export function expandDistribute(doc: DocState, params: DistributeParams): Command[] {
   const ids = movableIds(doc, params.nodeIds);
-  if (ids.length < 3) throw new Error("分布至少需要 3 个节点");
+  if (ids.length < 3) throw new AppError("core.distribute.needThree");
   assertNoLayoutChildren(doc, ids);
 
   const horizontal = params.axis === "horizontal";
@@ -208,7 +209,7 @@ function assertNoLayoutChildren(doc: DocState, ids: readonly NodeId[]): void {
     const node = doc.nodes[id];
     const parent = node.parentId ? doc.nodes[node.parentId] : null;
     if (parent?.layout && !node.layoutAbsolute) {
-      throw new Error("自动布局子项不能对齐或分布：位置由布局决定");
+      throw new AppError("core.arrange.autoLayout");
     }
   }
 }

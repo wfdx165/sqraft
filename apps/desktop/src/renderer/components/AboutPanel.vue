@@ -2,6 +2,7 @@
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { AppInfo } from "../../shared/ipc";
 import { checkForUpdates, restartToUpdate, updateReady, updateStatusText, updateUi } from "../update";
+import { t } from "../i18n";
 
 const emit = defineEmits<{ close: [] }>();
 const info = ref<AppInfo | null>(null);
@@ -42,23 +43,23 @@ function openLicenses(): void {
   <div class="overlay" @click.self="$emit('close')">
     <div class="panel glass">
       <header>
-        <h2>关于 Sqraft</h2>
-        <button class="icon" title="关闭" @click="$emit('close')">✕</button>
+        <h2>{{ t("about.title") }}</h2>
+        <button class="icon" :title="t('common.close')" @click="$emit('close')">✕</button>
       </header>
 
       <div class="brand">
         <span class="mark">S</span>
         <div>
           <p class="name">Sqraft</p>
-          <p class="version">版本 {{ info?.version ?? "—" }}</p>
+          <p class="version">{{ t("about.version", { version: info?.version ?? "—" }) }}</p>
         </div>
       </div>
 
       <section>
         <div class="label">
-          <span>版本更新</span>
+          <span>{{ t("about.updates") }}</span>
           <button class="copy" :disabled="busy" @click="onUpdateAction">
-            {{ updateReady ? "重启更新" : busy ? "检查中…" : "检查更新" }}
+            {{ updateReady ? t("about.restart") : busy ? t("about.checking") : t("about.check") }}
           </button>
         </div>
         <p class="foot">{{ updateStatusText() }}</p>
@@ -67,21 +68,21 @@ function openLicenses(): void {
 
       <section>
         <div class="label">
-          <span>数据目录</span>
-          <button class="copy" @click="copyPath">{{ copied ? "已复制" : "复制路径" }}</button>
+          <span>{{ t("about.dataDir") }}</span>
+          <button class="copy" @click="copyPath">{{ copied ? t("common.copied") : t("about.copyPath") }}</button>
         </div>
         <p class="path">{{ info?.dataPath ?? "—" }}</p>
       </section>
 
       <section>
         <div class="label">
-          <span>开源许可</span>
-          <button class="copy" @click="openLicenses">打开许可证目录</button>
+          <span>{{ t("about.licenses") }}</span>
+          <button class="copy" @click="openLicenses">{{ t("about.openLicenses") }}</button>
         </div>
-        <p class="foot">运行时与第三方组件的许可文本随应用一起分发，点右侧按钮可打开所在目录。</p>
+        <p class="foot">{{ t("about.licensesFoot") }}</p>
       </section>
 
-      <p class="foot">纯本地应用：设计稿以 .sqraft 文件保存在磁盘上，文档不会离开这台机器。</p>
+      <p class="foot">{{ t("about.foot") }}</p>
     </div>
   </div>
 </template>

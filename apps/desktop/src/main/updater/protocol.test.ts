@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { appBundlePathOf, buildInstallScript, installPathsOf, type ScriptOptions } from "./install";
-import { compareVersions, isTrustedUpdateUrl, parseLatest } from "./protocol";
+import { compareVersions, isTrustedUpdateUrl, parseLatest, UpdateManifestError } from "./protocol";
 
 const sha = "a".repeat(64);
 const asset = (overrides: Record<string, unknown> = {}) => ({
@@ -8,6 +8,16 @@ const asset = (overrides: Record<string, unknown> = {}) => ({
   sha256: sha,
   ...overrides,
 });
+
+function errorKey(fn: () => unknown): string {
+  try {
+    fn();
+  } catch (error) {
+    expect(error).toBeInstanceOf(UpdateManifestError);
+    return (error as UpdateManifestError).key;
+  }
+  throw new Error("expected parseLatest to throw");
+}
 
 describe("版本比较", () => {
   it("按段比较，不被字符串顺序骗", () => {
@@ -51,20 +61,28 @@ describe("latest.json 校验", () => {
   });
 
   it("版本号不合法直接拒绝", () => {
-    expect(() => parseLatest({ version: "latest", assets: { "mac-arm64": asset() } })).toThrow(/版本号/);
+    expect(errorKey(() => parseLatest({ version: "latest", assets: { "mac-arm64": asset() } }))).toBe(
+      "update.manifestVersion",
+    );
   });
 
   it("缺 mac-arm64 或 sha256 不对都拒绝", () => {
-    expect(() => parseLatest({ version: "0.1.0", assets: {} })).toThrow(/mac-arm64/);
-    expect(() =>
-      parseLatest({ version: "0.1.0", assets: { "mac-arm64": asset({ sha256: "zz" }) } }),
-    ).toThrow(/mac-arm64/);
+    expect(errorKey(() => parseLatest({ version: "0.1.0", assets: {} }))).toBe("update.manifestAsset");
+    expect(
+      errorKey(() => parseLatest({ version: "0.1.0", assets: { "mac-arm64": asset({ sha256: "zz" }) } })),
+    ).toBe("update.manifestAsset");
   });
 
   it("非白名单地址的资产不算数", () => {
-    expect(() =>
-      parseLatest({ version: "0.1.0", assets: { "mac-arm64": asset({ url: "https://evil.example.com/a.zip" }) } }),
-    ).toThrow(/mac-arm64/);
+    expect(
+      errorKey(() =>
+        parseLatest({ version: "0.1.0", assets: { "mac-arm64": asset({ url: "https://evil.example.com/a.zip" }) } }),
+      ),
+    ).toBe("update.manifestAsset");
+  });
+
+  it("非对象清单给出明确错误码", () => {
+    expect(errorKey(() => parseLatest(null))).toBe("update.manifestNotObject");
   });
 });
 

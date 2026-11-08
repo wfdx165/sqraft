@@ -21,6 +21,10 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 - 快速出包（只出 `.app`、不建 dmg，约 4s）：`pnpm dist:dir` —— 验证"打包后能不能跑 / MCP 通不通"用它
 - 成品防护验收：`pnpm --filter @sqraft/desktop run verify:pack [Sqraft.app 路径]` —— 断言 asar 里只有 `out/**` 与 `package.json`、没有源码 / map / `node_modules`、渲染层已压缩、fuse 已翻转（ADR-0030）；`pnpm release` 会自动跑，新出包后想单独确认也可以手跑
 - 发版：`pnpm release`（draft；出包前要求工作区干净 + `pnpm test` 通过）/ `pnpm publish:release`（翻正式）/ `pnpm publish:readme`（同步下载页）；版本号手动改 `apps/desktop/package.json`（唯一真源，脚本只读、不接受版本参数），日常只升 patch，完整流程见 `docs/releasing.md`
+- 界面文案：一律走 `t()`（渲染层 `renderer/i18n.ts`、主进程 `main/i18n.ts`）；新键同时补 `src/shared/i18n/` 下的 `zh-CN.ts`、`en-US.ts`、`ja-JP.ts`、`ko-KR.ts`（四份类型强制对齐），模板里写死中文会被 `i18n.test.ts` 拦下
+- 界面语言：`auto` / `zh-CN` / `en-US` / `ja-JP` / `ko-KR`；`auto` 按系统 `zh*` / `ja*` / `ko*` 匹配，其余回退英文。字体栈与日文禁则的约定见 ADR-0031 与 `GLOSSARY.md`；已有文档的 `fontFamily` 不改
+- MCP 面向 agent 的错误固定英文（`shared/agent-text.ts` + `agentErrorText()`），不要放进 UI 字典；只有端口/监听这类进设置面板的错误才走 `t()`
+- 菜单：MCP 入口在 macOS 应用菜单「设置…」旁边，非 mac 放进「文件」菜单；帮助菜单不再放 MCP
 - 单个测试：`pnpm --filter @sqraft/core exec vitest run -t "关键词"`
 - 没有 lint/format 配置（未装 ESLint/Prettier）。类型检查就是质量门槛，不要擅自引入
 
@@ -86,6 +90,7 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 - 成品 `app.asar` 里只允许出现 `out/**` 与 `package.json`：`minify` 被关掉、或 `files` 里漏了 `!out/**/*.map`，都会以"包里又有了可读源码"的形式复发。改构建配置后跑一次 `pnpm --filter @sqraft/desktop run verify:pack`
 - 版本号唯一真源是 `apps/desktop/package.json`；根 `package.json` 故意不带 `version`。`pnpm release` 只读版本、不接受 `--bump` / `--version`，出包前还要求工作区干净 + 测试通过（ADR-0029 / ADR-0030）
 - 发版前必须在私有仓打并推送 `vX` tag：`pnpm release` 会校验 tag 指向 HEAD 且已推送，不会自动打 tag；发行仓的同名 tag 由 `gh release create` 另建
+- 界面语言的初始值由 `main.ts` 在挂载前从 `app.info()` 取（主进程解析 `auto`）；不要在渲染层用 `navigator.language` 自己判断，否则菜单与页面会不一致
 - `@electron/fuses` 开了 `strictlyRequireAllFuses`：Electron 升级新增 fuse 时构建会失败（Electron 45 已有 9 个），升级时要先读新版 fuse 列表再补配置，不要把它关掉
 - 打包版用不了 `--inspect`、`ELECTRON_RUN_AS_NODE`、`NODE_OPTIONS`：fuse 已关（ADR-0030）。排障只能靠日志（`~/Library/Logs/Sqraft/`）与渲染层上报
 - 打包版与 `/Applications` 里的已装版本共用同一个 `userData` 单实例锁，且 `main/index.ts` 会 `app.setPath("userData", …)` 覆盖 `--user-data-dir`：用户开着 Sqraft 时，另起一个 `.app` 会拿不到锁、立刻 `exit 0`。这不是 fuse 或签名坏了，别误判

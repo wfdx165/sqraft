@@ -3,6 +3,7 @@ import { computed, onBeforeUnmount, ref } from "vue";
 import { isCrossPage } from "../canvas/agent-activity";
 import { visibleClients } from "../connection-status";
 import { mcpUi, refreshMcpStatus } from "../mcp-host";
+import { t } from "../i18n";
 import { hooks, ui } from "../store";
 
 const open = ref(false);
@@ -20,13 +21,15 @@ const visible = computed(() => visibleClients(mcpUi.clients));
 const summary = computed(() => {
   const activity = mcpUi.activity;
   if (activity?.running) return `${activity.label} · ${activity.tool}`;
-  if (mcpUi.busy) return "agent 正在读取…";
+  if (mcpUi.busy) return t("conn.busyRead");
   if (activity) {
-    if (!activity.pageId) return `${activity.label} 刚改了文档`;
+    if (!activity.pageId) return t("conn.changed", { label: activity.label });
     const crossPage = isCrossPage(activity.pageId, ui.activePageId, ui.mode === "edit");
-    return crossPage ? `${activity.label} 刚改了${activity.pageName ?? "另一页"}` : `${activity.label} 刚改了此页`;
+    return crossPage
+      ? t("conn.changedOtherPage", { label: activity.label, page: activity.pageName ?? t("conn.otherPage") })
+      : t("conn.changedThisPage", { label: activity.label });
   }
-  return `已连接 ${count.value} 个 agent`;
+  return t("conn.connectedCount", { count: count.value });
 });
 
 /** 改动看不见时给一个跳转入口：跨页报页面名，同页视口外只说"在视口外" */
@@ -34,7 +37,9 @@ const jumpLabel = computed(() => {
   const activity = mcpUi.activity;
   if (!activity?.offscreen) return "";
   const crossPage = isCrossPage(activity.pageId, ui.activePageId, ui.mode === "edit");
-  return crossPage ? `${activity.pageName ?? "另一页"} →` : "改动在视口外 →";
+  return crossPage
+    ? t("conn.pageJump", { page: activity.pageName ?? t("conn.otherPage") })
+    : t("conn.offscreen");
 });
 
 function reveal(): void {
@@ -45,16 +50,18 @@ function reveal(): void {
 /** 连接时长：只在浮层打开时刷新，避免常驻定时器 */
 function durationOf(connectedAt: number): string {
   const seconds = Math.max(0, Math.round((now.value - connectedAt) / 1000));
-  if (seconds < 60) return `${seconds} 秒`;
+  if (seconds < 60) return t("conn.seconds", { n: seconds });
   const minutes = Math.round(seconds / 60);
-  if (minutes < 60) return `${minutes} 分钟`;
-  return `${Math.round(minutes / 60)} 小时`;
+  if (minutes < 60) return t("conn.minutes", { n: minutes });
+  return t("conn.hours", { n: Math.round(minutes / 60) });
 }
 
 function toolLabel(client: { lastTool?: string; lastToolAt?: number }): string {
-  if (!client.lastTool) return "尚未调用工具";
+  if (!client.lastTool) return t("conn.noTool");
   const seconds = Math.max(0, Math.round((now.value - (client.lastToolAt ?? now.value)) / 1000));
-  return `${client.lastTool} · ${seconds < 60 ? `${seconds} 秒前` : `${Math.round(seconds / 60)} 分钟前`}`;
+  return `${client.lastTool} · ${
+    seconds < 60 ? t("conn.secondsAgo", { n: seconds }) : t("conn.minutesAgo", { n: Math.round(seconds / 60) })
+  }`;
 }
 
 function toggle(): void {
@@ -83,7 +90,7 @@ onBeforeUnmount(() => {
       <button class="conn-status glass" :class="{ open }" role="status" @click="toggle">
         <span class="dot" :class="{ busy: mcpUi.busy }" />
         <span class="text">{{ summary }}</span>
-        <span class="hint">{{ open ? "收起" : "详情" }}</span>
+        <span class="hint">{{ open ? t("conn.collapse") : t("conn.details") }}</span>
       </button>
       <button v-if="jumpLabel" class="conn-jump glass" :title="jumpLabel" @click="reveal">
         {{ jumpLabel }}
@@ -93,10 +100,10 @@ onBeforeUnmount(() => {
     <div v-if="open" class="conn-list glass">
       <div v-for="client in visible.rows" :key="client.id" class="conn-row">
         <span class="conn-label">{{ client.label }}</span>
-        <span class="conn-meta">已连接 {{ durationOf(client.connectedAt) }}</span>
+        <span class="conn-meta">{{ t("conn.connectedFor", { duration: durationOf(client.connectedAt) }) }}</span>
         <span class="conn-tool">{{ toolLabel(client) }}</span>
       </div>
-      <div v-if="visible.more > 0" class="conn-more">还有 {{ visible.more }} 个</div>
+      <div v-if="visible.more > 0" class="conn-more">{{ t("conn.more", { count: visible.more }) }}</div>
     </div>
   </div>
 </template>

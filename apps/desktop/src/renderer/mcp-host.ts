@@ -23,6 +23,9 @@ import { appInfo } from "./app-meta";
 import { textSizeOf } from "./text-metrics";
 import { putAsset } from "./assets";
 import { putFont } from "./fonts";
+import { t } from "./i18n";
+import { agentErrorText } from "./errors";
+import { AGENT_TEXT } from "../shared/agent-text";
 
 /** 一次写工具调用在界面上留下的痕迹（纯 UI；结束 5 秒后清空） */
 export interface McpActivity {
@@ -248,6 +251,8 @@ export function installMcpHost(): void {
     },
     // 选区是画布 UI 状态：只读给 agent 看，改还是走显式 nodeId
     () => [...ui.selection],
+    // agent 建的页面/组件默认名也跟随界面语言
+    (kind) => t(kind === "page" ? "node.page" : "node.component"),
   );
 
   const offCall = bridge.mcp.onCall(async ({ id, name, args, clientLabel }) => {
@@ -258,7 +263,7 @@ export function installMcpHost(): void {
     try {
       // 一次只允许一个调用在飞：DocStore 只有一个事务槽，重入会把两个调用并成一条撤销记录
       if (mcpUi.busy) {
-        bridge.mcp.respond({ id, ok: false, error: "上一个工具调用仍在执行，请稍后重试" });
+        bridge.mcp.respond({ id, ok: false, error: AGENT_TEXT.busy });
         return;
       }
       mcpUi.busy = true;
@@ -272,7 +277,7 @@ export function installMcpHost(): void {
         ok = true;
         bridge.mcp.respond({ id, ok: true, value });
       } catch (error) {
-        bridge.mcp.respond({ id, ok: false, error: error instanceof Error ? error.message : String(error) });
+        bridge.mcp.respond({ id, ok: false, error: agentErrorText(error) });
       } finally {
         mcpUi.busy = false;
         if (mutates) finishAgentCall(ok);

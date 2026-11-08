@@ -360,3 +360,4 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 - **打包**：electron-builder，`appId com.yjsoft.sqraft`；asar 打包，没有需要放到 asar 外的可执行文件；只构建 macOS arm64 的 dmg + zip（zip 供自动更新），Windows/Linux 的打包配置已移除。
 - **构建期防护**（ADR-0030）：三个入口都 esbuild 压缩、不生成 sourcemap；`dependencies` 必须为空（渲染层与主进程的依赖全在构建期 bundle 进去，成品不含 `node_modules`）；`afterPack` 翻转 Electron fuse（禁 `RunAsNode` / `NODE_OPTIONS` / 调试参数，只允许从 asar 加载）。`scripts/verify-pack.mjs` 在发版链路里断言以上全部成立，不成立就中止。`.sqraft` 仍是明文 zip。
 - **版本与标识**：版本号唯一真源是 `apps/desktop/package.json`（手动修改；`pnpm release` 只读、不接受版本参数）；发版前在私有仓打并推送 `vX` tag，`latest.json` 记录 commit；`appId` 沿用 `com.yjsoft.sqraft`——0.0.2 起已对外使用，改名会让已装用户被 macOS 当成另一个应用，因此保持不变。
+- **界面语言**（ADR-0031）：`zh-CN` / `en-US` / `ja-JP` / `ko-KR`，`auto` 跟随系统（`zh*` / `ja*` / `ko*`，其余英文）+ 设置面板手动覆盖；主进程与渲染层共用 `src/shared/i18n` 的类型化字典，界面文案一律走 `t()`；界面与新建文本按语言切换 CJK 字体栈，日文换行带轻量禁则；日志、MCP 工具描述、README/docs 与更新说明不在本地化范围。核心对用户可触发的错误抛 `AppError`，界面按 code 翻译。
