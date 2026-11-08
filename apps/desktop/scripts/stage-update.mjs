@@ -6,7 +6,7 @@
  * 退出替换、备份、启动标记、超时回滚——不依赖网络，用这个脚本就能跑。
  *
  * 用法（仓库根）：
- *   pnpm stage:update                 # 用 release/ 里与 package.json 同版本的 zip
+ *   pnpm stage:update                 # 用 release/ 里与 apps/desktop/package.json 同版本的 zip
  *   pnpm stage:update --zip path.zip  # 指定包
  *   pnpm stage:update --force         # 应用还开着也继续（不推荐）
  *
@@ -17,6 +17,8 @@ import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, writeFi
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { pickArm64Zip } from "./release-utils.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../..");
@@ -52,14 +54,12 @@ if (appRunning() && !force) {
   fail("Sqraft 正在运行。先退出应用再演练（它在内存里持有偏好，退出时会覆盖磁盘）");
 }
 
-const version = JSON.parse(readFileSync(join(repoRoot, "package.json"), "utf8")).version;
-const desktopVersion = JSON.parse(readFileSync(join(desktopRoot, "package.json"), "utf8")).version;
-if (desktopVersion !== version) fail(`版本不一致：根 ${version} / desktop ${desktopVersion}`);
+const version = JSON.parse(readFileSync(join(desktopRoot, "package.json"), "utf8")).version;
 
 let zipPath = zipArg ? resolve(repoRoot, zipArg) : null;
 if (!zipPath) {
-  const candidate = readdirSync(releaseDir).find((name) => name.endsWith(`-${version}-arm64.zip`));
-  if (!candidate) fail(`release/ 里找不到 ${version} 的 arm64 zip，先跑 pnpm dist:mac`);
+  const candidate = pickArm64Zip(readdirSync(releaseDir), version);
+  if (!candidate) fail(`release/ 里找不到 ${version} 的 arm64 zip，先跑 pnpm dist`);
   zipPath = join(releaseDir, candidate);
 }
 if (!existsSync(zipPath)) fail(`找不到 ${zipPath}`);

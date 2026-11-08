@@ -5,7 +5,7 @@ directories:
   buildResources: build
 files:
   - out/**/*
-  # hidden sourcemap 只归档到 release/sourcemaps/，成品里不能有 map（ADR-0030）
+  # sourcemap 已关闭（ADR-0030）；保留排除，防止将来误开时把 map 带进 asar
   - "!out/**/*.map"
   - package.json
 asar: true

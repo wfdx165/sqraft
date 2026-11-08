@@ -1,15 +1,21 @@
 /**
- * 发版：升版本 → 构建 → 上传 draft → 发布。
+ * 发版：构建 → 上传 draft → 发布。
+ *
+ * 版本号完全手动：唯一真源是 apps/desktop/package.json，本脚本只读不写，
+ * 也不接受任何版本参数——避免"参数写一个版本、包里是另一个"。
+ * 发版前手动完成：改 apps/desktop/package.json 的 version → 写
+ * docs/releases/vX.Y.Z.md → 提交并推送 → 打并推送源码 tag `vX`
+ * （发行仓的同名 tag 由 `gh release create` 另建）。
  *
  * 用法（仓库根执行）：
- *   pnpm release --bump [patch|minor|major]   # 升版本（默认 patch）+ 生成说明模板，不构建
- *   pnpm release --version 0.0.2              # 显式指定版本（首个公开版用一次）
- *   pnpm release                              # 构建并创建 draft release
+ *   pnpm release                              # 测试 → 构建 → 创建 draft release
  *   pnpm release --publish                    # 构建并直接发布（跳过 draft）
- *   pnpm release --skip-build                 # 复用 release/ 里已有产物
+ *   pnpm release --skip-build                 # 复用 release/ 里已有产物（跳过测试）
  *   pnpm release --preflight                  # 只跑检查，不构建
  *   pnpm publish:release                      # 把现有 draft 翻成正式发布，不重建
  *
+ * 发布门槛：工作区必须干净、pnpm test 必须通过；任一不满足即中止。
+ * 源码追溯：发版前在私有仓打 tag `vX` 并推送；预检要求 tag 指向 HEAD 且 HEAD 已推送到 origin。
  * 版本策略：0.0.1 是内部开发版；0.0.2 是首个公开版；之后每次发版 patch。
  * 仅支持 macOS arm64；仓库地址来自 apps/desktop/update.config.json（客户端读同一份）。
  */
@@ -19,6 +25,8 @@ import { createReadStream, existsSync, readFileSync, readdirSync, statSync, writ
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { compareVersions, pickArm64Dmg, pickArm64Zip } from "./release-utils.mjs";
+
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../..");
 const desktopRoot = join(repoRoot, "apps/desktop");
@@ -26,23 +34,17 @@ const releaseDir = join(desktopRoot, "release");
 
 const args = process.argv.slice(2);
 const has = (name) => args.includes(name);
-const valueOf = (name) => {
-  const index = args.indexOf(name);
-  if (index === -1) return null;
-  const value = args[index + 1];
-  return value && !value.startsWith("-") ? value : "";
-};
 
 const HELP = `用法：
-  pnpm release --bump [patch|minor|major]   升版本（默认 patch）+ 生成说明模板，不构建
-  pnpm release --version <x.y.z>            显式指定版本（首个公开版用一次）
   pnpm release                              构建并创建 draft release
   pnpm release --publish                    构建并直接发布
-  pnpm release --skip-build                 复用 release/ 里已有产物
+  pnpm release --skip-build                 复用 release/ 里已有产物（跳过测试）
   pnpm release --preflight                  只跑检查
   pnpm publish:release                      把现有 draft 翻成正式发布（不重建）
   pnpm publish:readme                       同步 README 与截图到发行仓库
 
+版本号：手动改 apps/desktop/package.json；release 不接受版本参数。
+发布门槛：工作区干净 + HEAD 已推送 + 源码 tag 已推送 + pnpm test 通过。
 版本策略：0.0.1 内部开发版；0.0.2 首个公开版；之后每次 patch。`;
 
 if (has("--help") || has("-h")) {
@@ -50,34 +52,34 @@ if (has("--help") || has("-h")) {
   process.exit(0);
 }
 
-const bumpIndex = args.indexOf("--bump");
-const bumpKind = bumpIndex === -1 ? null : (valueOf("--bump") || "patch");
-const explicitVersion = valueOf("--version");
-if (args.includes("--version") && !explicitVersion) fail("--version 需要值，例如 --version 0.0.2");
-const bumpMode = bumpKind !== null || explicitVersion !== null;
-const preflightOnly = has("--preflight");
-const publish = has("--publish");
-const publishDraft = has("--publish-draft");
-const skipBuild = has("--skip-build");
-
 function fail(message) {
   console.error(`release: ${message}`);
   process.exit(1);
 }
 
-if (publish && publishDraft) fail("--publish 与 --publish-draft 不能同时用");
-if (bumpMode && (publish || publishDraft || skipBuild || preflightOnly)) {
-  fail("--bump / --version 只负责改版本，不能和构建/发布参数混用");
-}
-if (bumpKind !== null && !["patch", "minor", "major"].includes(bumpKind)) {
-  fail(`--bump 只接受 patch / minor / major，收到 ${bumpKind}`);
+for (const flag of ["--bump", "--version"]) {
+  if (has(flag)) fail(`${flag} 已移除：版本号请直接改 apps/desktop/package.json`);
 }
 
-const rootPkgPath = join(repoRoot, "package.json");
+const KNOWN_FLAGS = new Set(["--publish", "--publish-draft", "--skip-build", "--preflight", "--help", "-h"]);
+const unknownFlags = args.filter((arg) => !KNOWN_FLAGS.has(arg));
+if (unknownFlags.length > 0) {
+  fail(`未知参数：${unknownFlags.join(" ")}（版本号请直接改 apps/desktop/package.json）`);
+}
+
+const preflightOnly = has("--preflight");
+const publish = has("--publish");
+const publishDraft = has("--publish-draft");
+const skipBuild = has("--skip-build");
+
+if (publish && publishDraft) fail("--publish 与 --publish-draft 不能同时用");
+
 const desktopPkgPath = join(desktopRoot, "package.json");
-const rootPkg = JSON.parse(readFileSync(rootPkgPath, "utf8"));
 const desktopPkg = JSON.parse(readFileSync(desktopPkgPath, "utf8"));
-const version = rootPkg.version;
+const version = desktopPkg.version;
+if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) {
+  fail(`apps/desktop/package.json 的 version 不合法：${String(version)}（必须是 x.y.z）`);
+}
 const repo = JSON.parse(readFileSync(join(desktopRoot, "update.config.json"), "utf8")).repo;
 
 if (!/^[^/\s]+\/[^/\s]+$/.test(repo)) fail(`update.config.json 的 repo 不合法：${repo}`);
@@ -95,36 +97,80 @@ function gh(commandArgs, options = {}) {
   return spawnSync("gh", commandArgs, { cwd: repoRoot, encoding: "utf8", ...options });
 }
 
-function compareVersions(a, b) {
-  const parse = (value) => value.trim().replace(/^v/i, "").split(".").map((part) => Number.parseInt(part, 10) || 0);
-  const left = parse(a);
-  const right = parse(b);
-  for (let index = 0; index < 3; index += 1) {
-    const diff = (left[index] ?? 0) - (right[index] ?? 0);
-    if (diff !== 0) return diff > 0 ? 1 : -1;
-  }
-  return 0;
-}
-
-function bump(current, kind) {
-  const parts = current.split(".").map((part) => Number.parseInt(part, 10) || 0);
-  if (kind === "major") return `${parts[0] + 1}.0.0`;
-  if (kind === "minor") return `${parts[0]}.${parts[1] + 1}.0`;
-  return `${parts[0]}.${parts[1]}.${parts[2] + 1}`;
+function git(commandArgs) {
+  return spawnSync("git", commandArgs, { cwd: repoRoot, encoding: "utf8" });
 }
 
 /* ---------- 预检 ---------- */
 
 /**
  * `strict` = 发布前检查：任何一项不满足都中止。
- * 升版本时用 soft：没装 gh 也能改版本，只是给出提醒。
  * `tagCheck`：absent = 发布前不能已有 tag；exists = 发布 draft 前必须已有；skip = 不检查。
+ * `requireClean`：出包/预检要求工作区干净（draft 翻正式不重新构建，不要求）。
  */
-function preflight({ strict, tagCheck }) {
+function preflight({ strict, tagCheck, requireClean = false }) {
   const problems = [];
   const notes = [];
-  if (rootPkg.version !== desktopPkg.version) {
-    problems.push(`版本不一致：根 ${rootPkg.version} / desktop ${desktopPkg.version}`);
+  if (requireClean) {
+    const status = git(["status", "--porcelain"]);
+    if (status.status !== 0) {
+      problems.push("git status 失败，无法确认工作区是否干净");
+    } else if (status.stdout.trim()) {
+      problems.push(`工作区不干净，先提交或清理：\n${status.stdout.trim()}`);
+    }
+
+    // 源码追溯：HEAD 必须已推送到 origin，源码 tag 必须存在、指向 HEAD 且已推送
+    const head = git(["rev-parse", "HEAD"]);
+    const headSha = head.status === 0 ? head.stdout.trim() : "";
+    const baseRef = git(["symbolic-ref", "--short", "refs/remotes/origin/HEAD"]);
+    const branch = baseRef.status === 0 ? baseRef.stdout.trim().replace(/^origin\//, "") : "main";
+    const remote = git(["ls-remote", "--heads", "origin", branch]);
+    const remoteSha = remote.status === 0 ? (remote.stdout.trim().split(/\s+/)[0] ?? "") : "";
+
+    if (!headSha || !remoteSha) {
+      problems.push("无法确认 HEAD 与 origin 的同步状态（检查 origin 是否可访问）");
+    } else if (headSha !== remoteSha) {
+      problems.push(
+        `HEAD ${headSha.slice(0, 7)} 尚未推送到 origin/${branch}（远端 ${remoteSha.slice(0, 7)}）；先 git push`,
+      );
+    }
+
+    const localTag = git(["rev-parse", "-q", "--verify", `refs/tags/${tag}^{commit}`]);
+    const tagSha = localTag.status === 0 ? localTag.stdout.trim() : "";
+    if (!tagSha) {
+      problems.push(
+        `缺少源码 tag ${tag}；先执行 git tag -a ${tag} -m "Sqraft ${version}" 并 git push origin ${tag}`,
+      );
+    } else if (headSha && tagSha !== headSha) {
+      problems.push(
+        `源码 tag ${tag} 不指向当前 HEAD（${tagSha.slice(0, 7)} ≠ ${headSha.slice(0, 7)}）；先修正 tag`,
+      );
+    }
+
+    // annotated tag 用 ^{} 取 commit；轻量 tag 没有 peeled 行，退回普通引用
+    const peeled = git(["ls-remote", "--tags", "origin", `refs/tags/${tag}^{}`]);
+    const plain = git(["ls-remote", "--tags", "origin", `refs/tags/${tag}`]);
+    const remoteTagSha = peeled.status === 0 && peeled.stdout.trim()
+      ? peeled.stdout.trim().split(/\s+/)[0]
+      : plain.status === 0
+        ? (plain.stdout.trim().split(/\s+/)[0] ?? "")
+        : "";
+    if (!remoteTagSha) {
+      problems.push(`源码 tag ${tag} 未推送到 origin；执行 git push origin ${tag}`);
+    } else if (headSha && remoteTagSha !== headSha) {
+      problems.push(
+        `远端源码 tag ${tag} 不指向当前 HEAD（${remoteTagSha.slice(0, 7)} ≠ ${headSha.slice(0, 7)}）；先修正并强制推送 tag`,
+      );
+    }
+
+    // 版本只能往前走：手改成更小的号会让下载页回退
+    const latest = gh(["api", `repos/${repo}/releases/latest`, "--jq", ".tag_name"]);
+    if (latest.status === 0) {
+      const latestVersion = latest.stdout.trim().replace(/^v/, "");
+      if (latestVersion && compareVersions(version, latestVersion) <= 0) {
+        problems.push(`版本 ${version} 必须大于最新已发布版本 ${latestVersion}；否则下载页会指向旧版本`);
+      }
+    }
   }
 
   // 运行时不需要任何 node_modules；有运行时依赖就会被整棵复制进 asar（ADR-0030）
@@ -162,7 +208,7 @@ function preflight({ strict, tagCheck }) {
       const release = gh(["release", "view", tag, "--repo", repo]);
       const exists = release.status === 0;
       if (tagCheck === "absent" && exists) {
-        problems.push(`release ${tag} 已存在；先升版本，或删掉旧 release 与 tag`);
+        problems.push(`release ${tag} 已存在；先改 apps/desktop/package.json 的 version，或删掉旧 release 与 tag`);
       }
       if (tagCheck === "exists" && !exists) {
         problems.push(`找不到 release ${tag}，先跑 pnpm release 生成 draft`);
@@ -180,68 +226,14 @@ function preflight({ strict, tagCheck }) {
   return { problems };
 }
 
-/* ---------- 改版本 ---------- */
-
-/** 只替换第一个 version 字段，避免整份 JSON 重写把无关格式改动混进来。 */
-function rewriteVersion(source, next, label) {
-  const pattern = /("version"\s*:\s*")[^"]*(")/;
-  if (!pattern.test(source)) fail(`${label} 里找不到 version 字段`);
-  const updated = source.replace(pattern, `$1${next}$2`);
-  const before = JSON.parse(source);
-  const after = JSON.parse(updated);
-  const normalized = { ...after, version: before.version };
-  if (JSON.stringify(normalized) !== JSON.stringify(before)) {
-    fail(`${label} 的 version 替换影响了其它字段，已中止`);
-  }
-  return updated;
-}
-
-function bumpFiles(next) {
-  const files = [
-    { path: rootPkgPath, label: "package.json" },
-    { path: desktopPkgPath, label: "apps/desktop/package.json" },
-  ];
-  // 先在内存里把两份都算好并校验，任何一份不合格都不会留下半截状态
-  const planned = files.map((file) => {
-    const source = readFileSync(file.path, "utf8");
-    return { ...file, source, updated: rewriteVersion(source, next, file.label) };
-  });
-  const written = [];
-  try {
-    for (const file of planned) {
-      writeFileSync(file.path, file.updated, "utf8");
-      written.push(file);
-    }
-  } catch (error) {
-    // 写第二份失败时把第一份恢复，避免两处版本不一致
-    for (const file of written) writeFileSync(file.path, file.source, "utf8");
-    throw error;
-  }
-}
-
-function writeNotesTemplate(next) {
-  const target = join(repoRoot, "docs/releases", `v${next}.md`);
-  if (existsSync(target)) return target;
-  const body = `## ${next}
-
-- 
-
-## 已知限制
-
-- 仅提供 macOS Apple Silicon（arm64）安装包
-- 未签名、未公证，首次打开需要在应用上右键 → 打开
-`;
-  writeFileSync(target, body, "utf8");
-  return target;
-}
-
 /* ---------- 构建与上传 ---------- */
 
 function buildArtifacts() {
   if (skipBuild) {
-    console.log("release: --skip-build，复用 release/ 里已有产物");
+    console.log("release: --skip-build，复用 release/ 里已有产物（跳过测试）");
   } else {
-    run("pnpm", ["--filter", "@sqraft/desktop", "run", "dist:mac"], {
+    run("pnpm", ["test"]);
+    run("pnpm", ["--filter", "@sqraft/desktop", "run", "dist"], {
       env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: "false" },
     });
   }
@@ -250,9 +242,8 @@ function buildArtifacts() {
   run("node", ["scripts/verify-pack.mjs"], { cwd: desktopRoot });
 
   const files = readdirSync(releaseDir);
-  const find = (suffixes) => files.find((name) => suffixes.some((suffix) => name.endsWith(suffix)));
-  const dmg = find([`-${version}-arm64.dmg`]);
-  const zip = find([`-${version}-arm64.zip`, `-${version}-arm64-mac.zip`]);
+  const dmg = pickArm64Dmg(files, version);
+  const zip = pickArm64Zip(files, version);
   if (!dmg) fail(`release/ 里找不到 ${version} 的 arm64 dmg`);
   if (!zip) fail(`release/ 里找不到 ${version} 的 arm64 zip（自动更新只认 zip）`);
   for (const name of [dmg, zip]) {
@@ -272,11 +263,15 @@ function sha256(path) {
 }
 
 async function writeManifest({ dmg, zip }) {
+  const head = git(["rev-parse", "HEAD"]);
+  if (head.status !== 0) fail("读不到当前 commit，无法写入 latest.json");
+  const commit = head.stdout.trim();
   const notes = existsSync(notesPath) ? readFileSync(notesPath, "utf8") : "";
   if (!notes.trim()) console.warn(`release: 没有 ${notesPath}，这次发布不带更新说明`);
   const assetUrl = (name) => `https://github.com/${repo}/releases/download/${tag}/${encodeURIComponent(name)}`;
   const manifest = {
     version,
+    commit,
     publishedAt: new Date().toISOString(),
     notes,
     assets: {
@@ -321,26 +316,8 @@ async function waitForLatest() {
 
 /* ---------- 主流程 ---------- */
 
-if (bumpMode) {
-  preflight({ strict: false, tagCheck: "skip" });
-  const current = rootPkg.version;
-  const next = explicitVersion || bump(current, bumpKind);
-  if (!/^\d+\.\d+\.\d+$/.test(next)) fail(`版本号不合法：${next}`);
-  if (compareVersions(next, current) <= 0) fail(`新版本 ${next} 必须大于当前 ${current}`);
-
-  const existing = gh(["--version"]).status === 0 ? gh(["release", "view", `v${next}`, "--repo", repo]) : null;
-  if (existing && existing.status === 0) fail(`release v${next} 已存在，换一个版本号`);
-
-  bumpFiles(next);
-  const createdNotes = writeNotesTemplate(next);
-  console.log(`release: 版本已改为 ${next}（根 + desktop）`);
-  console.log(`release: 更新说明：${createdNotes}`);
-  console.log("release: 下一步：写说明 → pnpm release");
-  process.exit(0);
-}
-
 if (preflightOnly) {
-  preflight({ strict: true, tagCheck: "absent" });
+  preflight({ strict: true, tagCheck: "absent", requireClean: true });
   console.log(`release: 预检通过（${tag} → ${repo}）`);
   process.exit(0);
 }
@@ -362,7 +339,7 @@ if (publishDraft) {
   process.exit(0);
 }
 
-preflight({ strict: true, tagCheck: "absent" });
+preflight({ strict: true, tagCheck: "absent", requireClean: true });
 const artifacts = buildArtifacts();
 const { manifestPath, assets } = await writeManifest(artifacts);
 
