@@ -78,7 +78,8 @@ in the pull request.
 
 1. Keep the change focused; one concern per pull request.
 2. Run `pnpm test && pnpm build` before pushing. CI runs the same two
-   commands on a macOS runner and must be green.
+   commands on Linux and must be green. Packaging (`pnpm dist`) is not
+   part of CI.
 3. Describe what changed and how you verified it.
 4. Sign the CLA (see below).
 
