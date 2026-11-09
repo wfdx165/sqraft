@@ -1,0 +1,23 @@
+{
+  "name": "@sqraft/render",
+  "version": "0.0.1",
+  "private": true,
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wfdx165/sqraft.git",
+    "directory": "packages/render"
+  },
+  "type": "module",
+  "exports": "./src/index.ts",
+  "types": "./src/index.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@sqraft/core": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "5.9.3"
+  }
+}

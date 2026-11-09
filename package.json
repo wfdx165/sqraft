@@ -1,0 +1,34 @@
+{
+  "name": "sqraft",
+  "private": true,
+  "description": "Sqraft — AI 驱动的轻量 UI 设计工具，纯单机、桌面优先",
+  "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/wfdx165/sqraft.git"
+  },
+  "homepage": "https://github.com/wfdx165/sqraft",
+  "bugs": {
+    "url": "https://github.com/wfdx165/sqraft/issues"
+  },
+  "packageManager": "pnpm@10.33.4",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "electron",
+      "esbuild"
+    ]
+  },
+  "scripts": {
+    "dev": "pnpm --filter @sqraft/desktop dev",
+    "build": "pnpm -r --if-present run build",
+    "test": "pnpm -r --if-present run test",
+    "dist": "pnpm --filter @sqraft/desktop run dist",
+    "dist:dir": "pnpm --filter @sqraft/desktop run dist:dir",
+    "release": "pnpm --filter @sqraft/desktop run release",
+    "publish:release": "pnpm --filter @sqraft/desktop run publish:release",
+    "stage:update": "pnpm --filter @sqraft/desktop run stage:update"
+  },
+  "engines": {
+    "node": ">=22.12"
+  }
+}
