@@ -10,7 +10,8 @@ permissions:
 
 jobs:
   test:
-    runs-on: macos-14
+    # 测试与构建与平台无关，用 ubuntu 跑最快；macOS 打包（pnpm dist）仍在本机执行。
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
