@@ -12,20 +12,24 @@
  *   pnpm release                              # 测试 → 构建 → 创建 draft release
  *   pnpm release --publish                    # 构建并直接发布（跳过 draft）
  *   pnpm release --skip-build                 # 复用 release/ 里已有产物（跳过测试）
+ *   pnpm release --win <路径>                  # 把 Windows 机器产出的 Setup.exe 收进 release/ 再发版
  *   pnpm release --preflight                  # 只跑检查，不构建
  *   pnpm publish:release                      # 把现有 draft 翻成正式发布，不重建
  *
  * 发布门槛：发布说明必须存在且非空、pnpm test 必须通过；任一不满足即中止。
  * 版本策略：0.0.1 是内部开发版；0.0.2 是首个公开版；之后每次发版 patch。
- * 仅支持 macOS arm64；仓库地址来自 apps/desktop/update.config.json（客户端读同一份）。
+ * macOS 只出 arm64；Windows 出 x64 的 NSIS 安装包，但必须在 Windows 机器上构建
+ * （本机 mac 交叉构建不可靠，且无法验收）。两者缺一即中止发版。
+ * 仓库地址来自 apps/desktop/update.config.json（客户端读同一份）。
  */
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { createReadStream, existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { copyFileSync, createReadStream, existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { compareVersions, pickArm64Dmg, pickArm64Zip } from "./release-utils.mjs";
+import { compareVersions, pickArm64Dmg, pickArm64Zip, pickWinSetup } from "./release-utils.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../..");
@@ -39,13 +43,16 @@ const HELP = `用法：
   pnpm release                              构建并创建 draft release
   pnpm release --publish                    构建并直接发布
   pnpm release --skip-build                 复用 release/ 里已有产物（跳过测试）
+  pnpm release --win <路径>                  把 Windows 产出的 Setup.exe 收进 release/ 再发版
   pnpm release --preflight                  只跑检查
   pnpm publish:release                      把现有 draft 翻成正式发布（不重建）
   pnpm publish:readme                       同步四语言 README 与截图到发行仓库
 
 版本号：手动改 apps/desktop/package.json；release 不接受版本参数。
-发布门槛：docs/releases/vX.md 存在且非空 + pnpm test 通过 + GitHub 凭证可用。
+发布门槛：docs/releases/vX.md 存在且非空 + pnpm test 通过 + GitHub 凭证可用
+          + release/ 里同时有 macOS arm64 dmg/zip 与 Windows Setup.exe。
 本地 git 状态（分支 / 工作区 / tag）不参与判断；源码 tag 由需要的人自行管理。
+平台：macOS 只出 arm64（本机构建）；Windows 出 x64 安装包（必须在 Windows 机器上构建）。
 版本策略：0.0.1 内部开发版；0.0.2 首个公开版；之后每次 patch。`;
 
 if (has("--help") || has("-h")) {
@@ -62,16 +69,41 @@ for (const flag of ["--bump", "--version"]) {
   if (has(flag)) fail(`${flag} 已移除：版本号请直接改 apps/desktop/package.json`);
 }
 
+/* ---------- 参数 ---------- */
+
+/** `--win <路径>` / `--win=<路径>`：把 Windows 机器产出的 exe 收进 release/。 */
+function takeWinPath(argv) {
+  const rest = [];
+  let winPath = null;
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
+    if (arg === "--win") {
+      winPath = argv[index + 1] ?? "";
+      index += 1;
+      continue;
+    }
+    if (arg.startsWith("--win=")) {
+      winPath = arg.slice("--win=".length);
+      continue;
+    }
+    rest.push(arg);
+  }
+  return { rest, winPath };
+}
+
+const { rest: flags, winPath } = takeWinPath(args);
+if (winPath === "") fail("--win 需要一个安装包路径，例如 --win ~/Downloads/Sqraft-Setup-0.0.5.exe");
+
 const KNOWN_FLAGS = new Set(["--publish", "--publish-draft", "--skip-build", "--preflight", "--help", "-h"]);
-const unknownFlags = args.filter((arg) => !KNOWN_FLAGS.has(arg));
+const unknownFlags = flags.filter((arg) => !KNOWN_FLAGS.has(arg));
 if (unknownFlags.length > 0) {
   fail(`未知参数：${unknownFlags.join(" ")}（版本号请直接改 apps/desktop/package.json）`);
 }
 
-const preflightOnly = has("--preflight");
-const publish = has("--publish");
-const publishDraft = has("--publish-draft");
-const skipBuild = has("--skip-build");
+const preflightOnly = flags.includes("--preflight");
+const publish = flags.includes("--publish");
+const publishDraft = flags.includes("--publish-draft");
+const skipBuild = flags.includes("--skip-build");
 
 if (publish && publishDraft) fail("--publish 与 --publish-draft 不能同时用");
 
@@ -181,28 +213,86 @@ function preflight({ strict, tagCheck, requireNotes = false }) {
 
 /* ---------- 构建与上传 ---------- */
 
-function buildArtifacts() {
-  if (skipBuild) {
-    console.log("release: --skip-build，复用 release/ 里已有产物（跳过测试）");
-  } else {
-    run("pnpm", ["test"]);
-    run("pnpm", ["--filter", "@sqraft/desktop", "run", "dist"], {
-      env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: "false" },
-    });
+/**
+ * 发版用临时目录（放 Windows 安装包）。
+ *
+ * `run()` 失败会走 `fail()` → `process.exit(1)`，而进程退出时 **不会** 执行 `finally`；
+ * 所以在 exit 事件里兜一次清理，避免每次失败都在 tmp 里留一个 100MB 的 exe。
+ */
+let winInbox = null;
+process.on("exit", () => {
+  if (!winInbox) return;
+  try {
+    rmSync(winInbox, { recursive: true, force: true });
+  } catch {
+    /* 退出阶段清不掉就算了，路径已经打在日志里 */
   }
+});
 
-  // 成品防护验收（ADR-0030）：源码 / 依赖漏回包里就在这里中止，而不是把包传上去
-  run("node", ["scripts/verify-pack.mjs"], { cwd: desktopRoot });
+/**
+ * 找到这次要发的 Windows 安装包。
+ *
+ * 早失败：先确认有包，再开始几分钟的 macOS 构建。
+ * 两种来源都支持：`--win <路径>`，或已经拷进 `release/` 的
+ * `Sqraft-Setup-<version>.exe`（`dist` 会 `clean` 掉整个 release/，所以下面会先把它挪到临时目录）。
+ */
+function resolveWinSource() {
+  if (winPath) {
+    const from = resolve(repoRoot, winPath);
+    if (!existsSync(from)) fail(`--win 指定的文件不存在：${from}`);
+    return from;
+  }
+  const existing = join(releaseDir, `Sqraft-Setup-${version}.exe`);
+  if (existsSync(existing)) return existing;
+  fail(
+    `release/ 里找不到 Windows 安装包 Sqraft-Setup-${version}.exe。\n` +
+      "  在 Windows 机器上跑 pnpm dist:win，把产物拷进 apps/desktop/release/，" +
+      "或用 --win <路径> 指定（macOS 与 Windows 必须同一版本一起发）",
+  );
+}
+
+function buildArtifacts() {
+  // clean 会清空 release/：先确认有 Windows 包并挪到临时目录，构建完再放回去
+  const winSource = resolveWinSource();
+  winInbox = mkdtempSync(join(tmpdir(), "sqraft-win-"));
+  const inbox = winInbox;
+  const stagedExe = join(inbox, `Sqraft-Setup-${version}.exe`);
+  try {
+    copyFileSync(winSource, stagedExe);
+
+    if (skipBuild) {
+      console.log("release: --skip-build，复用 release/ 里已有产物（跳过测试）");
+    } else {
+      run("pnpm", ["test"]);
+      run("pnpm", ["--filter", "@sqraft/desktop", "run", "dist"], {
+        env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: "false" },
+      });
+    }
+
+    // 成品防护验收（ADR-0030）：源码 / 依赖漏回包里就在这里中止，而不是把包传上去
+    run("node", ["scripts/verify-pack.mjs"], { cwd: desktopRoot });
+
+    try {
+      copyFileSync(stagedExe, join(releaseDir, `Sqraft-Setup-${version}.exe`));
+    } catch (error) {
+      fail(`无法把 Windows 安装包写入 ${releaseDir}：${error instanceof Error ? error.message : String(error)}`);
+    }
+  } finally {
+    rmSync(inbox, { recursive: true, force: true });
+    winInbox = null;
+  }
 
   const files = readdirSync(releaseDir);
   const dmg = pickArm64Dmg(files, version);
   const zip = pickArm64Zip(files, version);
+  const exe = pickWinSetup(files, version);
   if (!dmg) fail(`release/ 里找不到 ${version} 的 arm64 dmg`);
   if (!zip) fail(`release/ 里找不到 ${version} 的 arm64 zip（自动更新只认 zip）`);
-  for (const name of [dmg, zip]) {
+  if (!exe) fail(`release/ 里没有 Sqraft-Setup-${version}.exe（收件箱写入失败）`);
+  for (const name of [dmg, zip, exe]) {
     if (statSync(join(releaseDir, name)).size < 1024 * 1024) fail(`${name} 体积异常，构建可能没完成`);
   }
-  return { dmg, zip };
+  return { dmg, zip, exe };
 }
 
 function sha256(path) {
@@ -215,7 +305,7 @@ function sha256(path) {
   });
 }
 
-async function writeManifest({ dmg, zip }) {
+async function writeManifest({ dmg, zip, exe }) {
   const notes = readFileSync(notesPath, "utf8");
   const assetUrl = (name) => `https://github.com/${repo}/releases/download/${tag}/${encodeURIComponent(name)}`;
   const manifest = {
@@ -233,11 +323,17 @@ async function writeManifest({ dmg, zip }) {
         size: statSync(join(releaseDir, dmg)).size,
         sha256: await sha256(join(releaseDir, dmg)),
       },
+      // Windows 客户端只读 version 做提示，不下载：地址留着给以后接自动安装
+      "win-x64": {
+        url: assetUrl(exe),
+        size: statSync(join(releaseDir, exe)).size,
+        sha256: await sha256(join(releaseDir, exe)),
+      },
     },
   };
   const manifestPath = join(releaseDir, "latest.json");
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-  return { manifestPath, assets: [dmg, zip] };
+  return { manifestPath, assets: [dmg, zip, exe] };
 }
 
 /** 发布后轮询固定地址：GitHub 的 latest 有缓存，刚发布时可能还是旧内容。 */
@@ -277,7 +373,7 @@ if (publishDraft) {
   const info = JSON.parse(view.stdout);
   if (!info.isDraft) fail(`${tag} 已经是正式发布`);
   const names = (info.assets ?? []).map((asset) => asset.name);
-  for (const required of ["latest.json", "dmg", "zip"]) {
+  for (const required of ["latest.json", "dmg", "zip", "exe"]) {
     const found = names.some((name) => name.includes(required));
     if (!found) fail(`draft 里缺少 ${required} 资产，先重新 pnpm release`);
   }

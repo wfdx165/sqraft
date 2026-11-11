@@ -10,6 +10,7 @@ import { reactive, ref } from "vue";
 import { logInfo, logWarn } from "./log";
 import { t } from "./i18n";
 import { ui } from "./store";
+import { formatBinding as sharedFormatBinding } from "../shared/binding";
 import type { MessageKey } from "../shared/i18n";
 
 export type ActionId =
@@ -199,6 +200,30 @@ export function isDefault(id: ActionId): boolean {
   return !overrides[id];
 }
 
+const PLATFORM_FALLBACK = "darwin";
+
+/** 平台只在浏览器里有；node 环境（单测）退回 macOS，不能让默认参数直接炸。 */
+function platformOf(): string {
+  if (typeof window === "undefined") return PLATFORM_FALLBACK;
+  return window.sqraft?.platform ?? PLATFORM_FALLBACK;
+}
+
+/**
+ * 规范键位 → 平台显示。
+ *
+ * 内部存储永远是 `⌘⇧Z` 这一套（`bindingOfEvent` 把 ctrlKey 归一成 ⌘），
+ * 只有显示在 Windows 上换成 `Ctrl+Shift+Z`：用户按的是 Ctrl，看到 ⌘ 会不知道怎么按。
+ * 单键（H / Delete / F2）原样返回。
+ */
+export function formatBinding(binding: string, platform: string = platformOf()): string {
+  return sharedFormatBinding(binding, platform);
+}
+
+/** 面板 / tooltip / 右键菜单里的键位文案（已按平台格式化）。 */
+export function keyLabel(id: ActionId): string {
+  return formatBinding(keyOf(id));
+}
+
 export function setBinding(id: ActionId, binding: string): void {
   if (binding === defaultKeyOf(id)) delete overrides[id];
   else overrides[id] = binding;
@@ -215,9 +240,9 @@ export function resetAll(): void {
 /** 返回错误文案；空串表示可以绑定。 */
 export function validateBinding(id: ActionId, binding: string): string {
   if (!binding) return t("shortcut.needCombo");
-  if (binding === PANEL_BINDING) return t("shortcut.panelFixed", { keys: PANEL_BINDING });
+  if (binding === PANEL_BINDING) return t("shortcut.panelFixed", { keys: formatBinding(PANEL_BINDING) });
   if (binding === "Esc") return t("shortcut.escFixed");
-  if (RESERVED.has(binding)) return t("shortcut.reserved", { keys: binding });
+  if (RESERVED.has(binding)) return t("shortcut.reserved", { keys: formatBinding(binding) });
   const taken = ACTIONS.find((a) => a.id !== id && keyOf(a.id) === binding);
   if (taken) return t("shortcut.taken", { label: t(taken.labelKey) });
   return "";

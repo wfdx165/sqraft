@@ -10,6 +10,7 @@
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type MenuItemConstructorOptions } from "electron";
 import { basename } from "node:path";
 import { CHANNELS } from "../shared/ipc";
+import { formatBinding } from "../shared/binding";
 import { clearImageCache } from "./image-cache";
 import { logFileDir } from "./log-file";
 import { t } from "./i18n";
@@ -67,7 +68,8 @@ function keyOf(action: string): string {
 function actionItem(action: string, label: string, mac: boolean): MenuItemConstructorOptions {
   const accelerator = toAccelerator(keyOf(action));
   const item: MenuItemConstructorOptions = {
-    label: mac || !accelerator ? label : `${label}    ${keyOf(action)}`,
+    // 非 mac 把键位写进标签；Windows 显示 Ctrl/Alt/Shift，不能把 ⌘ 直接甩给用户
+    label: mac || !accelerator ? label : `${label}    ${formatBinding(keyOf(action), mac ? "darwin" : "win32")}`,
     click: () => {
       const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
       target?.webContents.send(CHANNELS.menuCommand, action);

@@ -34,6 +34,32 @@ mac:
     - target: zip
       arch:
         - arm64
+# Windows：只出 x64 的 NSIS 安装器。未签名，本版也不做静默升级（ADR-0033）。
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-Setup-${version}.${ext}
+nsis:
+  # 经典向导：可选安装目录；perMachine 关闭时默认按用户安装（%LOCALAPPDATA%）
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Sqraft
+  # 卸载不碰用户数据：偏好、最近文件、MCP 配置都留着
+  deleteAppDataOnUninstall: false
+  # 与应用内四语对齐；安装器按系统语言自动选择
+  installerLanguages:
+    - en_US
+    - zh_CN
+    - ja_JP
+    - ko_KR
+  # 没有 electron-updater，差分包只会拖慢构建
+  differentialPackage: false
 fileAssociations:
   - ext: sqraft
     name: Sqraft Design

@@ -15,12 +15,15 @@
 ### [⬇ 최신 버전 다운로드](https://github.com/wfdx165/sqraft/releases/latest)
 
 **macOS · Apple Silicon(M 시리즈)** · 약 120 MB · 미서명
+**Windows · x64** · 약 100 MB · 미서명
 
-- macOS arm64만 제공합니다. Intel Mac, Windows, Linux는 지원하지 않습니다
-- 버전마다 `.dmg`(수동 설치용)와 `.zip`(자동 업데이트용)을 함께 제공합니다. Releases 페이지의 **Assets**에서 `Sqraft-<버전>-arm64.dmg`를 선택하세요
+- Releases 페이지의 **Assets**에서 `Sqraft-<버전>-arm64.dmg`(수동 설치) 또는 `Sqraft-Setup-<버전>.exe`를 선택하세요. `.zip`은 macOS 자동 업데이트가 내려받는 패키지입니다
+- Windows는 Windows 10 22H2 이상 또는 Windows 11(x64)이 필요합니다. Linux는 지원하지 않습니다
 - 이전 버전과 업데이트 내용은 [Releases](https://github.com/wfdx165/sqraft/releases)에서 확인할 수 있습니다
 
 ## 설치
+
+### macOS
 
 1. 내려받은 `.dmg`를 열고 **Sqraft**를 「응용 프로그램」으로 끌어다 놓습니다
 2. 첫 실행은 Gatekeeper가 막습니다(앱이 서명되지 않음). 안내는 두 가지 중 하나입니다
@@ -37,6 +40,13 @@ xattr -dr com.apple.quarantine /Applications/Sqraft.app
 다시 열면 실행됩니다. 이후 업데이트는 앱이 직접 내려받아 격리 플래그가 붙지 않으므로 이 안내는 다시 나오지 않습니다.
 
 자동 업데이트를 원하지 않아도 메뉴 **도움말 → 업데이트 확인…**에서 언제든 직접 확인할 수 있습니다.
+
+### Windows
+
+1. `Sqraft-Setup-<버전>.exe`를 실행합니다. 설치 프로그램이 서명되지 않아 SmartScreen이 경고합니다. **추가 정보 → 실행**을 선택하세요
+2. 마법사에서 설치 폴더를 바꿀 수 있습니다. 기본값은 현재 사용자 설치이며 관리자 권한이 필요 없습니다. 시작 메뉴와 바탕 화면에 바로 가기가 만들어지며, 바탕 화면 것이 필요 없으면 삭제하면 됩니다
+3. `.sqraft` 파일을 두 번 클릭하면 Sqraft로 열립니다
+4. 업데이트는 수동입니다. 새 버전이 있으면 **다운로드** 칩이 나타나 Releases 페이지를 엽니다. 앱을 제거해도 데이터는 `%APPDATA%\Sqraft`에 남습니다
 
 ## 할 수 있는 일
 
@@ -60,7 +70,7 @@ Sqraft는 모델을 호출하지 않고 API 키도 필요 없습니다. 앱이 �
 http://127.0.0.1:7331/mcp
 ```
 
-앱은 계속 실행 중이어야 합니다(명령줄 도구가 없고, 클라이언트가 앱을 실행하지도 않습니다). 포트가 사용 중이면 다음 빈 포트로 옮겨가며, 실제 주소는 환영 화면과 **Sqraft → MCP 설정…**(Windows/Linux는 파일 메뉴)에 표시됩니다.
+앱은 계속 실행 중이어야 합니다(명령줄 도구가 없고, 클라이언트가 앱을 실행하지도 않습니다). 포트가 사용 중이면 다음 빈 포트로 옮겨가며, 실제 주소는 환영 화면과 **Sqraft → MCP 설정…**(Windows는 파일 메뉴)에 표시됩니다.
 
 <details>
 <summary>Claude Code</summary>
@@ -107,13 +117,15 @@ claude mcp add --transport http sqraft http://127.0.0.1:7331/mcp
 - 디자인은 디스크 위의 `.sqraft` 파일(zip 컨테이너: 스냅샷 + 이미지 리소스)이며 클라우드에 의존하지 않습니다
 - 계정, 백엔드, 텔레메트리가 없습니다. 외부 요청은 업데이트 확인과 직접 추가한 링크 이미지뿐입니다
 - 조작 로그는 시스템 로그 디렉터리(macOS: `~/Library/Logs/Sqraft/`)에 기록되며, 메뉴 **도움말 → 로그 폴더 열기**로 바로 열 수 있습니다
-- 앱을 삭제하면 앱은 사라지고, 데이터 디렉터리와 환경 설정은 `~/Library/Application Support/Sqraft/`에 남으므로 함께 지울 수 있습니다
+- 앱을 삭제하면 앱은 사라지고, 데이터 디렉터리와 환경 설정은 macOS에서는 `~/Library/Application Support/Sqraft/`, Windows에서는 `%APPDATA%\Sqraft`에 남으므로 함께 지울 수 있습니다
 
 ## 시스템 요구 사항과 알려진 제한
 
-- **macOS Apple Silicon**. Intel Mac은 지원하지 않습니다
-- 앱은 **미서명·미공증**이므로 첫 실행 시 직접 허용해야 합니다(「설치」 참고)
-- 자동 업데이트는 macOS arm64에서만 제공합니다. Windows/Linux 빌드는 없습니다
+- **macOS Apple Silicon(M 시리즈)**. Intel Mac은 지원하지 않습니다
+- **Windows 10 22H2 이상 또는 Windows 11(x64)**. Linux는 지원하지 않습니다
+- 두 플랫폼 모두 설치 프로그램이 **미서명·미공증**이므로 첫 실행 시 직접 허용해야 합니다(「설치」 참고)
+- 자동 업데이트는 macOS에서만 제공합니다. Windows에서는 새 설치 프로그램을 직접 내려받아 실행합니다
+- 중국어·일본어·한국어는 각 OS의 글꼴을 사용하므로 같은 문서라도 macOS와 Windows에서 줄바꿈 위치가 달라질 수 있습니다
 - 실시간 협업, 계정 시스템, 클라우드 동기화는 없습니다
 
 ## 라이선스와 피드백

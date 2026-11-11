@@ -352,12 +352,12 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 - **进程**：主进程（MCP 宿主、文件 IO、窗口/菜单/生命周期）＋ 渲染进程（文档真源、命令层、渲染器、AI 工具执行器）＋ preload（白名单桥）。主进程不持有 `DocState`。
 - **IPC**：通道名与请求/响应类型集中在 `shared/ipc`，preload 只暴露 `window.sqraft` 一个对象；渲染层拿不到 `require` 与任意 IPC。安全基线见 ADR-0019。
 - **文件**：主进程负责系统对话框、字节搬运、原子写与 mtime 比对；`.sqraft` 的序列化/解析/迁移只在渲染层。全手动保存，无自动写回、无崩溃恢复。
-- **窗口**：单窗口两态（欢迎页 / 一个文档）；**每次启动把窗口铺满它上次所在那块屏的工作区**（不是 macOS 全屏模式，菜单栏与 Dock 仍在）；`⌘W` 关闭文档回欢迎页，`⌘Q` 退出；单实例转发打开请求；窗口位置与最近列表存 `userData/preferences.json`。
+- **窗口**：单窗口两态（欢迎页 / 一个文档）；**每次启动把窗口铺满它上次所在那块屏的工作区**（不是 macOS 全屏模式，菜单栏与 Dock 仍在）；`⌘W` 关闭文档回欢迎页，`⌘Q` 退出；单实例转发打开请求；窗口位置与最近列表存 `userData/preferences.json`。macOS 用 `hiddenInset` 标题栏（左上红绿灯 + 58px 留白 + 拖拽条）；Windows 用系统默认标题栏，应用内不留那段留白（ADR-0033）。快捷键在 Windows 上显示为 `Ctrl+Shift+Z` 形式，内部存储仍是同一套规范串。
 - **欢迎页**：以 MCP 接入为主位——服务状态（监听中 / 在线会话数）、能力一行（工具数动态取自 `@sqraft/ai-tools`）、可复制的接入片段（Claude Code / OpenCode / Cursor / 通用），然后才是新建/打开与最近 4 条。三态（未启动 / 等待接入 / 已连接）只改状态行与主按钮，见 ADR-0021 与 ADR-0026。
 - **菜单与快捷键**：系统级动作走菜单 role；文档编辑类动作仍由渲染层注册表独占，菜单点击只发送同一个动作 id（ADR-0011 的桌面补充）。
 - **MCP**：主进程协议层 + 本机 Streamable HTTP（`127.0.0.1:<port>`），详见 ADR-0026 与 §12。
-- **更新**（ADR-0029）：主进程负责检查（`releases/latest/download/latest.json`，24 小时节流）、下载 zip 与 sha256 校验、退出时用 detached 脚本替换 `.app`；渲染层只显示状态、触发重启，不碰文件系统。备份 + 启动标记（60 秒）构成回滚：新版本没跑起来就换回旧包。未签名，因此不用 Squirrel.Mac，只承诺 macOS arm64；只读位置（dmg 挂载点）提前拒绝。
-- **打包**：electron-builder，`appId com.yjsoft.sqraft`；asar 打包，没有需要放到 asar 外的可执行文件；只构建 macOS arm64 的 dmg + zip（zip 供自动更新），Windows/Linux 的打包配置已移除。
+- **更新**（ADR-0029 / ADR-0033）：主进程负责检查（`releases/latest/download/latest.json`，24 小时节流）。macOS arm64 会下载 zip 并校验 sha256、退出时用 detached 脚本替换 `.app`；备份 + 启动标记（60 秒）构成回滚：新版本没跑起来就换回旧包。Windows **只提示**：版本更新时状态置为 `available`，界面给「前往下载」打开 Releases 页面，不下载、不安装。渲染层只显示状态、触发重启或打开下载页，不碰文件系统。未签名，只承诺 macOS arm64 的就地更新；只读位置（dmg 挂载点）提前拒绝。
+- **打包**（ADR-0033）：electron-builder，`appId com.yjsoft.sqraft`；asar 打包，没有需要放到 asar 外的可执行文件。macOS 出 arm64 的 dmg + zip（zip 供自动更新）；Windows 出 x64 的 NSIS 安装器（`Sqraft-Setup-<version>.exe`，per-user、可改目录、四语安装器、关联 `.sqraft`、卸载保留用户数据）。Windows 包必须在 Windows 机器上构建（`pnpm dist:win`），`release/` 是上传前的唯一产物收件箱。`verify-pack` 同时支持 `.app` 与 `win-unpacked` 两种布局。
 - **构建期防护**（ADR-0030）：三个入口都 esbuild 压缩、不生成 sourcemap；`dependencies` 必须为空（渲染层与主进程的依赖全在构建期 bundle 进去，成品不含 `node_modules`）；`afterPack` 翻转 Electron fuse（禁 `RunAsNode` / `NODE_OPTIONS` / 调试参数，只允许从 asar 加载）。`scripts/verify-pack.mjs` 在发版链路里断言以上全部成立，不成立就中止。`.sqraft` 仍是明文 zip。
 - **版本与标识**：版本号唯一真源是 `apps/desktop/package.json`（手动修改；`pnpm release` 只读、不接受版本参数）；发版的硬门槛是 `docs/releases/vX.md` 存在且非空，脚本不检查本地分支、工作区或 tag，`latest.json` 也不记录 commit；`appId` 沿用 `com.yjsoft.sqraft`——0.0.2 起已对外使用，改名会让已装用户被 macOS 当成另一个应用，因此保持不变。
 - **界面语言**（ADR-0031）：`zh-CN` / `en-US` / `ja-JP` / `ko-KR`，`auto` 跟随系统（`zh*` / `ja*` / `ko*`，其余英文）+ 设置面板手动覆盖；主进程与渲染层共用 `src/shared/i18n` 的类型化字典，界面文案一律走 `t()`；界面与新建文本按语言切换 CJK 字体栈，日文换行带轻量禁则；日志、MCP 工具描述、README/docs 与更新说明不在本地化范围。核心对用户可触发的错误抛 `AppError`，界面按 code 翻译。

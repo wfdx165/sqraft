@@ -18,10 +18,12 @@ export class UpdateManifestError extends Error {
   }
 }
 
-/** 平台资产键：只承诺 macOS arm64（README 也这么写）。 */
+/** 自动安装用的平台资产键：只有 macOS arm64 会下载并替换（ADR-0029）。 */
 export const MAC_ARM64_ASSET = "mac-arm64";
 /** 同一版本的手动安装包，给"没装更新器"的用户与回滚用。 */
 export const MAC_ARM64_DMG_ASSET = "mac-arm64-dmg";
+// Windows 的 `win-x64`（Setup.exe）由 release.mjs 写入；客户端只读 version 做提示，
+// 这个键留给以后接静默安装（ADR-0033）——不要在 requireAsset 里强制要求它。
 
 export interface UpdateAsset {
   url: string;

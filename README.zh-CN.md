@@ -15,12 +15,15 @@
 ### [⬇ 下载最新版](https://github.com/wfdx165/sqraft/releases/latest)
 
 **macOS · Apple Silicon（M 系列）** · 约 120 MB · 未签名
+**Windows · x64** · 约 100 MB · 未签名
 
-- 只提供 macOS arm64 安装包；Intel Mac、Windows、Linux 暂不支持
-- 每个版本同时提供 `.dmg`（手动安装）与 `.zip`（自动更新用）；在 Releases 页面的 **Assets** 里选 `Sqraft-<版本>-arm64.dmg`
+- 在 Releases 页面的 **Assets** 里选 `Sqraft-<版本>-arm64.dmg`（手动安装）或 `Sqraft-Setup-<版本>.exe`；`.zip` 是 macOS 自动更新下载的包
+- Windows 需要 Windows 10 22H2 或 Windows 11（x64）；Linux 暂不支持
 - 历史版本与更新说明见 [Releases](https://github.com/wfdx165/sqraft/releases)
 
 ## 安装
+
+### macOS
 
 1. 打开下载的 `.dmg`，把 **Sqraft** 拖进「应用程序」
 2. 首次打开会被 Gatekeeper 拦下（应用未签名），按提示分两种：
@@ -37,6 +40,13 @@ xattr -dr com.apple.quarantine /Applications/Sqraft.app
 再打开即可。后续更新由应用自己下载，不带隔离标记，不会再出现这个提示。
 
 不想自动更新也没关系：菜单 **帮助 → 检查更新…** 可以随时手动查。
+
+### Windows
+
+1. 双击 `Sqraft-Setup-<版本>.exe`；安装器未签名，SmartScreen 会拦一下，点 **更多信息 → 仍要运行**
+2. 向导里可以改安装目录；默认按当前用户安装，不需要管理员权限。开始菜单与桌面都会创建快捷方式，不想要桌面那个直接删掉即可
+3. 双击任意 `.sqraft` 文件即可用 Sqraft 打开
+4. 更新是手动的：有新版本时应用会显示「前往下载」胶囊，点开 Releases 页面重新安装；卸载后数据仍保留在 `%APPDATA%\Sqraft`
 
 ## 能做什么
 
@@ -60,7 +70,7 @@ Sqraft 自身不调用模型，也不需要 API Key。应用运行时会在本�
 http://127.0.0.1:7331/mcp
 ```
 
-应用需要保持运行（没有命令行工具，也不会由客户端拉起）。端口被占用时会自动顺延，实际地址在欢迎页和 **Sqraft → 配置 MCP…**（Windows / Linux 在文件菜单）里。
+应用需要保持运行（没有命令行工具，也不会由客户端拉起）。端口被占用时会自动顺延，实际地址在欢迎页和 **Sqraft → 配置 MCP…**（Windows 在文件菜单）里。
 
 <details>
 <summary>Claude Code</summary>
@@ -107,13 +117,15 @@ claude mcp add --transport http sqraft http://127.0.0.1:7331/mcp
 - 设计稿是磁盘上的 `.sqraft` 文件（zip 容器：快照 + 图片资源），不依赖云服务
 - 没有账号、没有后端、没有遥测；外部请求只有两类：检查更新，以及你自己添加的链接图
 - 操作日志写在系统日志目录（macOS：`~/Library/Logs/Sqraft/`），菜单 **帮助 → 打开日志目录** 可直达
-- 卸载即删除应用；数据目录与偏好留在 `~/Library/Application Support/Sqraft/`，可一并删除
+- 卸载即删除应用；数据目录与偏好留在 `~/Library/Application Support/Sqraft/`（macOS）或 `%APPDATA%\Sqraft`（Windows），可一并删除
 
 ## 系统要求与已知限制
 
-- **macOS Apple Silicon**；Intel Mac 不支持
-- 应用**未签名、未公证**：首次打开需要手动放行（见「安装」）
-- 自动更新只在 macOS arm64 上提供；Windows / Linux 目前没有构建
+- **macOS Apple Silicon（M 系列）**；Intel Mac 不支持
+- **Windows 10 22H2 及以上或 Windows 11（x64）**；Linux 不支持
+- 两个平台的安装包都**未签名、未公证**：首次打开需要手动放行（见「安装」）
+- 自动更新只在 macOS 上提供；Windows 需要自己下载新版安装器覆盖安装
+- 中日韩文字使用各系统自带字体，同一文档在 macOS 与 Windows 上换行位置可能不同
 - 没有多人协作、没有账户体系、没有云端同步
 
 ## 授权与反馈

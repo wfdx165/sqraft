@@ -11,16 +11,31 @@
  * 3. 渲染层 bundle 是压缩过的（行数很少）；
  * 4. Electron fuse 已按要求翻转。
  *
- * 用法：`node scripts/verify-pack.mjs [Sqraft.app 路径]`，默认 `release/mac-arm64/Sqraft.app`。
+ * 用法：`node scripts/verify-pack.mjs [产物路径]`。
+ * 默认按平台挑：Windows 用 `release/win-unpacked`，其余用 `release/mac-arm64/Sqraft.app`。
  */
-import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
+import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FuseState, FuseV1Options, getCurrentFuseWire } from "@electron/fuses";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
-const appPath = resolve(process.argv[2] ?? join(packageRoot, "release", "mac-arm64", "Sqraft.app"));
-const product = appPath.replace(/\.app$/, "").split("/").pop();
+const MAC_APP = join(packageRoot, "release", "mac-arm64", "Sqraft.app");
+const WIN_DIR = join(packageRoot, "release", "win-unpacked");
+
+/** 默认产物：显式参数优先；否则看 release/ 里实际有什么。 */
+function defaultTarget() {
+  if (process.argv[2]) return process.argv[2];
+  if (existsSync(WIN_DIR) && process.platform === "win32") return WIN_DIR;
+  if (existsSync(MAC_APP)) return MAC_APP;
+  if (existsSync(WIN_DIR)) return WIN_DIR;
+  return MAC_APP;
+}
+
+const appPath = resolve(defaultTarget());
+/** `.app` 包与 `win-unpacked` 目录的内部布局不同，后面按这个分支取 asar 与主程序。 */
+const isMacBundle = appPath.endsWith(".app");
+const product = isMacBundle ? appPath.replace(/\.app$/, "").split("/").pop() : "Sqraft";
 const problems = [];
 
 /* ---------- 1. 依赖分类 ---------- */
@@ -77,13 +92,15 @@ function readAsar(path) {
   }
 }
 
-const asarPath = join(appPath, "Contents", "Resources", "app.asar");
+const asarPath = isMacBundle
+  ? join(appPath, "Contents", "Resources", "app.asar")
+  : join(appPath, "resources", "app.asar");
 let asar;
 try {
   statSync(asarPath);
   asar = readAsar(asarPath);
 } catch (error) {
-  console.error(`verify-pack: 读不了 ${asarPath}（${String(error)}）——先构建，或用参数指定 .app 路径`);
+  console.error(`verify-pack: 读不了 ${asarPath}（${String(error)}）——先构建，或用参数指定产物路径`);
   process.exit(1);
 }
 
@@ -117,7 +134,21 @@ if (bundles.length === 0) {
 
 /* ---------- 4. fuse ---------- */
 
-const binary = join(appPath, "Contents", "MacOS", product);
+/** Windows 主程序：优先 `Sqraft.exe`；只有一个 exe 时接受它，多个就明确报错而不是猜。 */
+function windowsBinaryOf(dir) {
+  const preferred = join(dir, "Sqraft.exe");
+  if (existsSync(preferred)) return preferred;
+  const candidates = readdirSync(dir).filter((name) => name.toLowerCase().endsWith(".exe"));
+  if (candidates.length === 1) return join(dir, candidates[0]);
+  problems.push(
+    `找不到主程序：${preferred} 不存在，目录里的 .exe 有 ${candidates.length} 个（${candidates.join("、") || "无"}）`,
+  );
+  return preferred;
+}
+
+const binary = isMacBundle
+  ? join(appPath, "Contents", "MacOS", product)
+  : windowsBinaryOf(appPath);
 const EXPECTED = [
   [FuseV1Options.RunAsNode, FuseState.DISABLE, "以 Node 运行主进程"],
   [FuseV1Options.EnableNodeOptionsEnvironmentVariable, FuseState.DISABLE, "从 NODE_OPTIONS 注入"],
@@ -147,6 +178,6 @@ if (problems.length > 0) {
 }
 
 console.log(
-  `verify-pack: 通过——asar ${asar.entries.length} 个条目，全部在 out/ 与 package.json 内；` +
-    `无源码 / 无 map / 无 node_modules；渲染层已压缩；fuse 已按要求翻转`,
+  `verify-pack: 通过（${isMacBundle ? "macOS .app" : "Windows win-unpacked"}）——asar ${asar.entries.length} 个条目，` +
+    `全部在 out/ 与 package.json 内；无源码 / 无 map / 无 node_modules；渲染层已压缩；fuse 已按要求翻转`,
 );

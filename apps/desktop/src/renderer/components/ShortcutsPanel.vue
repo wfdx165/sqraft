@@ -9,8 +9,9 @@ import {
   FIXED_HINTS,
   GROUP_ORDER,
   bindingOfEvent,
+  formatBinding,
   isDefault,
-  keyOf,
+  keyLabel,
   resetAll,
   setBinding,
   shortcutUi,
@@ -119,7 +120,7 @@ onBeforeUnmount(() => {
           >
             <span class="label">{{ t(a.labelKey) }}</span>
             <span v-if="shortcutUi.recording === a.id" class="kbd recording-kbd">{{ t("shortcuts.press") }}</span>
-            <span v-else class="kbd" :class="{ custom: !isDefault(a.id) }">{{ keyOf(a.id) }}</span>
+            <span v-else class="kbd" :class="{ custom: !isDefault(a.id) }">{{ keyLabel(a.id) }}</span>
           </div>
         </section>
       </div>
@@ -129,7 +130,7 @@ onBeforeUnmount(() => {
       <footer class="foot">
         <div class="fixed">
           <span v-for="f in FIXED_HINTS" :key="f.keys" class="fixed-item">
-            <span class="kbd ghost">{{ f.keys }}</span>{{ t(f.labelKey) }}
+            <span class="kbd ghost">{{ formatBinding(f.keys) }}</span>{{ t(f.labelKey) }}
           </span>
         </div>
         <button class="reset" :class="{ confirm: confirmReset }" :disabled="!changed" @click="onReset">

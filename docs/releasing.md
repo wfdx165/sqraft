@@ -1,8 +1,9 @@
 # 发版手册
 
-Sqraft 只发布 **macOS arm64**：安装包传到公开仓库
+Sqraft 发布 **macOS arm64** 与 **Windows x64** 两个平台的安装包：都传到公开仓库
 [`wfdx165/sqraft`](https://github.com/wfdx165/sqraft)，源码留在私有 Gitea。
-自动更新靠该仓库的 `releases/latest/download/latest.json`（ADR-0029）。
+macOS 的自动更新靠该仓库的 `releases/latest/download/latest.json`（ADR-0029）；
+Windows 只做「检查并提示」，更新靠手动下载安装器（ADR-0033）。
 
 > 发行仓库必须保持 **public**。私有仓库 = `latest.json` 404 = 自动更新静默失效。
 
@@ -45,13 +46,20 @@ gh auth status         # 确认账号对 wfdx165/sqraft 有写权限
 
 ### 3. 出包 + 创建 draft
 
+Windows 包必须在 **Windows 机器**上构建（ADR-0033）：仓库拉到 Windows，`pnpm install && pnpm dist:win`，
+得到 `release/Sqraft-Setup-<version>.exe`，并在那台机器上按下面的清单手点一遍。
+把 exe 拷回 mac 的 `apps/desktop/release/`（或留给下一步用 `--win <路径>`）。
+
 ```bash
 pnpm release
+# 或：pnpm release --win ~/Downloads/Sqraft-Setup-0.0.5.exe
 ```
 
 依次执行：预检（发布说明存在、版本大于最新已发布版本、发行仓没有同名 release、gh 可用且仓库 public）→ `pnpm test` → `clean` →
 类型检查 + 构建 → `Sqraft-<version>-arm64.dmg` + `Sqraft-<version>-arm64-mac.zip` → `verify-pack` 成品防护验收（ADR-0030）→
-sha256 → `latest.json` → `gh release create v<version> --repo wfdx165/sqraft --draft`。
+检查 `release/` 里同时有 macOS 两个包与 `Sqraft-Setup-<version>.exe`（缺 Windows 包直接中止）→
+sha256 → `latest.json`（`mac-arm64` / `mac-arm64-dmg` / `win-x64` 三个键）→
+`gh release create v<version> --repo wfdx165/sqraft --draft`。
 
 `pnpm release` 不接受版本参数：版本只认 `apps/desktop/package.json`。
 发布说明缺失或测试失败都会直接中止，不会出包。
@@ -61,13 +69,16 @@ sha256 → `latest.json` → `gh release create v<version> --repo wfdx165/sqraft
 
 `verify-pack` 不通过也会中止：asar 里只允许 `out/**` 与 `package.json`，
 出现 `.ts` / `.map` / `node_modules`，或者压缩、fuse 状态不符合预期，都不会把包传上去。
-报错信息会指出是"依赖分类改回去了"还是"构建配置被改坏了"。
+报错信息会指出是"依赖分类改回去了"还是"构建配置被改坏了"。Windows 侧的同一套断言已接在
+`pnpm dist:win` 末尾（检查 `release/win-unpacked/resources/app.asar` 与 `Sqraft.exe` 的 fuse），
+不通过就不会产出可拷走的 exe。
 
 draft 阶段线上不可见（`/releases/latest` 仍指向上一个版本），此时**验证不了自动更新**。
 
 可选参数：
 
 - `pnpm release --skip-build`：复用 `release/` 里已有产物（跳过测试）
+- `pnpm release --win <路径>`：把指定 exe 复制成 `Sqraft-Setup-<version>.exe` 放进 `release/`
 - `pnpm release --publish`：构建后直接正式发布（跳过 draft）
 - `pnpm release --preflight`：只跑检查（发布说明 + GitHub 侧），不构建
 
@@ -78,15 +89,23 @@ gh release view v0.0.2 --repo wfdx165/sqraft --json isDraft,assets \
   --jq '{draft:.isDraft, assets:[.assets[].name]}'
 ```
 
-应看到三个资产：`Sqraft-0.0.2-arm64.dmg`、`Sqraft-0.0.2-arm64-mac.zip`、`latest.json`。
+应看到四个资产：`Sqraft-<version>-arm64.dmg`、`Sqraft-<version>-arm64-mac.zip`、
+`Sqraft-Setup-<version>.exe`、`latest.json`。
 
-装一次再发布：
+macOS 装一次再发布：
 
 ```bash
 mkdir -p /tmp/sqraft-check
 gh release download v0.0.2 --repo wfdx165/sqraft --pattern '*arm64.dmg' --dir /tmp/sqraft-check
 open /tmp/sqraft-check/*.dmg
 ```
+
+Windows 侧在装过 `Sqraft-Setup-<version>.exe` 的机器上确认：
+
+- 安装向导能改目录；安装后开始菜单与桌面都有快捷方式；卸载后 `%APPDATA%\Sqraft` 还在
+- 双击 `.sqraft` 文件能直接打开
+- 新建 → 画图 → 保存 → 关窗重开内容一致；嵌图、MCP 建节点、演示模式都正常
+- 工具栏/「关于」里的更新提示能打开下载页
 
 确认：能启动、关于面板版本正确、能新建/保存 `.sqraft`、MCP 能连。
 
@@ -159,11 +178,13 @@ pnpm publish:readme
   "notes": "…",
   "assets": {
     "mac-arm64": { "url": "…zip", "size": 123, "sha256": "…" },
-    "mac-arm64-dmg": { "url": "…dmg", "size": 123, "sha256": "…" }
+    "mac-arm64-dmg": { "url": "…dmg", "size": 123, "sha256": "…" },
+    "win-x64": { "url": "…exe", "size": 123, "sha256": "…" }
   }
 }
 ```
 
+- `win-x64` 指向 `Sqraft-Setup-<version>.exe`；Windows 客户端当前只读 `version` 做提示，键为以后接静默安装预留
 - 仓库地址的唯一真源：`apps/desktop/update.config.json`（客户端与脚本读同一份）
 - 发布说明：`docs/releases/v<version>.md`（必须存在且非空）
 - 下载页 README 有四份，改一份要同步其余三份（`pnpm publish:readme` 会校验）

@@ -115,7 +115,7 @@ import {
   type GuideLine,
 } from "../canvas/guides";
 import { paintInfoOverlays } from "../canvas/info-overlays";
-import { keyOf, registerShortcuts } from "../shortcuts";
+import { keyLabel, registerShortcuts } from "../shortcuts";
 import { vTip } from "../tooltip";
 import { t } from "../i18n";
 import Icon from "./Icon.vue";
@@ -2547,14 +2547,14 @@ onBeforeUnmount(() => {
     />
 
     <div class="zoom-bar glass">
-      <button v-tip="{ label: t('canvas.zoomOut'), shortcut: keyOf('view.zoomOut') }" @click="zoomStep(1 / 1.2)">−</button>
+      <button v-tip="{ label: t('canvas.zoomOut'), shortcut: keyLabel('view.zoomOut') }" @click="zoomStep(1 / 1.2)">−</button>
       <button class="zoom-pct" v-tip="{ label: t('canvas.zoomSelect') }" @click="zoomMenuOpen = !zoomMenuOpen">{{ zoomPct }}%</button>
-      <button v-tip="{ label: t('canvas.zoomIn'), shortcut: keyOf('view.zoomIn') }" @click="zoomStep(1.2)">＋</button>
+      <button v-tip="{ label: t('canvas.zoomIn'), shortcut: keyLabel('view.zoomIn') }" @click="zoomStep(1.2)">＋</button>
       <span class="z-divider" />
-      <button class="z-fit" v-tip="{ label: ui.mode === 'edit' ? t('canvas.fitActive') : t('canvas.fitAll'), shortcut: keyOf('view.fit') }" @click="fitView()">
+      <button class="z-fit" v-tip="{ label: ui.mode === 'edit' ? t('canvas.fitActive') : t('canvas.fitAll'), shortcut: keyLabel('view.fit') }" @click="fitView()">
         <Icon name="fit" :size="13" />
       </button>
-      <button class="z-fit" v-tip="{ label: t('canvas.viewAll'), shortcut: keyOf('view.fitAll') }" @click="fitAll()">
+      <button class="z-fit" v-tip="{ label: t('canvas.viewAll'), shortcut: keyLabel('view.fitAll') }" @click="fitAll()">
         <Icon name="pages" :size="13" />
       </button>
     </div>

@@ -3,9 +3,9 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { docStore, redo, switchMode, ui, undo, type ToolKind } from "../store";
 import { closeDocument, fileState, openDocument, saveDocument, saveDocumentAs } from "../file-session";
 import { openContextMenu, type ContextMenuItem } from "../context-menu";
-import { keyOf, PANEL_BINDING, registerShortcuts, shortcutUi, type ActionId } from "../shortcuts";
+import { keyLabel, PANEL_BINDING, registerShortcuts, shortcutUi, type ActionId } from "../shortcuts";
 import { vTip } from "../tooltip";
-import { restartToUpdate, updateReady, updateUi } from "../update";
+import { downloadUpdate, restartToUpdate, updateAvailable, updateReady, updateUi } from "../update";
 import { t } from "../i18n";
 import { enterPresenter } from "../presenter";
 import type { MessageKey } from "../../shared/i18n";
@@ -70,15 +70,15 @@ function openOverflowMenu(e: MouseEvent): void {
       disabled: true,
       run: () => {},
     });
-    items.push({ label: t("toolbar.backToWelcome"), hint: keyOf("file.closeDoc"), run: () => void onClose() });
+    items.push({ label: t("toolbar.backToWelcome"), hint: keyLabel("file.closeDoc"), run: () => void onClose() });
   }
   if (hiddenGroups.value.has("file")) {
-    items.push({ label: t("menu.open"), hint: keyOf("file.open"), separator: items.length > 0, run: () => void onOpen() });
-    items.push({ label: t("menu.save"), hint: keyOf("file.save"), run: () => void onSave() });
+    items.push({ label: t("menu.open"), hint: keyLabel("file.open"), separator: items.length > 0, run: () => void onOpen() });
+    items.push({ label: t("menu.save"), hint: keyLabel("file.save"), run: () => void onSave() });
   }
   if (hiddenGroups.value.has("history")) {
-    items.push({ label: t("menu.undo"), hint: keyOf("edit.undo"), separator: items.length > 0, disabled: !docStore.canUndo, run: () => undo() });
-    items.push({ label: t("menu.redo"), hint: keyOf("edit.redo"), disabled: !docStore.canRedo, run: () => redo() });
+    items.push({ label: t("menu.undo"), hint: keyLabel("edit.undo"), separator: items.length > 0, disabled: !docStore.canUndo, run: () => undo() });
+    items.push({ label: t("menu.redo"), hint: keyLabel("edit.redo"), disabled: !docStore.canRedo, run: () => redo() });
   }
   if (hiddenGroups.value.has("shortcuts")) {
     items.push({ label: t("shortcuts.title"), hint: PANEL_BINDING, separator: items.length > 0, run: () => toggleShortcuts() });
@@ -175,7 +175,7 @@ onBeforeUnmount(() => {
       <span v-if="docDirty" class="doc-dot" aria-hidden="true">•</span>
       <button
         class="doc-close"
-        v-tip="{ label: t('toolbar.closeDocTip'), shortcut: keyOf('file.closeDoc') }"
+        v-tip="{ label: t('toolbar.closeDocTip'), shortcut: keyLabel('file.closeDoc') }"
         @click="onClose"
       >
         <Icon name="close" :size="11" />
@@ -184,13 +184,13 @@ onBeforeUnmount(() => {
     <button
       v-show="!hiddenGroups.has('doc')"
       class="doc-chip back"
-      v-tip="{ label: t('toolbar.closeDocTip'), shortcut: keyOf('file.closeDoc') }"
+      v-tip="{ label: t('toolbar.closeDocTip'), shortcut: keyLabel('file.closeDoc') }"
       @click="onClose"
     >
       <Icon name="home" :size="12" /><span>{{ t("toolbar.welcome") }}</span>
     </button>
 
-    <!-- 更新就绪：唯一的常驻入口；平时不存在，不占视觉 -->
+    <!-- 更新入口：mac 就绪后可重启安装；Windows 只能去下载页，常驻直到更新 -->
     <button
       v-if="updateReady"
       class="doc-chip update"
@@ -199,6 +199,14 @@ onBeforeUnmount(() => {
     >
       <Icon name="update" :size="12" /><span>{{ t("about.restart") }}</span>
     </button>
+    <button
+      v-else-if="updateAvailable"
+      class="doc-chip update"
+      v-tip="{ label: t('update.available', { version: updateUi.latestVersion ?? '' }) }"
+      @click="downloadUpdate"
+    >
+      <Icon name="update" :size="12" /><span>{{ t("update.download") }}</span>
+    </button>
 
     <span v-show="!hiddenGroups.has('doc')" class="divider" />
 
@@ -206,7 +214,7 @@ onBeforeUnmount(() => {
       <button
         class="mode-btn"
         :class="{ active: ui.mode === 'pan' }"
-        v-tip="{ label: t('toolbar.dragCanvas'), shortcut: keyOf('mode.pan') }"
+        v-tip="{ label: t('toolbar.dragCanvas'), shortcut: keyLabel('mode.pan') }"
         @click="switchMode('pan')"
       >
         <Icon name="hand" :size="13" /><span>{{ t("toolbar.drag") }}</span>
@@ -214,7 +222,7 @@ onBeforeUnmount(() => {
       <button
         class="mode-btn"
         :class="{ active: ui.mode === 'edit' }"
-        v-tip="{ label: t('toolbar.editPage'), shortcut: keyOf('mode.edit') }"
+        v-tip="{ label: t('toolbar.editPage'), shortcut: keyLabel('mode.edit') }"
         @click="switchMode('edit')"
       >
         <Icon name="select" :size="13" /><span>{{ t("toolbar.edit") }}</span>
@@ -230,7 +238,7 @@ onBeforeUnmount(() => {
         class="icon-btn"
         :class="{ active: ui.mode === 'edit' && ui.tool === tool.kind }"
         :disabled="!hasPage"
-        v-tip="{ label: hasPage ? t(tool.labelKey) : t('toolbar.newPageFirst'), shortcut: keyOf(tool.action) }"
+        v-tip="{ label: hasPage ? t(tool.labelKey) : t('toolbar.newPageFirst'), shortcut: keyLabel(tool.action) }"
         @click="pickTool(tool.kind)"
       >
         <Icon :name="tool.icon" />
@@ -238,17 +246,17 @@ onBeforeUnmount(() => {
     </nav>
     <span v-show="!hiddenGroups.has('history')" class="divider" />
     <nav v-show="!hiddenGroups.has('history')" class="group">
-      <button class="icon-btn" v-tip="{ label: t('menu.undo'), shortcut: keyOf('edit.undo') }" :disabled="!docStore.canUndo" @click="undo">
+      <button class="icon-btn" v-tip="{ label: t('menu.undo'), shortcut: keyLabel('edit.undo') }" :disabled="!docStore.canUndo" @click="undo">
         <Icon name="undo" />
       </button>
-      <button class="icon-btn" v-tip="{ label: t('menu.redo'), shortcut: keyOf('edit.redo') }" :disabled="!docStore.canRedo" @click="redo">
+      <button class="icon-btn" v-tip="{ label: t('menu.redo'), shortcut: keyLabel('edit.redo') }" :disabled="!docStore.canRedo" @click="redo">
         <Icon name="redo" />
       </button>
     </nav>
     <span v-show="!hiddenGroups.has('file')" class="divider" />
     <nav v-show="!hiddenGroups.has('file')" class="group">
-      <button class="icon-btn" v-tip="{ label: t('toolbar.open'), shortcut: keyOf('file.open') }" @click="onOpen"><Icon name="open" /></button>
-      <button class="icon-btn" v-tip="{ label: t('menu.save'), shortcut: keyOf('file.save') }" @click="onSave"><Icon name="save" /></button>
+      <button class="icon-btn" v-tip="{ label: t('toolbar.open'), shortcut: keyLabel('file.open') }" @click="onOpen"><Icon name="open" /></button>
+      <button class="icon-btn" v-tip="{ label: t('menu.save'), shortcut: keyLabel('file.save') }" @click="onSave"><Icon name="save" /></button>
     </nav>
     <span v-show="!hiddenGroups.has('shortcuts')" class="divider" />
 
@@ -268,7 +276,7 @@ onBeforeUnmount(() => {
       v-show="!hiddenGroups.has('doc')"
       class="icon-btn"
       :disabled="!hasPage"
-      v-tip="{ label: t('toolbar.present'), shortcut: keyOf('view.present') }"
+      v-tip="{ label: t('toolbar.present'), shortcut: keyLabel('view.present') }"
       @click="present"
     >
       <Icon name="play" />
