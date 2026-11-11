@@ -1401,3 +1401,79 @@ describe("AI 工具：inspect_layout 的数值 Token", () => {
     expect(row.resolved?.padding.top).toBe(20);
   });
 });
+
+describe("AI 工具：原型链接", () => {
+  it("set_interaction 建跳转，list_interactions 与 read_document 都能看到，一次撤销撤回", async () => {
+    const { store, run, pageId } = setup();
+    const b = await call(run, "create_page", { name: "B" });
+    const rect = await call(run, "create_node", {
+      kind: "rect",
+      parentId: pageId,
+      x: 0,
+      y: 0,
+      width: 80,
+      height: 32,
+    });
+
+    const res = await call(run, "set_interaction", {
+      nodeId: rect.nodeId,
+      action: "navigate",
+      targetPageId: b.pageId,
+      transition: "dissolve",
+      durationMs: 300,
+    });
+    expect(res).toMatchObject({ ok: true, action: "navigate", targetPageId: b.pageId, durationMs: 300 });
+    expect(store.doc.nodes[rect.nodeId as string].interactions?.[0]).toMatchObject({
+      action: "navigate",
+      targetId: b.pageId,
+      transition: { type: "dissolve", durationMs: 300 },
+    });
+
+    const listed = await call(run, "list_interactions");
+    const pages = listed.pages as Array<{ pageId: string; scroll: string; links: Array<Record<string, unknown>> }>;
+    const pageA = pages.find((page) => page.pageId === pageId)!;
+    expect(pageA.scroll).toBe("none");
+    expect(pageA.links[0]).toMatchObject({
+      nodeId: rect.nodeId,
+      action: "navigate",
+      target: { pageId: b.pageId, name: "B" },
+      transition: "dissolve",
+    });
+
+    const doc = await call(run, "read_document");
+    const subtree = JSON.parse((doc.pages as Array<{ subtree: string }>)[0].subtree) as Array<Record<string, unknown>>;
+    const serialized = subtree.find((node) => node.id === rect.nodeId)!;
+    expect((serialized.links as Array<Record<string, unknown>>)[0]).toMatchObject({
+      action: "navigate",
+      target: { pageId: b.pageId },
+    });
+
+    store.undo();
+    expect(store.doc.nodes[rect.nodeId as string].interactions).toBeUndefined();
+  });
+
+  it("back 不带目标也能写；非页面目标被拒绝；remove_interaction 清空", async () => {
+    const { store, run, pageId } = setup();
+    const rect = await call(run, "create_node", { kind: "rect", parentId: pageId, width: 40, height: 20 });
+    const other = await call(run, "create_node", { kind: "rect", parentId: pageId, x: 100, width: 40, height: 20 });
+
+    await call(run, "set_interaction", { nodeId: rect.nodeId, action: "back" });
+    expect(store.doc.nodes[rect.nodeId as string].interactions?.[0].action).toBe("back");
+
+    await expect(
+      run("set_interaction", { nodeId: rect.nodeId, action: "navigate", targetPageId: other.nodeId }),
+    ).rejects.toThrow(/不是页面/);
+
+    await call(run, "remove_interaction", { nodeId: rect.nodeId });
+    expect(store.doc.nodes[rect.nodeId as string].interactions).toBeUndefined();
+  });
+
+  it("update_node 可以设置页面的滚动方向，非页面拒绝", async () => {
+    const { store, run, pageId } = setup();
+    await call(run, "update_node", { nodeId: pageId, scrollDirection: "vertical" });
+    expect(store.doc.nodes[pageId].scrollDirection).toBe("vertical");
+
+    const rect = await call(run, "create_node", { kind: "rect", parentId: pageId, width: 40, height: 20 });
+    await expect(run("update_node", { nodeId: rect.nodeId, scrollDirection: "vertical" })).rejects.toThrow(/页面/);
+  });
+});

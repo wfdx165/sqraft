@@ -49,6 +49,8 @@ function cloneNodeData(node: DocNode): DocNode {
     layout: node.layout ? { ...node.layout } : undefined,
     propValues: node.propValues ? { ...node.propValues } : undefined,
     overrides: node.overrides ? structuredClone(node.overrides) : undefined,
+    // 母版上的原型链接不复制到实例：实例子孙没有播放环境，复制只会在每份实例里留死链接
+    interactions: undefined,
   };
   return copy;
 }

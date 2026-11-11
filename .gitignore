@@ -1,5 +1,6 @@
 node_modules/
 dist/
+docs/specs
 *.local
 .DS_Store
 .vite/

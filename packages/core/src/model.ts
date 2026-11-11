@@ -10,7 +10,7 @@ import { effectPadding } from "./effects";
 export type NodeId = string;
 
 /** 当前文件格式版本：新增字段时 +1，并在 migrate 里补一段迁移。 */
-export const CURRENT_FORMAT_VERSION = 7;
+export const CURRENT_FORMAT_VERSION = 8;
 
 export type NodeType =
   | "page" | "frame" | "group" | "rect" | "ellipse" | "line"
@@ -128,6 +128,35 @@ export type LayoutSizing = "fixed" | "hug" | "fill";
 export type TextAutoResize = "auto-width" | "auto-height" | "fixed";
 export type ListType = "none" | "bulleted" | "numbered";
 
+/** 页面在演示模式里的滚动方向；只影响演示，不影响编辑画布。 */
+export type ScrollDirection = "none" | "vertical" | "horizontal";
+
+/** 原型链接的触发方式（v1 只有点击）。 */
+export type InteractionTrigger = "click";
+/** 链接动作：跳到目标页面，或返回上一屏。 */
+export type InteractionAction = "navigate" | "back";
+/** 两屏之间的切换方式。 */
+export type TransitionType = "instant" | "dissolve";
+
+export interface InteractionTransition {
+  type: TransitionType;
+  /** 毫秒；instant 恒为 0，dissolve 夹到 60–2000 */
+  durationMs: number;
+}
+
+/**
+ * 原型链接：「点这里 → 跳到某页面 / 返回上一屏」。
+ * 数组是整组替换语义（与 style 同纪律），写入时先展开旧数组再改。
+ */
+export interface Interaction {
+  id: string;
+  trigger: InteractionTrigger;
+  action: InteractionAction;
+  /** 仅 action === "navigate" 使用；"back" 忽略 */
+  targetId?: NodeId;
+  transition: InteractionTransition;
+}
+
 /**
  * 字段级覆盖：style 允许只覆盖子字段（如 fill），其余字段按 DocNode 的形状给。
  * 同步时先展开母版值，再叠加覆盖。
@@ -214,6 +243,10 @@ export interface DocNode {
   isMask?: boolean;
   /** 参考线：仅 page 使用，页面本地坐标（页面左上角为原点） */
   guides?: { x: number[]; y: number[] };
+  /** 演示模式的滚动方向：仅 page 使用，缺省 none */
+  scrollDirection?: ScrollDirection;
+  /** 原型链接：只有页面子树里的节点可以持有（见 interaction.ts） */
+  interactions?: Interaction[];
   /**
    * 页面背景图：图片盖在背景色之上，不参与命中与图层树。
    * 尺寸以解码后的位图为准；`natural*` 只为兼容旧文件保留（新写入不再生成）。

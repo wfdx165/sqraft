@@ -7,6 +7,7 @@ import { keyOf, PANEL_BINDING, registerShortcuts, shortcutUi, type ActionId } fr
 import { vTip } from "../tooltip";
 import { restartToUpdate, updateReady, updateUi } from "../update";
 import { t } from "../i18n";
+import { enterPresenter } from "../presenter";
 import type { MessageKey } from "../../shared/i18n";
 import appIcon from "../brand/app-icon.png";
 import Icon from "./Icon.vue";
@@ -27,6 +28,10 @@ const hasPage = computed(() => {
   void ui.version;
   return docStore.doc.rootIds.some((id) => docStore.doc.nodes[id]?.type === "page");
 });
+
+function present(): void {
+  enterPresenter();
+}
 
 /* ---------- 窄窗口：低优先级分组收进「⋯」 ---------- */
 /** 收起顺序（从最先收起的开始）：文档胶囊 → 打开/保存 → 快捷键入口 → 撤销/重做 */
@@ -259,6 +264,16 @@ onBeforeUnmount(() => {
     </button>
 
     <!-- 窄窗口：被收起的分组集中在这里 -->
+    <button
+      v-show="!hiddenGroups.has('doc')"
+      class="icon-btn"
+      :disabled="!hasPage"
+      v-tip="{ label: t('toolbar.present'), shortcut: keyOf('view.present') }"
+      @click="present"
+    >
+      <Icon name="play" />
+    </button>
+
     <button
       v-if="hiddenGroups.size > 0"
       class="icon-btn overflow"

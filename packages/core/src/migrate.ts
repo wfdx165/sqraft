@@ -115,6 +115,9 @@ export function migrateDoc(state: DocState, fromVersion = state.formatVersion ??
   // 7：样式/布局新增可选的数值 Token 引用（fontSizeToken / cornerRadiusTokens / gapToken …）。
   //    缺省即字面量，不需要改数据。
   if (version < 7) version = 7;
+  // 8：节点新增可选的 `interactions`（原型链接）与页面 `scrollDirection`。
+  //    缺省即「没有链接 / 不滚动」，不需要改数据。
+  if (version < 8) version = 8;
   state.formatVersion = CURRENT_FORMAT_VERSION;
   return state;
 }

@@ -43,11 +43,12 @@ If you would rather not auto-update, **Help → Check for Updates…** checks ma
 - **Vector canvas**: rectangles, ellipses, polygons, lines, pen paths, text; infinite canvas with multiple pages
 - **Auto layout**: direction, gap, padding, hug / fill / fixed, wrapping, drag to reorder
 - **Components**: main components, instances, slots, instance overrides and swapping
+- **Prototype links**: click a layer to jump to another page or go back, with instant / fade transitions; present mode scrolls pages and `H` highlights hotspots
 - **Design tokens**: colors and numbers (font size, radius, spacing…); change once and it applies everywhere
 - **Editing**: multi-select, marquee, align and distribute, drag to reparent, grouping, guides, snapping
 - **Effects**: drop shadow, inner shadow, layer blur, background blur
 - **Images**: drag in, paste, crop, mask, linked images (cached locally)
-- **AI editing**: agents create nodes, change styles and screenshot the result over MCP; one tool call = one undo step
+- **AI editing**: agents create nodes, change styles and screenshot the result over MCP; they can also wire prototype links, so a generated design is clickable; one tool call = one undo step
 - **Export**: PNG (with scale)
 - **Interface languages**: 中文 / English / 日本語 / 한국어, with optional automatic system-language detection
 

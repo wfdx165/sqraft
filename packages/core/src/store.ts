@@ -32,6 +32,7 @@ import { expandAlign, expandDistribute, expandReorder, type AlignParams, type Di
 import { expandGroup, expandUngroup, type GroupParams } from "./group";
 import { expandScale, type ScaleParams } from "./scale";
 import { expandRotate, type RotateParams } from "./rotate";
+import { assertLinkPlacement, linkCleanupForPage, linkStripTargets, normalizeInteractions } from "./interaction";
 
 export type Command =
   | { type: "node.create"; params: { nodes: DocNode[]; parentId: NodeId | null; index?: number } }
@@ -94,6 +95,16 @@ interface Inverse {
 }
 
 export type ChangeListener = (state: DocState, changedIds: Set<NodeId>) => void;
+
+/** 页面滚动方向的白名单：任何入口（GUI / AI）共用。 */
+const SCROLL_DIRECTIONS = new Set(["none", "vertical", "horizontal"]);
+
+function assertScrollDirection(value: unknown): void {
+  if (value === undefined) return;
+  if (typeof value !== "string" || !SCROLL_DIRECTIONS.has(value)) {
+    throw new Error(`未知的滚动方向：${String(value)}`);
+  }
+}
 
 /** 同步规划器产出的操作 → 普通命令（与 GUI/AI 走同一套 applyOne 与撤销记录）。 */
 function syncOpToCommand(op: SyncOp): Command {
@@ -543,18 +554,23 @@ export class DocStore {
     return out;
   }
 
-  /** 删除组件/页面时，先把引用它们的实例脱离，再删除。 */
+  /** 删除组件/页面时，先把引用它们的实例脱离、指向页面的链接清掉，再删除。 */
   private expandDelete(cmd: Extract<Command, { type: "node.delete" }>): Command[] {
     const node = this.state.nodes[cmd.params.nodeId];
     if (!node) return [cmd];
+    const out: Command[] = [];
+    if (node.type === "page") out.push(...this.expandPageLinkCleanup(node.id));
+
     const components = new Set<NodeId>();
     if (node.type === "component") components.add(node.id);
     walkSubtree(this.state, node.id, (n) => {
       if (n.id !== node.id && n.type === "component") components.add(n.id);
     });
-    if (components.size === 0) return [cmd];
+    if (components.size === 0) {
+      out.push(cmd);
+      return out;
+    }
 
-    const out: Command[] = [];
     const detached = new Set<NodeId>();
     for (const componentId of components) {
       for (const instance of Object.values(this.state.nodes)) {
@@ -629,6 +645,11 @@ export class DocStore {
       else if (cmd.type === "instance.swap") out.push(...this.expandInstanceSwap(cmd));
       else if (cmd.type === "component.detach") out.push(...this.expandDetach(cmd.params.instanceId));
       else if (cmd.type === "node.delete") out.push(...this.expandDelete(cmd));
+      else if (cmd.type === "node.reparent") {
+        // 换父级离开页面子树（进主组件、多选转组件）时链接失效，先清掉
+        out.push(...this.expandLinkStrip(cmd.params.nodeId, cmd.params.parentId));
+        out.push(cmd);
+      }
       else if (cmd.type === "node.create") out.push(...this.expandSlotPreInsert(cmd.params.parentId, cmd));
       else if (cmd.type === "instance.create") out.push(...this.expandSlotPreInsert(cmd.params.parentId, cmd));
       else out.push(cmd);
@@ -664,6 +685,63 @@ export class DocStore {
       cur = node.parentId;
     }
     return false;
+  }
+
+  /** 这个父级链上能否放带原型链接的节点：必须落在页面里，且不能在实例内部。 */
+  private parentAllowsLinks(parentId: NodeId | null | undefined): boolean {
+    let cur = parentId ? this.state.nodes[parentId] : undefined;
+    while (cur) {
+      if (cur.type === "instance") return false;
+      if (cur.type === "page") return true;
+      cur = cur.parentId ? this.state.nodes[cur.parentId] : undefined;
+    }
+    return false;
+  }
+
+  /**
+   * 换父级离开页面子树时（拖进主组件、多选转组件包壳），清掉子树里的原型链接：
+   * 主组件没有播放环境，留着只会变成永远不触发的死链接。
+   */
+  private expandLinkStrip(nodeId: NodeId, parentId: NodeId | null): Command[] {
+    if (this.parentAllowsLinks(parentId)) return [];
+    return linkStripTargets(this.state, nodeId).map((id) => ({
+      type: "node.update",
+      params: { nodeId: id, patch: { interactions: undefined } },
+    }));
+  }
+
+  /** 删除页面前，清掉所有指向它的链接（同一事务，撤销可原样还原）。 */
+  private expandPageLinkCleanup(pageId: NodeId): Command[] {
+    return linkCleanupForPage(this.state, pageId).map((item) => ({
+      type: "node.update",
+      params: { nodeId: item.nodeId, patch: { interactions: item.interactions } },
+    }));
+  }
+
+  /**
+   * 沿「这一批创建出来的节点 + 现有文档」的父级链向上，返回祖先 id 与能否挂链接。
+   * 复制/粘贴整页时父级链先落在同一批的节点上，只看命令的 parentId 会误判。
+   */
+  private linkChain(
+    nodeId: NodeId,
+    created: ReadonlyMap<NodeId, DocNode>,
+    rootParentId: NodeId | null,
+  ): { ancestors: NodeId[]; allows: boolean } {
+    const ancestors: NodeId[] = [];
+    let cur = created.get(nodeId)?.parentId ?? null;
+    // createNode 出来的节点不预填 parentId，父级由命令参数给
+    if (!cur) cur = this.state.nodes[nodeId]?.parentId ?? rootParentId;
+    let guard = 0;
+    while (cur && guard < 10_000) {
+      guard += 1;
+      ancestors.push(cur);
+      const parent = created.get(cur) ?? this.state.nodes[cur];
+      if (!parent) return { ancestors, allows: false };
+      if (parent.type === "instance") return { ancestors, allows: false };
+      if (parent.type === "page") return { ancestors, allows: true };
+      cur = parent.parentId;
+    }
+    return { ancestors, allows: false };
   }
 
   private expandComponentCreate(
@@ -704,6 +782,8 @@ export class DocStore {
       if (node.type === "frame" || node.type === "group") {
         const r = worldRect(this.state, node.id)!;
         return [
+          // 主组件没有播放环境：转组件前把子树里的原型链接清掉，避免留死链接
+          ...this.expandLinkStrip(node.id, null),
           { type: "node.reparent", params: { nodeId: node.id, parentId: null, x: r.x, y: r.y } },
           { type: "node.update", params: { nodeId: node.id, patch: { type: "component", name } } },
         ];
@@ -730,6 +810,8 @@ export class DocStore {
       style: {},
     });
     const out: Command[] = [{ type: "node.create", params: { nodes: [component], parentId: null } }];
+    // 多选包壳同样是「进入主组件」：先清掉子树里的链接
+    for (const id of top) out.push(...this.expandLinkStrip(id, null));
     for (const id of top) {
       const r = worldRect(this.state, id)!;
       out.push({
@@ -1021,6 +1103,19 @@ export class DocStore {
     switch (cmd.type) {
       case "node.create": {
         for (const n of cmd.params.nodes) if (n.vector) validateVector(n.vector);
+        // 复制/粘贴整页时，链接所在节点的父级在同一批里，必须按批次链判断位置
+        const created = new Map(cmd.params.nodes.map((n) => [n.id, n] as const));
+        for (const n of cmd.params.nodes) {
+          if (n.interactions === undefined) continue;
+          const chain = this.linkChain(n.id, created, cmd.params.parentId);
+          normalizeInteractions(this.state, n.id, n.interactions, { pending: pendingTypes, ancestors: chain.ancestors });
+          if (!chain.allows) throw new Error("原型链接只能挂在页面里的图层上");
+        }
+        for (const n of cmd.params.nodes) {
+          if (n.scrollDirection === undefined) continue;
+          assertScrollDirection(n.scrollDirection);
+          if (n.type !== "page") throw new Error("滚动方向只对页面生效");
+        }
         const rootNode = cmd.params.nodes[0];
         const components = cmd.params.nodes.filter((n) => n.type === "component");
         // 主组件是单独的根节点：一批里最多一个，且必须在首位、父级为根
@@ -1039,6 +1134,20 @@ export class DocStore {
       }
       case "node.update":
         if (cmd.params.patch.vector) validateVector(cmd.params.patch.vector as VectorPath);
+        if (cmd.params.patch.interactions !== undefined) {
+          const target = this.state.nodes[cmd.params.nodeId];
+          normalizeInteractions(this.state, cmd.params.nodeId, cmd.params.patch.interactions, { pending: pendingTypes });
+          // 同一批里刚创建、还没落进 state 的节点交给执行期；已存在的节点在这里卡位置
+          if (target && (cmd.params.patch.interactions?.length ?? 0) > 0) {
+            assertLinkPlacement(this.state, target.id);
+          }
+        }
+        if (cmd.params.patch.scrollDirection !== undefined) {
+          assertScrollDirection(cmd.params.patch.scrollDirection);
+          const node = this.state.nodes[cmd.params.nodeId];
+          const type = node?.type ?? pendingTypes.get(cmd.params.nodeId);
+          if (type && type !== "page") throw new Error("滚动方向只对页面生效");
+        }
         {
           const node = this.state.nodes[cmd.params.nodeId];
           const patch = cmd.params.patch;
@@ -1293,6 +1402,10 @@ export class DocStore {
             stored.width = Math.max(1, stored.width);
             stored.height = Math.max(1, stored.height);
           }
+          if (stored.interactions !== undefined) {
+            // 与 polygon 同理：入口统一归一化，写进文档的都是合法值
+            stored.interactions = normalizeInteractions(this.state, stored.id, stored.interactions);
+          }
           storedNodes.push(stored);
           this.state.nodes[stored.id] = stored;
         }
@@ -1358,6 +1471,9 @@ export class DocStore {
           if (next.sides !== undefined) next.sides = clampSides(next.sides as number);
           if (next.width !== undefined) next.width = Math.max(1, next.width as number);
           if (next.height !== undefined) next.height = Math.max(1, next.height as number);
+        }
+        if (next.interactions !== undefined) {
+          next.interactions = normalizeInteractions(this.state, nodeId, next.interactions);
         }
         const prev: Record<string, unknown> = {};
         for (const key of Object.keys(next) as Array<keyof DocNode>) {

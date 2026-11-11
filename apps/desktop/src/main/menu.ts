@@ -44,6 +44,7 @@ const DEFAULT_BINDINGS: Record<string, string> = {
   "view.toggleGrid": "⌘'",
   "view.toggleSnap": "⌘⌥'",
   "view.toggleGuides": "⌘;",
+  "view.present": "⌥⌘Enter",
 };
 
 /** `⌘⇧Z` → Electron accelerator（只用于 macOS 的展示）。 */
@@ -252,6 +253,8 @@ export function buildTemplate(
       actionItem("view.toggleGrid", t("menu.showGrid"), mac),
       actionItem("view.toggleSnap", t("menu.enableSnap"), mac),
       actionItem("view.toggleGuides", t("menu.showGuides"), mac),
+      { type: "separator" },
+      actionItem("view.present", t("menu.present"), mac),
       { type: "separator" },
       { role: "togglefullscreen", label: t("menu.enterFullscreen") },
     ],

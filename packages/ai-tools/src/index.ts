@@ -47,6 +47,8 @@ import {
   tokenPathOf,
   walkSubtree,
   worldRect,
+  DEFAULT_DISSOLVE_MS,
+  type Interaction,
   type CornerRadius,
   type LayoutSpec,
   type Padding,
@@ -233,6 +235,48 @@ export const tools: ToolDefinition[] = [
     name: "get_selection",
     description:
       "读取画布当前选区（用户正在选中的节点），返回活动页 id 与每个选中节点的摘要：id / name / type / parentId / 世界坐标 x,y / width / height / locked / visible，实例还带 componentId、实例子孙带 mainId。想对「用户选的东西」动手时先调它，再把 nodeId 显式传给 update_node / arrange_nodes 等工具。选区为空时给空数组与 hint。只读。",
+    readonly: true,
+    input_schema: { type: "object", properties: {}, additionalProperties: false },
+  },
+  {
+    name: "set_interaction",
+    description:
+      "给页面里的图层设置一条「点击后」原型链接（演示模式里生效）：action=navigate 跳到 targetPageId，action=back 返回上一屏。只改写该图层的第一条点击交互，其余交互保持不动；一次调用 = 一个撤销步。热区必须在页面子树里（主组件、实例内部的图层不能挂链接），目标必须是页面，且不能是自己所在的页面。",
+    input_schema: {
+      type: "object",
+      properties: {
+        nodeId: { type: "string", description: "热区图层 id，必须位于页面里" },
+        action: {
+          type: "string",
+          enum: ["navigate", "back"],
+          description: "navigate = 跳到目标页面；back = 返回上一屏（出栈）",
+        },
+        targetPageId: { type: "string", description: "目标页面 id；action=back 时不要传" },
+        transition: {
+          type: "string",
+          enum: ["instant", "dissolve"],
+          description: "转场方式：instant 瞬间切换，dissolve 淡入；默认 dissolve",
+        },
+        durationMs: { type: "number", description: "淡入时长（60–2000 毫秒）；instant 时忽略" },
+      },
+      required: ["nodeId", "action"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "remove_interaction",
+    description: "移除图层上的全部点击交互（可撤销）。",
+    input_schema: {
+      type: "object",
+      properties: { nodeId: { type: "string" } },
+      required: ["nodeId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "list_interactions",
+    description:
+      "列出文档里所有原型链接：每条带热区节点、所在页面、目标页面（或 back）、转场与时长；同时给出每个页面的滚动方向（none / vertical / horizontal）。只读。",
     readonly: true,
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
@@ -456,6 +500,11 @@ export const tools: ToolDefinition[] = [
         text: { type: "string" },
         sides: { type: "number", description: "polygon 的边数，3–12" },
         closed: { type: "boolean" },
+        scrollDirection: {
+          type: "string",
+          enum: ["none", "vertical", "horizontal"],
+          description: "页面在演示模式里的滚动方向（仅 page）；none = 不滚动",
+        },
         crop: {
           type: "object",
           description: "图片的可见区域（原图像素坐标）；省略的字段保持原值",
@@ -739,6 +788,20 @@ function serializeSubtree(store: DocStore, id: NodeId): string {
       ...(n.overrides ? { overrides: n.overrides } : {}),
       ...(n.slotFilled !== undefined ? { slotFilled: n.slotFilled } : {}),
       ...(n.propertyDefs ? { propertyDefs: n.propertyDefs } : {}),
+      ...(n.scrollDirection ? { scrollDirection: n.scrollDirection } : {}),
+      ...(n.interactions?.length
+        ? {
+            links: n.interactions.map((link) => ({
+              id: link.id,
+              action: link.action,
+              target: link.targetId
+                ? { pageId: link.targetId, name: store.doc.nodes[link.targetId]?.name ?? "" }
+                : undefined,
+              transition: link.transition.type,
+              durationMs: link.transition.durationMs,
+            })),
+          }
+        : {}),
     }),
   );
   return JSON.stringify(out);
@@ -977,6 +1040,7 @@ function applyNodeArgs(args: Record<string, unknown>, baseLayout?: LayoutSpec): 
     "x", "y", "width", "height", "rotation", "opacity", "visible", "locked", "clip",
     "layoutSizingW", "layoutSizingH", "layoutMinW", "layoutMinH", "layoutMaxW", "layoutMaxH",
     "layoutAbsolute", "text", "textAutoResize", "listType", "truncate",
+    "scrollDirection",
   ] as const;
   for (const key of keys) {
     if (args[key] !== undefined) (patch as Record<string, unknown>)[key] = args[key];
@@ -1010,6 +1074,8 @@ export const MUTATING_TOOLS: ReadonlySet<string> = new Set([
   "group_nodes",
   "arrange_nodes",
   "duplicate_node",
+  "set_interaction",
+  "remove_interaction",
 ]);
 
 /** 远程图片地址只能是 http/https；完整的网络校验（大小/超时/重定向）由主进程抓取时做。 */
@@ -1140,6 +1206,75 @@ export function makeExecutor(
           nodes,
           ...(nodes.length === 0 ? { hint: "画布上没有选中对象" } : {}),
         });
+      }
+      case "set_interaction": {
+        const nodeId = args.nodeId as NodeId;
+        const node = store.doc.nodes[nodeId];
+        if (!node) throw new Error(`节点 ${nodeId} 不存在`);
+        const action = String(args.action);
+        if (action !== "navigate" && action !== "back") throw new Error("action 只能是 navigate 或 back");
+
+        let targetId: NodeId | undefined;
+        if (action === "navigate") {
+          targetId = String(args.targetPageId ?? "");
+          if (!targetId) throw new Error("action=navigate 需要 targetPageId");
+          const target = store.doc.nodes[targetId];
+          if (!target) throw new Error(`目标页面 ${targetId} 不存在`);
+          if (target.type !== "page") throw new Error(`节点 ${targetId} 不是页面，链接只能跳到页面`);
+        }
+
+        const type = action === "back" ? "instant" : args.transition === "instant" ? "instant" : "dissolve";
+        const raw = args.durationMs === undefined ? DEFAULT_DISSOLVE_MS : Number(args.durationMs);
+        if (!Number.isFinite(raw)) throw new Error("durationMs 必须是数字");
+        const link: Interaction = {
+          // 复用第一条交互的 id：外部按 id 记账时不会因为改目标而失效
+          id: node.interactions?.[0]?.id ?? newId(),
+          trigger: "click",
+          action,
+          ...(targetId ? { targetId } : {}),
+          transition: { type, durationMs: type === "instant" ? 0 : raw },
+        };
+        // 只替换第一条点击交互，agent 写入的其余交互保持不动
+        const rest = (node.interactions ?? []).slice(1);
+        store.apply(
+          { type: "node.update", params: { nodeId, patch: { interactions: [link, ...rest] } } },
+          "ai:interaction",
+        );
+        return JSON.stringify({
+          ok: true,
+          id: link.id,
+          nodeId,
+          action,
+          ...(targetId ? { targetPageId: targetId } : {}),
+          transition: link.transition.type,
+          durationMs: link.transition.durationMs,
+        });
+      }
+      case "remove_interaction": {
+        const nodeId = args.nodeId as NodeId;
+        if (!store.doc.nodes[nodeId]) throw new Error(`节点 ${nodeId} 不存在`);
+        store.apply({ type: "node.update", params: { nodeId, patch: { interactions: undefined } } }, "ai:interaction");
+        return JSON.stringify({ ok: true, nodeId });
+      }
+      case "list_interactions": {
+        const pages = getPages(store.doc).map((page) => {
+          const links: unknown[] = [];
+          walkSubtree(store.doc, page.id, (n) => {
+            for (const link of n.interactions ?? []) {
+              const target = link.targetId ? store.doc.nodes[link.targetId] : null;
+              links.push({
+                nodeId: n.id,
+                name: n.name,
+                action: link.action,
+                ...(target ? { target: { pageId: target.id, name: target.name } } : {}),
+                transition: link.transition.type,
+                durationMs: link.transition.durationMs,
+              });
+            }
+          });
+          return { pageId: page.id, name: page.name, scroll: page.scrollDirection ?? "none", links };
+        });
+        return JSON.stringify({ pages });
       }
       case "get_tokens": {
         const tokens = store.doc.tokens;

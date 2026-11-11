@@ -9,6 +9,7 @@
 import { reactive, ref } from "vue";
 import { logInfo, logWarn } from "./log";
 import { t } from "./i18n";
+import { ui } from "./store";
 import type { MessageKey } from "../shared/i18n";
 
 export type ActionId =
@@ -47,6 +48,7 @@ export type ActionId =
   | "view.toggleGrid"
   | "view.toggleSnap"
   | "view.toggleGuides"
+  | "view.present"
   | "focus.pageSearch"
   | "file.new"
   | "file.open"
@@ -107,6 +109,7 @@ export const ACTIONS: ShortcutAction[] = [
   { id: "view.toggleGrid", group: "view", labelKey: "menu.showGrid", default: "⌘'" },
   { id: "view.toggleSnap", group: "view", labelKey: "menu.enableSnap", default: "⌘⌥'" },
   { id: "view.toggleGuides", group: "view", labelKey: "menu.showGuides", default: "⌘;" },
+  { id: "view.present", group: "view", labelKey: "menu.present", default: "⌥⌘Enter" },
   { id: "focus.pageSearch", group: "other", labelKey: "shortcut.focusPageSearch", default: "⌘F" },
   { id: "file.new", group: "other", labelKey: "shortcut.newDoc", default: "⌘N" },
   { id: "file.open", group: "other", labelKey: "shortcut.openFile", default: "⌘O" },
@@ -300,6 +303,11 @@ export function registerShortcuts(map: Partial<Record<ActionId, () => void>>): (
 
 /** 供组件主动触发某动作（菜单派发、面板里的"试试"按钮），未登记则忽略但留痕。 */
 export function runAction(id: ActionId): void {
+  // 演示模式只读：原生菜单也能触发动作，这里必须和键盘走同一道闸门
+  if (ui.presenter && id !== "view.present") {
+    logWarn("menu action dropped while presenting", { action: id });
+    return;
+  }
   const run = executors.get(id);
   if (!run) {
     // 菜单项在欢迎页等没有执行器的状态下点击：和快捷键同一条兜底
@@ -321,6 +329,8 @@ export function installShortcuts(): () => void {
 
     const binding = bindingOfEvent(e);
     if (!binding) return;
+    // 演示模式：除"演示"入口本身（用于退出）外全部让位
+    if (ui.presenter && binding !== keyOf("view.present")) return;
 
     // ⌘/ 是固定入口：面板开着时也要能关（先于"面板打开即让位"判断）
     if (binding === PANEL_BINDING) {

@@ -361,3 +361,13 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 - **构建期防护**（ADR-0030）：三个入口都 esbuild 压缩、不生成 sourcemap；`dependencies` 必须为空（渲染层与主进程的依赖全在构建期 bundle 进去，成品不含 `node_modules`）；`afterPack` 翻转 Electron fuse（禁 `RunAsNode` / `NODE_OPTIONS` / 调试参数，只允许从 asar 加载）。`scripts/verify-pack.mjs` 在发版链路里断言以上全部成立，不成立就中止。`.sqraft` 仍是明文 zip。
 - **版本与标识**：版本号唯一真源是 `apps/desktop/package.json`（手动修改；`pnpm release` 只读、不接受版本参数）；发版的硬门槛是 `docs/releases/vX.md` 存在且非空，脚本不检查本地分支、工作区或 tag，`latest.json` 也不记录 commit；`appId` 沿用 `com.yjsoft.sqraft`——0.0.2 起已对外使用，改名会让已装用户被 macOS 当成另一个应用，因此保持不变。
 - **界面语言**（ADR-0031）：`zh-CN` / `en-US` / `ja-JP` / `ko-KR`，`auto` 跟随系统（`zh*` / `ja*` / `ko*`，其余英文）+ 设置面板手动覆盖；主进程与渲染层共用 `src/shared/i18n` 的类型化字典，界面文案一律走 `t()`；界面与新建文本按语言切换 CJK 字体栈，日文换行带轻量禁则；日志、MCP 工具描述、README/docs 与更新说明不在本地化范围。核心对用户可触发的错误抛 `AppError`，界面按 code 翻译。
+
+## 17. 原型链接与演示模式
+
+- **数据**：`DocNode.interactions?: Interaction[]`（ADR-0032）。每条是 `{ id, trigger: "click", action: "navigate" | "back", targetId?, transition: { type: "instant" | "dissolve", durationMs } }`；`targetId` 只能是 `page` 节点。页面另有 `scrollDirection?: "none" | "vertical" | "horizontal"`，只影响演示模式。数组是**整组替换**语义（与 `patch.style` 同纪律）。
+- **校验**：`packages/core/src/interaction.ts` 的 `normalizeInteractions` 是唯一入口——条数、id 唯一性、目标类型、不能指向自己所在页面、转场白名单、时长夹紧。`DocStore.validateOne` 抛错、`applyOne` 归一化；GUI 与 MCP 共用。
+- **引用完整性**：`node.delete` 删除页面前先展开引用清理（同一事务）；`node.reparent` 离开页面子树时清掉子树链接；跨文档粘贴丢弃找不到目标的链接；实例物化不复制母版链接。
+- **编辑入口**：右栏「设计 / 原型」两个 tab（`ui.inspectorTab`）。原型 tab 编辑第一条交互（目标页 / 返回上一屏、转场、时长），第 2 条起只读；选中页面时改为「滚动」下拉。画布上选中或悬停热区时画正交连线（目标页不可见则退化为胶囊），悬停会向上冒泡到热区祖先。
+- **演示模式**（`ui.presenter = { pageId, scroll, stack }`，纯 UI 状态）：`Presenter.vue` 覆盖整个窗口，用 `drawDocument(..., { onlyPageIds })` + `pageFitViewport` 画单页，裁到页面矩形后应用滚动位移；命中从页面子树向下找、再向上冒泡；`←` 退栈、`H` 高亮热区、`Esc` 退出。不写文档、不改选区与视口，退出即卸载。
+- **让位规则**：`ui.presenter` 非空时，快捷键分发器与画布的 `onKey` 都直接 return——两道显式闸门，不依赖事件捕获顺序。
+- **AI**：`set_interaction` / `remove_interaction` / `list_interactions`；`read_document` 的节点摘要带 `links`。一次工具调用 = 一个撤销步。

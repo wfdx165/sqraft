@@ -45,6 +45,7 @@ import { containerAt, layoutParentOf, reorderGuide, reorderIndexAt } from "../ca
 import { dropAllowed, dropTargetAt, type DropTarget } from "../canvas/drop-target";
 import { paintDropTarget } from "../canvas/drop-overlay";
 import { hoverContainerAt } from "../canvas/child-outlines";
+import { paintPrototypeLinks, paintPrototypeFlow } from "../canvas/prototype-links";
 import {
   buildInsertPreview,
   isEmptyTransition,
@@ -141,6 +142,8 @@ const hoverTextId = ref<NodeId | null>(null);
 const hoverLibraryId = ref<NodeId | null>(null);
 /** 悬停的容器（画出其一级子元素边界，纯 UI 状态） */
 const hoverContainerId = ref<NodeId | null>(null);
+/** 悬停的热区（带原型链接的图层，画出到目标页的连线） */
+const hoverLinkId = ref<NodeId | null>(null);
 
 /** UI 叠加层上下文（唯一承接指针事件的画布） */
 let ctx: CanvasRenderingContext2D | null = null;
@@ -450,6 +453,16 @@ function draw() {
     hoverTextId: hoverTextId.value,
     hoverLibraryId: hoverLibraryId.value,
   });
+
+  // 原型链接：选中/悬停热区时画到目标页的连线（只读信息层）
+  if (editing && !busyGesture) {
+    const linkIds = [...ui.selection];
+    if (hoverLinkId.value) linkIds.push(hoverLinkId.value);
+    if (linkIds.length > 0) paintPrototypeLinks(ctx, { doc: docStore.doc, vp, nodeIds: linkIds });
+  } else if (!editing && !ui.presenter) {
+    // 拖动模式：全量流向图（只画两端都在视口内的连线）
+    paintPrototypeFlow(ctx, { doc: docStore.doc, vp });
+  }
 
   const activePageNode = ui.activePageId ? docStore.doc.nodes[ui.activePageId] : null;
   if (editing) {
@@ -984,9 +997,16 @@ function setHoverLibrary(id: NodeId | null) {
   markDirty();
 }
 
+function setHoverLink(id: NodeId | null) {
+  if (hoverLinkId.value === id) return;
+  hoverLinkId.value = id;
+  markDirty();
+}
+
 function clearHover() {
   setHoverText(null);
   setHoverLibrary(null);
+  setHoverLink(null);
   if (hoverContainerId.value) {
     hoverContainerId.value = null;
     markDirty();
@@ -1032,6 +1052,12 @@ function updateHover(e: PointerEvent) {
   const hit = hitTest(vp, w.x, w.y);
   const node = hit && !hit.inactive ? docStore.doc.nodes[hit.id] : null;
   setHoverText(node?.type === "text" ? node.id : null);
+  // 原型链接：子图层没有链接时向上找热区祖先（点按钮里的文字也算点按钮）
+  let linkNode: DocNode | null = node;
+  while (linkNode && !linkNode.interactions?.some((link) => link.trigger === "click")) {
+    linkNode = linkNode.parentId ? docStore.doc.nodes[linkNode.parentId] : null;
+  }
+  setHoverLink(linkNode?.type === "page" ? null : (linkNode?.id ?? null));
   // 根节点名称标签：用 move 光标提示可拖；悬停母版标签时连它的紫色悬停框一起点亮
   const label = rootLabelAtPointer(vp, ctx, sx, sy, Boolean(pen.draft));
   const hover = rootLabelHover(label, node);
@@ -2120,6 +2146,8 @@ function onWheel(e: WheelEvent) {
 
 /** 画布只保留 Esc 的分层退出；其余快捷键由 shortcuts.ts 统一分发。 */
 function onKey(e: KeyboardEvent) {
+  // 演示模式是只读播放层：画布的 Esc / 删除 / 微移全部让位
+  if (ui.presenter) return;
   const target = e.target as HTMLElement;
   if (target.tagName === "INPUT" || target.tagName === "SELECT" || target.tagName === "TEXTAREA") return;
   if (e.type !== "keydown") return;

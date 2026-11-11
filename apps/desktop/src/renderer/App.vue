@@ -13,6 +13,7 @@ import McpSetupPanel from "./components/McpSetupPanel.vue";
 import AboutPanel from "./components/AboutPanel.vue";
 import SettingsPanel from "./components/SettingsPanel.vue";
 import ExportPngDialog from "./components/ExportPngDialog.vue";
+import Presenter from "./components/Presenter.vue";
 import ContextMenu from "./components/ContextMenu.vue";
 import Toast from "./components/Toast.vue";
 import TokenPicker from "./components/TokenPicker.vue";
@@ -25,6 +26,7 @@ import { pasteFromClipboard } from "./paste";
 import { copySelectionAction, cutSelectionAction } from "./canvas/node-clipboard";
 import { checkForUpdates, installUpdates } from "./update";
 import { locale, t } from "./i18n";
+import { togglePresenter } from "./presenter";
 
 /** 菜单里出现的动作：键位同步给主进程，点击回送到渲染层同一个执行器。 */
 const MENU_ACTIONS: ActionId[] = [
@@ -48,6 +50,7 @@ const MENU_ACTIONS: ActionId[] = [
   "view.toggleGrid",
   "view.toggleSnap",
   "view.toggleGuides",
+  "view.present",
 ];
 
 const mcpSetupOpen = ref(false);
@@ -99,6 +102,7 @@ onMounted(() => {
     "edit.copy": () => void copySelectionAction(),
     "edit.cut": () => void cutSelectionAction(),
     "file.exportPng": () => openExportDefault(),
+    "view.present": () => togglePresenter(),
     "edit.selectAll": () => {
       const el = document.activeElement as HTMLElement | null;
       const editing = !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
@@ -146,6 +150,7 @@ watchEffect(() => {
     </template>
     <WelcomeView v-else @open-mcp-setup="mcpSetupOpen = true" />
     <ConnectionStatus v-if="ui.docOpen" />
+    <Presenter v-if="ui.docOpen && ui.presenter" />
 
     <!-- 快捷键面板：居中对话框，放在根节点以避免被工具条的 translate 约束 -->
     <ShortcutsPanel v-if="shortcutUi.open" />
