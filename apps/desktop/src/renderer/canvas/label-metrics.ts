@@ -19,6 +19,11 @@ export const LABEL_CHIP_RADIUS = 6;
 export const LABEL_CHIP_MIN_Y = 2;
 export const LABEL_ICON_SIZE = 12;
 export const LABEL_ICON_GAP = 5;
+/**
+ * 低于这个缩放比例时不再显示根节点名称标签（选中的除外）：
+ * 标签是固定屏幕尺寸，缩得越小越会互相重叠、盖住页面与母版内容。
+ */
+export const ROOT_LABEL_MIN_ZOOM = 0.25;
 
 /** chip 宽度：左内边距 + 图标 + 间距 + 文本 + 右内边距。 */
 export function labelChipWidth(textWidth: number): number {
