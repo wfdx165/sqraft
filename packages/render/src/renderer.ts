@@ -15,6 +15,7 @@ import {
   subtreeWorldBounds,
 } from "@sqraft/core";
 import type { RenderBackend, RenderContext, RenderEffect, ResolvedImage, Viewport } from "./backend";
+import { intersects } from "./cull";
 
 const CONTAINER_TYPES = new Set(["page", "frame", "group"]);
 
@@ -222,6 +223,17 @@ export interface DrawOptions {
   /** 需要淡化的页面（编辑模式下的非活动页）。 */
   dimPageIds?: readonly NodeId[];
   /**
+   * 视口剔除（ADR-0032）：根节点（页面 / 主组件）整棵子树与 `rect` 不相交就跳过。
+   *
+   * - `rect`：世界坐标下的可见区域；
+   * - `rootBounds`：根节点子树的保守包围盒（通常是 `createRootBoundsCache()` 的结果）；
+   * - `pad`：包围盒额外外扩（世界单位），覆盖页面投影这类不进包围盒的装饰。
+   *
+   * 带渲染期预览（拖动 / 缩放 / 路径 / 布局让位）的根不剔除：预览几何不在缓存的包围盒里。
+   * 缺省不剔除（导出等离屏渲染走这条）。淡化页面的不透明度层同时改用该页包围盒而不是整个视口。
+   */
+  cull?: { rect: Rect; rootBounds: (id: NodeId) => Rect | null; pad: number };
+  /**
    * 图片解码缓存入口（渲染层注入；缺省视为全部缺失）
    */
   resolveImage?: (assetId: string) => ResolvedImage | null;
@@ -296,11 +308,25 @@ export function drawDocument(backend: RenderBackend, doc: DocState, options: Dra
   }
 
   const plan = rootDrawPlan(doc, options.onlyPageIds);
+  const dimSet = options.dimPageIds ? new Set(options.dimPageIds) : null;
+  const pinned = options.cull ? previewRoots(doc, options) : null;
+  /** 剔除判定：返回 false = 整棵跳过；否则返回外扩后的包围盒（预览中的根为 undefined） */
+  const visibleBounds = (id: NodeId): Rect | undefined | false => {
+    const cull = options.cull;
+    if (!cull || pinned!.has(id)) return undefined;
+    const b = cull.rootBounds(id);
+    if (!b) return undefined;
+    const padded = { x: b.x - cull.pad, y: b.y - cull.pad, width: b.width + cull.pad * 2, height: b.height + cull.pad * 2 };
+    return intersects(padded, cull.rect) ? padded : false;
+  };
+
   for (const page of plan.pages) {
     const pageId = page.id;
-    const dimmed = Boolean(options.dimPageIds?.includes(pageId));
-    // 页面淡化的包围盒交给后端退化为视口：整页子树遍历太贵，而层本身会被视口裁住
-    if (dimmed) backend.pushOpacity(0.35);
+    const bounds = visibleBounds(pageId);
+    if (bounds === false) continue;
+    const dimmed = Boolean(dimSet?.has(pageId));
+    // 淡化层：有剔除时取「该页包围盒 ∩ 视口」；没有时退化为视口（整页子树遍历太贵）
+    if (dimmed) backend.pushOpacity(0.35, bounds);
     const geo = geometryOf(page, options);
     // 页面 = 画布上的画板（带柔和投影）：背景取页面的填充，缺省白
     backend.drawRect(
@@ -333,7 +359,26 @@ export function drawDocument(backend: RenderBackend, doc: DocState, options: Dra
 
   // 主组件是文档根节点，不属于任何页面：页面全部画完之后再画，永远浮在页面之上
   // （ADR-0025）。母版只是普通容器，没有页面底色与投影。
-  for (const node of plan.components) drawNode(backend, ctx, node, options);
+  for (const node of plan.components) {
+    if (visibleBounds(node.id) === false) continue;
+    drawNode(backend, ctx, node, options);
+  }
+}
+
+/** 带渲染期预览的节点所在的根：这些根的真实绘制范围不等于缓存的包围盒，不能剔除。 */
+function previewRoots(doc: DocState, options: DrawOptions): Set<NodeId> {
+  const ids: NodeId[] = [];
+  if (options.movePreview) ids.push(...options.movePreview.ids);
+  if (options.resizePreview) ids.push(options.resizePreview.id);
+  if (options.vectorPreview) ids.push(options.vectorPreview.id);
+  if (options.geometryPreview) ids.push(...options.geometryPreview.keys());
+  const roots = new Set<NodeId>();
+  for (const id of ids) {
+    let cur = doc.nodes[id];
+    while (cur?.parentId) cur = doc.nodes[cur.parentId];
+    if (cur) roots.add(cur.id);
+  }
+  return roots;
 }
 
 export function renderDocument(backend: RenderBackend, doc: DocState, vp: Viewport): void {

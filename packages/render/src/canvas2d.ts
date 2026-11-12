@@ -58,6 +58,11 @@ interface EffectFrame {
   node: DocNode | null;
   /** 拿不到离屏上下文时退化为直通，保证 push/pop 仍然配对 */
   passthrough: boolean;
+  /**
+   * 世界坐标 → **本层**像素的矩阵。层位图的原点在父画布的 `device.x/y`，
+   * 用主画布的矩阵换算会差出这段偏移，嵌套层（蒙版 / 不透明度 / 效果）就会被裁错位置。
+   */
+  worldToDevice: DOMMatrix | null;
 }
 
 export interface FrameStats {
@@ -188,11 +193,15 @@ export class Canvas2DBackend implements RenderBackend {
       project(box.x + box.width, box.y + box.height),
       project(box.x, box.y + box.height),
     ];
+    // 外接框向外取整到整设备像素：位图宽高本来就是整数，框若带小数，
+    // 回贴时会被拉伸 / 错半个像素，层边缘（页面投影、半透明组的轮廓）因此发糊
+    const left = Math.floor(Math.min(...corners.map((p) => p.x)));
+    const top = Math.floor(Math.min(...corners.map((p) => p.y)));
     const device = {
-      x: Math.min(...corners.map((p) => p.x)),
-      y: Math.min(...corners.map((p) => p.y)),
-      width: Math.max(...corners.map((p) => p.x)) - Math.min(...corners.map((p) => p.x)),
-      height: Math.max(...corners.map((p) => p.y)) - Math.min(...corners.map((p) => p.y)),
+      x: left,
+      y: top,
+      width: Math.ceil(Math.max(...corners.map((p) => p.x))) - left,
+      height: Math.ceil(Math.max(...corners.map((p) => p.y))) - top,
     };
     // 样点倍率：效果层按 2048 封顶降采样；不透明度层保持设备分辨率（降采样会糊文字）
     const scale = options.downsample
@@ -227,6 +236,13 @@ export class Canvas2DBackend implements RenderBackend {
       alpha: options.alpha,
       node: options.node,
       passthrough: !ctx,
+      // 层像素 = (父画布像素 − device 原点) × s
+      worldToDevice: (() => {
+        const parentWorld = this.currentWorldToDevice();
+        return parentWorld
+          ? new DOMMatrix([s, 0, 0, s, -device.x * s, -device.y * s]).multiply(parentWorld)
+          : null;
+      })(),
     };
     if (ctx) {
       ctx.setTransform(matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f);
@@ -242,10 +258,19 @@ export class Canvas2DBackend implements RenderBackend {
     return { x: vp.x, y: vp.y, width: vp.width / vp.zoom, height: vp.height / vp.zoom };
   }
 
+  /** 当前绘图层（最内层离屏，或主画布）的世界 → 像素矩阵。 */
+  private currentWorldToDevice(): DOMMatrix | null {
+    for (let i = this.frames.length - 1; i >= 0; i--) {
+      const frame = this.frames[i];
+      if (!frame.passthrough) return frame.worldToDevice;
+    }
+    return this.worldToDevice;
+  }
+
   /** 页面坐标 → 当前绘图层坐标（取四角反变换的外接框；旋转时略大）。 */
   private worldRectToLocal(box: Rect): Rect {
     const localToDevice = this.ctx.getTransform();
-    const worldToDevice = this.worldToDevice;
+    const worldToDevice = this.currentWorldToDevice();
     if (!worldToDevice) return box;
     const m = localToDevice.inverse().multiply(worldToDevice);
     let minX = Number.POSITIVE_INFINITY;

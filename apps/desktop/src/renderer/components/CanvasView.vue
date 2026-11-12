@@ -16,7 +16,15 @@ import {
   type Rect,
   type VectorPath,
 } from "@sqraft/core";
-import { Canvas2DBackend, drawDocument, screenToWorld, worldToScreen, type Viewport } from "@sqraft/render";
+import {
+  Canvas2DBackend,
+  createRootBoundsCache,
+  drawDocument,
+  screenToWorld,
+  worldToScreen,
+  type DrawOptions,
+  type Viewport,
+} from "@sqraft/render";
 import { ensureAssetDecoded, imageFor } from "../assets";
 import {
   dropImages,
@@ -370,6 +378,20 @@ function clearLayer(g: CanvasRenderingContext2D): void {
   g.restore();
 }
 
+/** 根节点包围盒缓存：按文档版本失效，供视口剔除用（ADR-0032）。 */
+const rootBounds = createRootBoundsCache();
+/** 剔除余量（CSS 像素）：盖住页面投影（blur 32 + 偏移 10）这类不进包围盒的装饰。 */
+const CULL_MARGIN_PX = 64;
+
+/** 当前视口的剔除参数：视口外的页面 / 主组件整棵跳过。 */
+function viewportCull(): DrawOptions["cull"] {
+  return {
+    rect: { x: vp.x, y: vp.y, width: vp.width / vp.zoom, height: vp.height / vp.zoom },
+    rootBounds: (id) => rootBounds(docStore.doc, id),
+    pad: CULL_MARGIN_PX / vp.zoom,
+  };
+}
+
 /** 钢笔逻辑的依赖：文档、UI 状态与命令入口（显式注入，模块内不 import 单例）。 */
 const penDeps = { docStore, ui, dispatch, select, markDirty };
 
@@ -414,6 +436,7 @@ function draw() {
     vectorPreview: editing ? (vectorPreview ?? undefined) : undefined,
     geometryPreview: insertPreview?.boxes,
     dimPageIds,
+    cull: viewportCull(),
     resolveImage: (assetId) => imageFor(assetId),
     resolveLinkedImage: (url) => linkedImage(url),
   });
@@ -2267,6 +2290,8 @@ onMounted(() => {
     const offBackend = new Canvas2DBackend(offCtx);
     offBackend.beginFrame(vp);
     drawDocument(offBackend, docStore.doc, {
+      // 截图与画布同一视口：视口外的根同样不必画
+      cull: viewportCull(),
       resolveImage: (assetId) => imageFor(assetId),
       resolveLinkedImage: (url) => linkedImage(url),
     });
