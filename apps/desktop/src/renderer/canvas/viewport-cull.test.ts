@@ -16,6 +16,8 @@ function recorder(): { backend: RenderBackend; drawn: Set<NodeId>; opacity: Arra
     popClip: noop,
     pushOpacity: (alpha, bounds) => opacity.push({ alpha, bounds }),
     popOpacity: noop,
+    pushAlpha: noop,
+    popAlpha: noop,
     pushEffects: noop,
     popEffects: noop,
     drawRect: record,

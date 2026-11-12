@@ -147,7 +147,7 @@ function beginAgentCall(tool: string, clientLabel: string | undefined, args: Rec
   }
   beginAgentActivity();
   publishAgentTargets(tool, displayClientLabel(clientLabel), true);
-  hooks.requestRedraw();
+  hooks.requestRepaint();
 }
 
 function finishAgentCall(ok: boolean): void {
@@ -158,7 +158,7 @@ function finishAgentCall(ok: boolean): void {
     clearActivityTimer();
     mcpUi.activity = null;
     resetAgentActivity();
-    hooks.requestRedraw();
+    hooks.requestRepaint();
     return;
   }
   const activity = mcpUi.activity;
@@ -167,13 +167,13 @@ function finishAgentCall(ok: boolean): void {
   collecting = null;
   deleteParent = null;
   endAgentActivity();
-  hooks.requestRedraw();
+  hooks.requestRepaint();
   clearActivityTimer();
   activityTimer = setTimeout(() => {
     activityTimer = null;
     mcpUi.activity = null;
     resetAgentActivity();
-    hooks.requestRedraw();
+    hooks.requestRepaint();
   }, ACTIVITY_RESIDUE_MS);
 }
 

@@ -8,7 +8,13 @@ export interface OpenedFile {
   path: string;
   name: string;
   mtimeMs: number;
-  bytes: Uint8Array;
+  /** 文件字节数 */
+  size: number;
+  /**
+   * 一次性取件地址（`sqraft-doc://file/<token>`）：渲染层 `fetch` 它流式拿到文件内容。
+   * 不经 IPC 整块传字节——上 GB 的文档结构化克隆要好几秒。只能取一次，60 秒内有效。
+   */
+  url: string;
 }
 
 export type OpenFileResult =

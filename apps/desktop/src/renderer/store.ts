@@ -149,7 +149,13 @@ export const hooks: {
   getViewport: () => { x: number; y: number; width: number; height: number; zoom: number } | null;
   /** 把视线带到 agent 刚改动的地方：必要时切页，再缩到改动包围盒（不改选区） */
   revealAgentActivity: () => void;
+  /** 绘制结果变了但文档没变（字体 / 链接图 / 语言）：重绘，并让画布的渲染缓存整体失效 */
   requestRedraw: () => void;
+  /**
+   * 嵌入图片解码完成：只需重绘，不让缓存整体失效——缓存层自己记得画的时候哪些图还没就绪（ADR-0033）。
+   * 大稿缩小时几百张图陆续解码完，若每张都让全部缓存失效，缓存永远命中不了。
+   */
+  requestRepaint: () => void;
 } = {
   getScreenshot: async () => "",
   focusNode: () => {},
@@ -168,4 +174,5 @@ export const hooks: {
   getViewport: () => null,
   revealAgentActivity: () => {},
   requestRedraw: () => {},
+  requestRepaint: () => {},
 };

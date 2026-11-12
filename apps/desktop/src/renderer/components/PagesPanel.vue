@@ -280,7 +280,7 @@ function onLayerClick(row: Row, e: MouseEvent) {
     const set = new Set(ui.selection);
     set.has(row.node.id) ? set.delete(row.node.id) : set.add(row.node.id);
     select([...set]);
-    hooks.requestRedraw();
+    hooks.requestRepaint();
     return;
   }
   select([row.node.id]);
