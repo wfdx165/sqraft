@@ -118,6 +118,20 @@ claude mcp add --transport http sqraft http://127.0.0.1:7331/mcp
 - 操作ログはシステムのログディレクトリ（macOS：`~/Library/Logs/Sqraft/`）に書き出されます。メニューの **ヘルプ → ログフォルダを開く** から直接開けます
 - アンインストールするとアプリは削除されます。データディレクトリと設定は macOS では `~/Library/Application Support/Sqraft/`、Windows では `%APPDATA%\Sqraft` に残るので、必要なら一緒に削除してください
 
+## ソースからビルド
+
+macOS（Apple Silicon）または Windows（x64）、Node.js 22.12（`.nvmrc` を参照）、pnpm 10.33.4 が必要です。
+
+```bash
+pnpm install
+pnpm dev      # 開発サーバー（レンダラーは HMR）
+pnpm test     # 各パッケージの vitest
+pnpm build    # 型チェック + 本番ビルド
+pnpm dist     # ホスト OS 向けにビルド（macOS は未署名 arm64 dmg と zip、Windows は x64 インストーラー）
+```
+
+プロジェクト構成とレビュー手順は [CONTRIBUTING.md](CONTRIBUTING.md) を参照してください。
+
 ## 動作環境と既知の制限
 
 - **macOS Apple Silicon（M シリーズ）**。Intel Mac は未対応
@@ -129,9 +143,9 @@ claude mcp add --transport http sqraft http://127.0.0.1:7331/mcp
 
 ## ライセンスとフィードバック
 
-Sqraft はクローズドソースのソフトウェアです。ソースコードは公開されておらず、インストーラは無料でダウンロードして使用できます。
+Sqraft は [Apache License 2.0](LICENSE) で公開されています。「Sqraft」の名称とアプリアイコンはライセンスの対象外で、フォークは別の名前とアイコンを使用してください。
 
-不具合や要望は [Issues](https://github.com/wfdx165/sqraft/issues) で報告するか、インストーラを受け取った人に直接ご連絡ください。
+コントリビュートは歓迎です（[CONTRIBUTING.md](CONTRIBUTING.md)）。不具合や要望は [Issues](https://github.com/wfdx165/sqraft/issues) でお知らせください。
 
 ---
 

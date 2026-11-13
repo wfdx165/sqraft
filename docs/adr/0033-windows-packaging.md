@@ -23,7 +23,7 @@ Windows 用户拿不到任何包，README 也明写"不支持 Windows"。
    （`/bin/sh` + `ditto` + 替换 `.app`），不复用到 Windows。
 5. **`latest.json` 增加 `win-x64` 键**（Setup.exe 的地址、体积、sha256）。Windows 客户端当前只读 `version`，
    键为以后接静默安装预留；发版脚本强制要求它存在，避免"提示了却下不到"。
-6. **`release/` 是唯一产物收件箱**：Windows 机器上跑 `pnpm dist:win`，把 `Sqraft-Setup-<version>.exe`
+6. **`release/` 是唯一产物收件箱**：Windows 机器上跑 `pnpm dist`，把 `Sqraft-Setup-<version>.exe`
    拷回 `apps/desktop/release/`（或 `pnpm release --win <路径>`），mac 上的 `pnpm release` 一次性上传
    macOS 与 Windows 全部资产。缺任一平台产物即中止。
 7. **Windows 构建必须在 Windows 机器上跑**。electron-builder 交叉构建 Windows 包依赖 wine，

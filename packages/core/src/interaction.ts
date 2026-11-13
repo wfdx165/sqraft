@@ -30,6 +30,11 @@ export interface NormalizeOptions {
    * `isAncestorOf` 走不了父级链，只能由调用方把链带进来。
    */
   ancestors?: readonly NodeId[];
+  /**
+   * 同一批命令里会被删除的页面。展开阶段只清理"删除页面前已经存在"的链接，
+   * 同一批里"先删页、后加链接"的那条只能在这里拦下，否则会留下指向已删页面的死链。
+   */
+  deletedTargets?: ReadonlySet<NodeId>;
 }
 
 function targetTypeOf(state: DocState, targetId: NodeId, pending?: PendingTypes): DocNode["type"] | undefined {
@@ -125,6 +130,7 @@ export function normalizeInteractions(
     const type = targetTypeOf(state, targetId, pending);
     if (!type) throw new Error(`目标页面 ${targetId} 不存在`);
     if (type !== "page") throw new Error("跳转目标必须是页面");
+    if (options?.deletedTargets?.has(targetId)) throw new Error("跳转目标页面会在同一批命令里被删除");
     if (targetId === nodeId) throw new Error("跳转目标不能是图层自身");
     if (isAncestorOf(state, targetId, nodeId) || ancestors?.includes(targetId)) {
       throw new Error("不能跳到自己所在的页面");

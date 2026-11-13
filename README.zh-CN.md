@@ -118,6 +118,20 @@ claude mcp add --transport http sqraft http://127.0.0.1:7331/mcp
 - 操作日志写在系统日志目录（macOS：`~/Library/Logs/Sqraft/`），菜单 **帮助 → 打开日志目录** 可直达
 - 卸载即删除应用；数据目录与偏好留在 `~/Library/Application Support/Sqraft/`（macOS）或 `%APPDATA%\Sqraft`（Windows），可一并删除
 
+## 从源码构建
+
+需要 macOS（Apple Silicon）或 Windows（x64）、Node.js 22.12（见 `.nvmrc`）与 pnpm 10.33.4。
+
+```bash
+pnpm install
+pnpm dev      # 开发模式，渲染层 HMR
+pnpm test     # 各包的 vitest
+pnpm build    # 类型检查 + 生产构建
+pnpm dist     # 按宿主平台出包：macOS 出未签名 arm64 dmg 与 zip，Windows 出 x64 安装器
+```
+
+项目结构与评审流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
+
 ## 系统要求与已知限制
 
 - **macOS Apple Silicon（M 系列）**；Intel Mac 不支持
@@ -129,9 +143,9 @@ claude mcp add --transport http sqraft http://127.0.0.1:7331/mcp
 
 ## 授权与反馈
 
-Sqraft 是闭源软件，源代码不公开；安装包可自由下载安装使用。
+Sqraft 以 [Apache License 2.0](LICENSE) 开源；「Sqraft」名称与应用图标不在授权范围内，fork 请改名换标。
 
-遇到问题或想要新功能：在 [Issues](https://github.com/wfdx165/sqraft/issues) 里反馈，或直接联系给你安装包的人。
+欢迎提交 PR，规则见 [CONTRIBUTING.md](CONTRIBUTING.md)。遇到问题或想要新功能，在 [Issues](https://github.com/wfdx165/sqraft/issues) 里反馈。
 
 ---
 

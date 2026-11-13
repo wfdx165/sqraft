@@ -28,11 +28,6 @@ import {
   type DistributeAxis,
   scaleFactorsTo,
   type Rect,
-  DEFAULT_DISSOLVE_MS,
-  getPages,
-  hasInstanceAncestor,
-  isInPageSubtree,
-  type Interaction,
 } from "@sqraft/core";
 import { textSizeOf } from "../text-metrics";
 import { dispatch, docStore, hooks, ui } from "../store";
@@ -40,6 +35,7 @@ import { putAsset } from "../assets";
 import { firstFamilyOf, fontFamilies, fontWeightsOf, putFont } from "../fonts";
 import { selectionBounds as boundsOf } from "../canvas/selection-bounds";
 import { createTokenBindings } from "./token-bindings";
+import { usePrototype } from "./usePrototype";
 import { t } from "../i18n";
 import { cjkSans, cjkSerif, uiFontStack } from "../font-stack";
 import type { MessageKey } from "../../shared/i18n";
@@ -1165,132 +1161,8 @@ function resetOuterField(field: string): void {
 
 /* ---------- 原型：设计 / 原型 tab ---------- */
 
-const inspectorTab = computed(() => ui.inspectorTab);
-
-function setInspectorTab(tab: "design" | "prototype"): void {
-  ui.inspectorTab = tab;
-}
-
-/** 选中节点所在的页面（沿祖先链）。 */
-const nodePage = computed<DocNode | null>(() => {
-  void ui.version;
-  let cur = node.value;
-  while (cur) {
-    if (cur.type === "page") return cur;
-    cur = cur.parentId ? docStore.doc.nodes[cur.parentId] : null;
-  }
-  return null;
-});
-
-/** 只有第一条交互可编辑；其余是 agent 写入的，只读展示。 */
-const link = computed(() => {
-  void ui.version;
-  return node.value?.interactions?.[0] ?? null;
-});
-
-const extraLinkCount = computed(() => {
-  void ui.version;
-  return Math.max(0, (node.value?.interactions?.length ?? 0) - 1);
-});
-
-/** 目标下拉可选页面：排除当前页（跳回原地没有意义）。 */
-const linkPages = computed(() => {
-  void ui.version;
-  const exclude = nodePage.value?.id;
-  return getPages(docStore.doc).filter((page) => page.id !== exclude);
-});
-
-const linkTargetValue = computed(() => {
-  const current = link.value;
-  if (!current) return "";
-  return current.action === "back" ? "__back__" : (current.targetId ?? "");
-});
-
-/** 这里为什么不能挂链接；null 表示可以。 */
-const linkBlocked = computed<string | null>(() => {
-  const current = node.value;
-  if (!current) return null;
-  if (multi.value) return t("inspector.linkHintMulti");
-  if (lockedChain(current)) return t("inspector.lockedHint");
-  if (current.type === "page") return t("inspector.linkHintPage");
-  if (hasInstanceAncestor(docStore.doc, current.id)) return t("inspector.linkHintInstance");
-  if (!isInPageSubtree(docStore.doc, current.id)) return t("inspector.linkHintComponent");
-  return null;
-});
-
-/** 写第一条交互，其余（agent 写入的）原样保留。 */
-function writeLink(next: Interaction | null): void {
-  const current = node.value;
-  if (!current) return;
-  const all = next ? [next, ...(current.interactions?.slice(1) ?? [])] : (current.interactions?.slice(1) ?? []);
-  dispatch(
-    { type: "node.update", params: { nodeId: current.id, patch: { interactions: all.length ? all : undefined } } },
-    "prototype",
-  );
-}
-
-function setLinkTarget(event: Event): void {
-  const value = (event.target as HTMLSelectElement).value;
-  const current = link.value;
-  if (!value) {
-    writeLink(null);
-    return;
-  }
-  const id = current?.id ?? newId();
-  if (value === "__back__") {
-    writeLink({ id, trigger: "click", action: "back", transition: { type: "instant", durationMs: 0 } });
-    return;
-  }
-  writeLink({
-    id,
-    trigger: "click",
-    action: "navigate",
-    targetId: value,
-    transition:
-      current?.action === "navigate" ? current.transition : { type: "dissolve", durationMs: DEFAULT_DISSOLVE_MS },
-  });
-}
-
-function setLinkTransition(event: Event): void {
-  const current = link.value;
-  if (!current) return;
-  const instant = (event.target as HTMLSelectElement).value === "instant";
-  writeLink({
-    ...current,
-    transition: {
-      type: instant ? "instant" : "dissolve",
-      durationMs: instant ? 0 : Math.max(current.transition.durationMs || 0, DEFAULT_DISSOLVE_MS),
-    },
-  });
-}
-
-function setLinkDuration(event: Event): void {
-  const current = link.value;
-  if (!current) return;
-  const value = Math.round(Number((event.target as HTMLInputElement).value));
-  if (!Number.isFinite(value)) return;
-  writeLink({ ...current, transition: { ...current.transition, durationMs: value } });
-}
-
-function removeLink(): void {
-  writeLink(null);
-}
-
-function setScrollDirection(event: Event): void {
-  const current = node.value;
-  if (!current || current.type !== "page") return;
-  const value = (event.target as HTMLSelectElement).value;
-  dispatch(
-    {
-      type: "node.update",
-      params: {
-        nodeId: current.id,
-        patch: { scrollDirection: value === "none" ? undefined : (value as "vertical" | "horizontal") },
-      },
-    },
-    "prototype",
-  );
-}
+// 链接与页面滚动设置单独放进 usePrototype（控制单文件体积）；这里只把选区快照转交过去
+const prototype = usePrototype({ node, multi, lockedChain });
 
   return {
     lockedChain,
@@ -1431,17 +1303,7 @@ function setScrollDirection(event: Event): void {
     allComponents,
     overrideView,
     outerOverrideView,
-    inspectorTab,
-    setInspectorTab,
-    link,
-    extraLinkCount,
-    linkPages,
-    linkTargetValue,
-    linkBlocked,
-    setLinkTarget,
-    setLinkTransition,
-    setLinkDuration,
-    removeLink,
-    setScrollDirection,
+    // 原型 tab：链接读写与页面滚动设置（usePrototype）
+    ...prototype,
   };
 }

@@ -118,6 +118,20 @@ The endpoint only listens on `127.0.0.1` and rejects requests carrying an `Origi
 - Operation logs go to the system log directory (macOS: `~/Library/Logs/Sqraft/`); **Help → Open Logs Folder** takes you there
 - Uninstalling removes the app; data and preferences stay in `~/Library/Application Support/Sqraft/` (macOS) or `%APPDATA%\Sqraft` (Windows) and can be deleted as well
 
+## Build from source
+
+Requirements: macOS on Apple Silicon or Windows x64, Node.js 22.12 (see `.nvmrc`) and pnpm 10.33.4.
+
+```bash
+pnpm install
+pnpm dev      # electron-vite dev server with renderer HMR
+pnpm test     # vitest across packages
+pnpm build    # type check + production bundle
+pnpm dist     # builds for the host platform: macOS arm64 dmg + zip, or the Windows x64 installer
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for the project layout and the review process.
+
 ## Requirements and known limitations
 
 - **macOS Apple Silicon (M series)**; Intel Macs are not supported
@@ -129,9 +143,9 @@ The endpoint only listens on `127.0.0.1` and rejects requests carrying an `Origi
 
 ## License and feedback
 
-Sqraft is closed-source software: the source code is not public, and the installer is free to download and use.
+Sqraft is open source under the [Apache License 2.0](LICENSE). The "Sqraft" name and the application icon are not covered by the license — forks must use a different name and icon.
 
-For bugs or feature requests, open an [issue](https://github.com/wfdx165/sqraft/issues) or contact whoever gave you the installer.
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). For bugs or feature requests, open an [issue](https://github.com/wfdx165/sqraft/issues).
 
 ---
 

@@ -256,3 +256,41 @@ describe("文件格式", () => {
     expect(CURRENT_FORMAT_VERSION).toBe(8);
   });
 });
+
+describe("同一批命令的顺序敏感路径", () => {
+  it("先删页面、后加指向它的链接：整批拒绝，不留死链", () => {
+    const { store, a, b, rect } = twoPages();
+    expect(() =>
+      store.apply([
+        { type: "node.delete", params: { nodeId: b } },
+        { type: "node.update", params: { nodeId: rect.id, patch: { interactions: [link(b)] } } },
+      ]),
+    ).toThrow(/同一批命令里被删除/);
+
+    // 要么全成、要么全不成：页面还在，矩形也没有链接
+    expect(store.doc.nodes[b]).toBeDefined();
+    expect(store.doc.nodes[rect.id].interactions).toBeUndefined();
+    expect(store.canUndo).toBe(true); // 只有建文档那几步
+    expect(store.doc.nodes[a]).toBeDefined();
+  });
+
+  it("先加链接、后删页面：同样整批拒绝（两个方向都不允许自相矛盾的批次）", () => {
+    const { store, b, rect } = twoPages();
+    expect(() =>
+      store.apply([
+        { type: "node.update", params: { nodeId: rect.id, patch: { interactions: [link(b)] } } },
+        { type: "node.delete", params: { nodeId: b } },
+      ]),
+    ).toThrow(/同一批命令里被删除/);
+    expect(store.doc.nodes[b]).toBeDefined();
+    expect(store.doc.nodes[rect.id].interactions).toBeUndefined();
+  });
+
+  it("删页面时清理的是「删除前已经存在」的链接（展开阶段）", () => {
+    const { store, b, rect } = twoPages();
+    store.apply({ type: "node.update", params: { nodeId: rect.id, patch: { interactions: [link(b)] } } });
+    store.apply({ type: "node.delete", params: { nodeId: b } });
+    expect(store.doc.nodes[rect.id].interactions).toBeUndefined();
+    expect(store.doc.nodes[b]).toBeUndefined();
+  });
+});

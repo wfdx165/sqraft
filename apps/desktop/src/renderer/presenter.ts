@@ -34,11 +34,17 @@ export function togglePresenter(): void {
   else enterPresenter();
 }
 
-/** 跳到目标页：当前页与滚动位置入栈。 */
+/** 演示模式状态机的返回栈上限：A↔B 互跳不该无限增长。 */
+export const MAX_PRESENTER_STACK = 32;
+
+/** 跳到目标页：当前页与滚动位置入栈。目标已不是页面（演示中被改稿）时忽略。 */
 export function jumpTo(pageId: NodeId): void {
   const state = ui.presenter;
   if (!state) return;
+  if (docStore.doc.nodes[pageId]?.type !== "page") return;
   state.stack.push({ pageId: state.pageId, scroll: state.scroll });
+  // 超过上限丢最旧的一屏：用户仍然能按 ← 往回走，但栈不会无限长
+  if (state.stack.length > MAX_PRESENTER_STACK) state.stack.shift();
   state.pageId = pageId;
   state.scroll = 0;
 }

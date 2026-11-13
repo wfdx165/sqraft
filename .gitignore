@@ -1,7 +1,6 @@
 .idea/
 node_modules/
 dist/
-docs/specs
 *.local
 .DS_Store
 .vite/
@@ -10,3 +9,17 @@ out/
 release/
 .scratch/
 .playwright-mcp/
+
+# 内部文件，不进入公开仓库
+AGENTS.md
+docs/agents/
+docs/specs/
+docs/roadmap.md
+
+# 本地敏感文件
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx

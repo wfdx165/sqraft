@@ -1099,7 +1099,12 @@ export class DocStore {
    * 批命令前置校验：applyOne 内会抛错的规则全部前移。
    * 保证「要么全成、要么全不成」——中途抛错不会留下已生效但没进撤销栈的改动。
    */
-  private validateOne(cmd: Command, pending: Set<NodeId> = new Set(), pendingTypes: Map<NodeId, DocNode["type"]> = new Map()): void {
+  private validateOne(
+    cmd: Command,
+    pending: Set<NodeId> = new Set(),
+    pendingTypes: Map<NodeId, DocNode["type"]> = new Map(),
+    deletedPages: ReadonlySet<NodeId> = new Set(),
+  ): void {
     switch (cmd.type) {
       case "node.create": {
         for (const n of cmd.params.nodes) if (n.vector) validateVector(n.vector);
@@ -1108,7 +1113,11 @@ export class DocStore {
         for (const n of cmd.params.nodes) {
           if (n.interactions === undefined) continue;
           const chain = this.linkChain(n.id, created, cmd.params.parentId);
-          normalizeInteractions(this.state, n.id, n.interactions, { pending: pendingTypes, ancestors: chain.ancestors });
+          normalizeInteractions(this.state, n.id, n.interactions, {
+            pending: pendingTypes,
+            ancestors: chain.ancestors,
+            deletedTargets: deletedPages,
+          });
           if (!chain.allows) throw new Error("原型链接只能挂在页面里的图层上");
         }
         for (const n of cmd.params.nodes) {
@@ -1136,7 +1145,10 @@ export class DocStore {
         if (cmd.params.patch.vector) validateVector(cmd.params.patch.vector as VectorPath);
         if (cmd.params.patch.interactions !== undefined) {
           const target = this.state.nodes[cmd.params.nodeId];
-          normalizeInteractions(this.state, cmd.params.nodeId, cmd.params.patch.interactions, { pending: pendingTypes });
+          normalizeInteractions(this.state, cmd.params.nodeId, cmd.params.patch.interactions, {
+            pending: pendingTypes,
+            deletedTargets: deletedPages,
+          });
           // 同一批里刚创建、还没落进 state 的节点交给执行期；已存在的节点在这里卡位置
           if (target && (cmd.params.patch.interactions?.length ?? 0) > 0) {
             assertLinkPlacement(this.state, target.id);
@@ -1232,8 +1244,15 @@ export class DocStore {
       if (cmd.type === "node.create") for (const n of cmd.params.nodes) pendingTypes.set(n.id, n.type);
       else if (cmd.type === "node.update" && cmd.params.patch.type) pendingTypes.set(cmd.params.nodeId, cmd.params.patch.type);
     }
+    // 同一批里被删除的页面：展开阶段只清理"删除前已存在"的入站链接，
+    // 之后再往同批里加的链接必须在这里拦下（否则 applyOne 在删完页面后才抛错，留下半截状态）
+    const deletedPages = new Set<NodeId>();
     for (const cmd of list) {
-      this.validateOne(cmd, pending, pendingTypes);
+      if (cmd.type !== "node.delete") continue;
+      if (this.state.nodes[cmd.params.nodeId]?.type === "page") deletedPages.add(cmd.params.nodeId);
+    }
+    for (const cmd of list) {
+      this.validateOne(cmd, pending, pendingTypes, deletedPages);
       if (cmd.type === "node.create") for (const n of cmd.params.nodes) pending.add(n.id);
     }
     const inverses: Inverse[] = [];

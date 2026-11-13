@@ -20,7 +20,8 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 - 桌面包的 `dist` / `dist:dir` 都先跑 `pnpm clean`：清空 `apps/desktop/out/` 与 `release/`，避免旧产物被打进 asar 或堆在 release 里；想保留上一次的 dmg 用 `pnpm --filter @sqraft/desktop exec node scripts/clean.mjs --keep-release`
 - 快速出包（只出 `.app` / `win-unpacked`、不建 dmg 或安装器，约 4s）：`pnpm dist:dir` —— 验证"打包后能不能跑 / MCP 通不通"用它
 - 成品防护验收：`pnpm --filter @sqraft/desktop run verify:pack [产物路径]` —— 断言 asar 里只有 `out/**` 与 `package.json`、没有源码 / map / `node_modules`、渲染层已压缩、fuse 已翻转（ADR-0030）；默认按平台挑 `release/mac-arm64/Sqraft.app` 或 `release/win-unpacked`。`pnpm release` 与 `pnpm dist` 末尾都会自动跑当前平台那一侧
-- 发版：`pnpm release`（draft；出包前要求发布说明存在 + `pnpm test` 通过，不检查本地 git 状态）/ `pnpm publish:release`（翻正式）/ `pnpm publish:readme`（同步四语言下载页）；版本号手动改 `apps/desktop/package.json`（唯一真源，脚本只读、不接受版本参数），日常只升 patch，完整流程见 `docs/releasing.md`
+- 发版：`pnpm release`（draft；出包前要求发布说明存在 + `pnpm test` 通过，不检查本地 git 状态）/ `pnpm publish:release`（翻正式）；版本号手动改 `apps/desktop/package.json`（唯一真源，脚本只读、不接受版本参数），日常只升 patch，完整流程见 `docs/releasing.md`
+- 四语 README 校验：`pnpm --filter @sqraft/desktop run check:readmes` —— 文件齐全 / 首行切换链接 / 二级标题数一致 / 许可段指向 Apache-2.0；`pnpm release` 预检与 CI 都会跑
 - 界面文案：一律走 `t()`（渲染层 `renderer/i18n.ts`、主进程 `main/i18n.ts`）；新键同时补 `src/shared/i18n/` 下的 `zh-CN.ts`、`en-US.ts`、`ja-JP.ts`、`ko-KR.ts`（四份类型强制对齐），模板里写死中文会被 `i18n.test.ts` 拦下
 - 界面语言：`auto` / `zh-CN` / `en-US` / `ja-JP` / `ko-KR`；`auto` 按系统 `zh*` / `ja*` / `ko*` 匹配，其余回退英文。字体栈与日文禁则的约定见 ADR-0031 与 `GLOSSARY.md`；已有文档的 `fontFamily` 不改
 - MCP 面向 agent 的错误固定英文（`shared/agent-text.ts` + `agentErrorText()`），不要放进 UI 字典；只有端口/监听这类进设置面板的错误才走 `t()`
@@ -61,7 +62,8 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 - `GLOSSARY.md` 是术语唯一真源（Frame=画板、Group=分组、命令、Token、变体=枚举型组件属性…）。不要引入同义词
 - 架构以 `docs/architecture.md` 为准；重大决策新增 ADR（`docs/adr/`，顺序编号、短格式）
 - `docs/roadmap.md` 划定范围：v1 无协作后端、无布尔运算、无富文本 runs——不要顺手实现
-- `README.md` 是对外下载页（同步到公开发行仓库）：只写产品、安装、能力与限制，**不放构建命令与架构细节**；开发手册就是本文件。对外 README 有四份（英文首屏 + 中 / 日 / 韩），改一份必须同步其余三份，`pnpm publish:readme` 会校验
+- `README.md` 是仓库门面（公开仓就是它）：写产品、安装、能力、**从源码构建**与限制；四份（英文首屏 + 中 / 日 / 韩）改一份必须同步其余三份，`check:readmes` 会校验。架构与内部流程留在 `AGENTS.md` / `docs/architecture.md`，不进 README
+- 内部文件（`AGENTS.md`、`docs/agents/`、`docs/specs/`、`docs/roadmap.md`、`.scratch/`）在 `.gitignore` 里，**不进公开仓**；改完不提交也不会出现在 `git status` 里。`docs/specs/` 在 `docs/architecture.md` 里按名字引用，属于"内部规格，不随仓发布"
 - 改行为时同步更新对应文档
 
 ## 日志

@@ -14,7 +14,8 @@
  * 不支持的平台直接报错，不退化：`electron-builder.yml` 没有 `linux:` 段，
  * `after-pack.mjs` 对非 mac/win 也不翻转 fuse，出来的目录是半成品。
  *
- * 用法：`pnpm dist`（脚本前面已经跑过 clean 与 build）。
+ * 用法：`pnpm dist`（脚本前面已经跑过 clean 与 build）；`pnpm dist:dir` 传 `--dir`，
+ * 只出未打包目录（`.app` / `win-unpacked`），仍然受同一套平台守卫与成品校验约束。
  */
 import { spawnSync } from "node:child_process";
 import { createRequire } from "node:module";
@@ -23,6 +24,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(here, "..");
+
+/** `--dir`：只出目录，不建 dmg / 安装器（快速验证打包后能不能跑）。 */
+const dirOnly = process.argv.includes("--dir");
 
 /** 宿主 → electron-builder 参数；不支持的平台返回 null。 */
 function builderArgs(platform) {
@@ -57,7 +61,10 @@ if (!args) {
 const require = createRequire(pathToFileURL(join(desktopRoot, "package.json")));
 const builderCli = require.resolve("electron-builder/cli.js");
 
-console.log(`dist: ${process.platform} → electron-builder ${args.join(" ")}`);
-run(process.execPath, [builderCli, ...args]);
+console.log(`dist: ${process.platform} → electron-builder ${args.join(" ")}${dirOnly ? " --dir" : ""}`);
+// 项目不签名（ADR-0029）：关掉身份探测，避免每次出包都去找证书、报一条无意义的警告
+run(process.execPath, [builderCli, ...args, ...(dirOnly ? ["--dir"] : [])], {
+  env: { ...process.env, CSC_IDENTITY_AUTO_DISCOVERY: "false" },
+});
 // 成品防护验收（ADR-0030）：源码 / 依赖漏回包里就在这里中止，而不是把包传上去
 run(process.execPath, [join(desktopRoot, "scripts", "verify-pack.mjs")]);

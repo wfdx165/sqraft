@@ -7,7 +7,7 @@
  * - 命中从页面子树向下找，再**向上冒泡**到最近带 click 交互的祖先；
  * - 转场 `dissolve` 是"旧屏截图淡出"，不碰文档几何。
  */
-import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import { Canvas2DBackend, drawDocument, type Viewport } from "@sqraft/render";
 import { worldRect, type DocNode, type Interaction, type NodeId } from "@sqraft/core";
 import { hitShapeAt, toLocal } from "../canvas/hit";
@@ -20,8 +20,9 @@ import { t } from "../i18n";
 import Icon from "./Icon.vue";
 
 const PADDING = 48;
-const HINT = t("present.exitHint");
-const EXIT_LABEL = t("present.exit");
+// 文案跟着 locale 走：t() 读的是响应式 locale.value，用 computed 才不会在 setup 时被快照
+const HINT = computed(() => t("present.exitHint"));
+const EXIT_LABEL = computed(() => t("present.exit"));
 
 const canvasEl = ref<HTMLCanvasElement | null>(null);
 const hot = ref(false);

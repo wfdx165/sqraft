@@ -1,7 +1,7 @@
 # 发版手册
 
-Sqraft 发布 **macOS arm64** 与 **Windows x64** 两个平台的安装包：都传到公开仓库
-[`wfdx165/sqraft`](https://github.com/wfdx165/sqraft)，源码留在私有 Gitea。
+Sqraft 发布 **macOS arm64** 与 **Windows x64** 两个平台的安装包：
+源码、安装包与下载页都在同一个公开仓库 [`wfdx165/sqraft`](https://github.com/wfdx165/sqraft)。
 macOS 的自动更新靠该仓库的 `releases/latest/download/latest.json`（ADR-0029）；
 Windows 只做「检查并提示」，更新靠手动下载安装器（ADR-0033）。
 
@@ -66,7 +66,7 @@ sha256 → `latest.json`（`mac-arm64` / `mac-arm64-dmg` / `win-x64` 三个键�
 发布说明缺失或测试失败都会直接中止，不会出包。
 
 脚本**不看本地仓库**：在哪个分支、工作区是否干净、有没有源码 tag，都不影响发版。
-发行仓的 `v<version>` tag 由 `gh release create` 创建；如果还需要源码层面的版本标记，请自行在私有仓打 tag。
+发行仓的 `v<version>` tag 由 `gh release create` 创建，同时充当源码的版本标记。
 
 `verify-pack` 不通过也会中止：asar 里只允许 `out/**` 与 `package.json`，
 出现 `.ts` / `.map` / `node_modules`，或者压缩、fuse 状态不符合预期，都不会把包传上去。
@@ -127,21 +127,20 @@ curl -s https://github.com/wfdx165/sqraft/releases/latest/download/latest.json |
 
 返回的 `version` 是新版本即成功。
 
-### 6. 同步下载页（改了 README / 截图才需要）
+### 6. 改 README / 截图时
+
+四份 README 直接改在本仓库（发行仓就是本仓库），随代码一起提交：
 
 ```bash
-pnpm publish:readme
+pnpm --filter @sqraft/desktop run check:readmes
 ```
 
-四份 README 会一起同步：`README.md`（英文首屏）、`README.zh-CN.md`、`README.ja-JP.md`、`README.ko-KR.md`。
-
-临时 clone 发行仓库 → 删掉远端旧的 `README.*.md` → 覆盖四份 README 与 `docs/images/` → 有变化才提交并推 `main`；
-空仓库首次会自动建分支。同步前会校验：四份文件齐全、首行语言切换链接完整、二级标题数量一致，不一致直接中止。
+校验四份文件齐全、首行语言切换链接完整、二级标题数量一致、许可段都指向 Apache-2.0；
+`pnpm release` 的预检与 CI 也会跑同一条命令，不一致直接中止。
 
 ## 第一个版本（0.0.2）的特殊之处
 
 - 现有 `0.0.1` 没有更新器，`0.0.2` 必须**手动安装**；
-- 发行仓库要先跑一次 `pnpm publish:readme`，否则仓库首页是空的；
 - 首个版本没有"上一版"可测自动更新——真正的更新链路要等 `0.0.3` 才能验证。
 
 ## 自动更新验证（发 0.0.3 时）
@@ -188,5 +187,5 @@ pnpm publish:readme
 - `win-x64` 指向 `Sqraft-Setup-<version>.exe`；Windows 客户端当前只读 `version` 做提示，键为以后接静默安装预留
 - 仓库地址的唯一真源：`apps/desktop/update.config.json`（客户端与脚本读同一份）
 - 发布说明：`docs/releases/v<version>.md`（必须存在且非空）
-- 下载页 README 有四份，改一份要同步其余三份（`pnpm publish:readme` 会校验）
+- 下载页 README 有四份，改一份要同步其余三份（`pnpm --filter @sqraft/desktop run check:readmes` 会校验）
 - 客户端检查地址：`https://github.com/<repo>/releases/latest/download/latest.json`

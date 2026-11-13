@@ -46,7 +46,6 @@ const HELP = `用法：
   pnpm release --win <路径>                  把 Windows 产出的 Setup.exe 收进 release/ 再发版
   pnpm release --preflight                  只跑检查
   pnpm publish:release                      把现有 draft 翻成正式发布（不重建）
-  pnpm publish:readme                       同步四语言 README 与截图到发行仓库
 
 版本号：手动改 apps/desktop/package.json；release 不接受版本参数。
 发布门槛：docs/releases/vX.md 存在且非空 + pnpm test 通过 + GitHub 凭证可用
@@ -180,6 +179,18 @@ function preflight({ strict, tagCheck, requireNotes = false }) {
     );
   }
 
+  // 四语言 README 是下载页的门面：标题数/切换链接/许可口径不一致就不该发版。
+  // 单仓化之后 `publish:readme` 已删除，校验本身由这个小脚本保留。
+  const readmes = spawnSync(process.execPath, [join(desktopRoot, "scripts", "check-readmes.mjs")], {
+    encoding: "utf8",
+  });
+  if (readmes.status !== 0) {
+    problems.push(
+      `四语言 README 校验失败：\n${(readmes.stderr || readmes.stdout).trim()}\n` +
+        "  先跑 pnpm --filter @sqraft/desktop run check:readmes 看明细",
+    );
+  }
+
   const ghVersion = gh(["--version"]);
   if (ghVersion.status !== 0) {
     problems.push("找不到 gh（GitHub CLI）。先执行：brew install gh && gh auth login");
@@ -279,8 +290,10 @@ function buildArtifacts() {
       });
     }
 
-    // 成品防护验收（ADR-0030）：源码 / 依赖漏回包里就在这里中止，而不是把包传上去
-    run("node", ["scripts/verify-pack.mjs"], { cwd: desktopRoot });
+    // 成品防护验收（ADR-0030）：源码 / 依赖漏回包里就在这里中止，而不是把包传上去。
+    // `dist` 末尾已经跑过同一条断言（dist.mjs），这里只在复用旧产物（--skip-build）时补一次；
+    // 正常路径重复跑会让"校验规则"出现第二处需要同步的地方。
+    if (skipBuild) run("node", ["scripts/verify-pack.mjs"], { cwd: desktopRoot });
 
     try {
       copyFileSync(stagedExe, join(releaseDir, `Sqraft-Setup-${version}.exe`));

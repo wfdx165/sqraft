@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import { createDocWithPage, createNode } from "@sqraft/core";
 import { docStore, ui } from "./store";
-import { clampScroll, enterPresenter, exitPresenter, goBack, jumpTo, pageScrollRange, presenterStartPage } from "./presenter";
+import { clampScroll, enterPresenter, exitPresenter, goBack, jumpTo, MAX_PRESENTER_STACK, pageScrollRange, presenterStartPage } from "./presenter";
 
 /** 两页 390×844 的文档；B 页在右侧。 */
 function twoPageDoc(): { a: string; b: string } {
@@ -77,6 +77,21 @@ describe("演示模式：跳转与返回栈", () => {
     exitPresenter();
     expect(ui.presenter).toBeNull();
     expect(docStore.canUndo).toBe(before);
+  });
+
+  it("目标已不是页面时忽略跳转（演示中稿子被改）", () => {
+    const { a, b } = twoPageDoc();
+    enterPresenter(a);
+    docStore.apply({ type: "node.delete", params: { nodeId: b } });
+    jumpTo(b);
+    expect(ui.presenter).toMatchObject({ pageId: a, stack: [] });
+  });
+
+  it("A↔B 无限互跳时返回栈有上限", () => {
+    const { a, b } = twoPageDoc();
+    enterPresenter(a);
+    for (let i = 0; i < MAX_PRESENTER_STACK * 3; i += 1) jumpTo(i % 2 === 0 ? b : a);
+    expect(ui.presenter?.stack.length).toBe(MAX_PRESENTER_STACK);
   });
 });
 
