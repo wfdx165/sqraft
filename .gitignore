@@ -10,7 +10,7 @@ release/
 .scratch/
 .playwright-mcp/
 
-# 内部文件，不进入公开仓库
+# 内部文件，不进入公开仓（已从索引移除，别再 add 回来；-f 会绕过这里）
 AGENTS.md
 docs/agents/
 docs/specs/

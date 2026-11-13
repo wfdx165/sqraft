@@ -391,7 +391,7 @@ async function writeManifest({ dmg, zip, exe }) {
   };
   const manifestPath = join(releaseDir, "latest.json");
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
-  return { manifestPath, assets: [dmg, zip, exe] };
+  return { manifestPath };
 }
 
 /** 发布后轮询固定地址：GitHub 的 latest 有缓存，刚发布时可能还是旧内容。 */
@@ -474,19 +474,20 @@ report(stampProblemsList);
 const { problems: artifactProblemsList, artifacts } = artifactProblems(stamp);
 report(artifactProblemsList);
 
-// 3) 发版闸门：没测过不发版（本脚本不再构建，测试是唯一与产物无关的硬检查）
+// 3) 成品防护验收（ADR-0030）：源码 / 依赖漏回包里就在这里中止，而不是把包传上去。
+//    它只读产物、秒级完成，所以放在测试前面——产物不合格时不必先等一遍测试。
+run("node", [join(desktopRoot, "scripts", "verify-pack.mjs")], { cwd: desktopRoot });
+// 4) 发版闸门：没测过不发版（本脚本不再构建，测试是唯一与产物无关的硬检查）
 run("pnpm", ["test"]);
-// 成品防护验收（ADR-0030）：源码 / 依赖漏回包里就在这里中止，而不是把包传上去
-run("node", ["scripts", "verify-pack.mjs"], { cwd: desktopRoot });
 
-// 4) 远端检查放在最后：避免本地问题还没修就先等 gh 超时
+// 5) 远端检查放在最后：避免本地问题还没修就先等 gh 超时
 report(remoteProblems({ tagCheck: "absent" }));
 
 const { manifestPath } = await writeManifest(artifacts);
 const uploads = [artifacts.dmg, artifacts.zip, artifacts.exe].map((name) => join(releaseDir, name));
 uploads.push(manifestPath);
 
-// 5) 先建 draft，再逐个上传：单文件失败能定位、能直接重试，不会留下"只有 latest.json"的半成品。
+// 6) 先建 draft，再逐个上传：单文件失败能定位、能直接重试，不会留下"只有 latest.json"的半成品。
 run("gh", [
   "release",
   "create",
@@ -505,7 +506,7 @@ for (const file of uploads) {
   run("gh", ["release", "upload", tag, file, "--repo", repo, "--clobber"]);
 }
 
-// 6) 上传后回读一次：gh 逐文件上传，任何一步失败都不该被"脚本退出码 0"掩盖。
+// 7) 上传后回读一次：gh 逐文件上传，任何一步失败都不该被"脚本退出码 0"掩盖。
 const view = gh(["release", "view", tag, "--repo", repo, "--json", "assets"]);
 if (view.status !== 0) fail(`读取 ${tag} 的资产失败：${(view.stderr ?? "").trim()}`);
 const uploaded = (JSON.parse(view.stdout).assets ?? []).map((asset) => asset.name);

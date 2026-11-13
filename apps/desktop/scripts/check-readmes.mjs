@@ -89,6 +89,13 @@ if (problems.length > 0) {
   process.exit(1);
 }
 
+// 兜底断言：缺文件/空文件都会在上面的 problems 分支先退出，正常到不了这里；
+// 留着是为了将来若有人把某个 continue 挪到 counts.set 之前，报错仍然是上面那种而不是 TypeError。
+if (counts.size === 0) {
+  console.error("check-readmes: 没有读到任何一份 README，先确认仓库根目录里的文件还在");
+  process.exit(1);
+}
+
 console.log(
   `check-readmes: 通过——${README_FILES.length} 份 README 齐全，切换链接完整，二级标题各 ${expected} 个，许可段一致`,
 );

@@ -171,3 +171,101 @@ export function linkCleanupForPage(
   }
   return out;
 }
+
+/* ---------- 位置、滚动与写入校验（store 的展开/校验阶段调用） ---------- */
+
+/** 页面滚动方向白名单：演示模式用，任何入口（GUI / AI）共用。 */
+const SCROLL_DIRECTIONS = new Set(["none", "vertical", "horizontal"]);
+
+export function assertScrollDirection(value: unknown): void {
+  if (value === undefined) return;
+  if (typeof value !== "string" || !SCROLL_DIRECTIONS.has(value)) {
+    throw new Error(`未知的滚动方向：${String(value)}`);
+  }
+}
+
+/** 这个父级链上能否放带原型链接的节点：必须落在页面里，且不能在实例内部。 */
+export function allowsLinksAt(state: DocState, parentId: NodeId | null | undefined): boolean {
+  let cur = parentId ? state.nodes[parentId] : undefined;
+  while (cur) {
+    if (cur.type === "instance") return false;
+    if (cur.type === "page") return true;
+    cur = cur.parentId ? state.nodes[cur.parentId] : undefined;
+  }
+  return false;
+}
+
+/**
+ * 沿「这一批创建出来的节点 + 现有文档」的父级链向上，返回祖先 id 与能否挂链接。
+ * 复制/粘贴整页时父级链先落在同一批的节点上，只看命令的 parentId 会误判。
+ */
+export function linkChainOf(
+  state: DocState,
+  created: ReadonlyMap<NodeId, DocNode>,
+  nodeId: NodeId,
+  rootParentId: NodeId | null,
+): { ancestors: NodeId[]; allows: boolean } {
+  const ancestors: NodeId[] = [];
+  let cur = created.get(nodeId)?.parentId ?? null;
+  // createNode 出来的节点不预填 parentId，父级由命令参数给
+  if (!cur) cur = state.nodes[nodeId]?.parentId ?? rootParentId;
+  let guard = 0;
+  while (cur && guard < 10_000) {
+    guard += 1;
+    ancestors.push(cur);
+    const parent = created.get(cur) ?? state.nodes[cur];
+    if (!parent) return { ancestors, allows: false };
+    if (parent.type === "instance") return { ancestors, allows: false };
+    if (parent.type === "page") return { ancestors, allows: true };
+    cur = parent.parentId;
+  }
+  return { ancestors, allows: false };
+}
+
+/** `node.create` 的链接与滚动校验：批量创建时按批次链判断位置。 */
+export function assertNodeCreateLinks(
+  state: DocState,
+  nodes: readonly DocNode[],
+  parentId: NodeId | null | undefined,
+  pending: PendingTypes | undefined,
+  deletedTargets: ReadonlySet<NodeId>,
+): void {
+  const created = new Map(nodes.map((n) => [n.id, n] as const));
+  for (const n of nodes) {
+    if (n.interactions !== undefined) {
+      const chain = linkChainOf(state, created, n.id, parentId ?? null);
+      normalizeInteractions(state, n.id, n.interactions, {
+        pending,
+        ancestors: chain.ancestors,
+        deletedTargets,
+      });
+      if (!chain.allows) throw new Error("原型链接只能挂在页面里的图层上");
+    }
+    if (n.scrollDirection !== undefined) {
+      assertScrollDirection(n.scrollDirection);
+      if (n.type !== "page") throw new Error("滚动方向只对页面生效");
+    }
+  }
+}
+
+/** `node.update` 的链接与滚动校验（两个字段可能同时出现，也可能都不出现）。 */
+export function assertNodeUpdateLinks(
+  state: DocState,
+  nodeId: NodeId,
+  patch: { interactions?: Interaction[]; scrollDirection?: unknown },
+  pending: PendingTypes | undefined,
+  deletedTargets: ReadonlySet<NodeId>,
+): void {
+  if (patch.interactions !== undefined) {
+    normalizeInteractions(state, nodeId, patch.interactions, { pending, deletedTargets });
+    // 同一批里刚创建、还没落进 state 的节点交给执行期；已存在的节点在这里卡位置
+    const target = state.nodes[nodeId];
+    if (target && patch.interactions.length > 0) assertLinkPlacement(state, target.id);
+  }
+  if (patch.scrollDirection !== undefined) {
+    assertScrollDirection(patch.scrollDirection);
+    const node = state.nodes[nodeId];
+    const type = node?.type ?? pending?.get(nodeId);
+    if (type && type !== "page") throw new Error("滚动方向只对页面生效");
+  }
+}
