@@ -18,6 +18,7 @@
  * 只出未打包目录（`.app` / `win-unpacked`），仍然受同一套平台守卫与成品校验约束。
  */
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -68,3 +69,43 @@ run(process.execPath, [builderCli, ...args, ...(dirOnly ? ["--dir"] : [])], {
 });
 // 成品防护验收（ADR-0030）：源码 / 依赖漏回包里就在这里中止，而不是把包传上去
 run(process.execPath, [join(desktopRoot, "scripts", "verify-pack.mjs")]);
+
+/* ---------- 构建印章（release.mjs 用它确认产物来自当前提交） ---------- */
+
+/** 当前提交与"是否带未提交改动"；不是 git 仓库时都留空，不阻断构建。 */
+function gitInfo() {
+  const head = spawnSync("git", ["rev-parse", "HEAD"], { cwd: desktopRoot, encoding: "utf8" });
+  const status = spawnSync("git", ["status", "--porcelain", "--untracked-files=no"], {
+    cwd: desktopRoot,
+    encoding: "utf8",
+  });
+  return {
+    commit: head.status === 0 ? head.stdout.trim() : "",
+    dirty: status.status === 0 ? status.stdout.trim().length > 0 : null,
+  };
+}
+
+if (dirOnly) {
+  // `dist:dir` 只出未打包目录，没有可上传的产物：不写印章，避免 release 误判
+  console.log("dist: --dir 模式不写 build.json（发版请用 pnpm dist）");
+} else {
+  const releaseDir = join(desktopRoot, "release");
+  const { version } = JSON.parse(readFileSync(join(desktopRoot, "package.json"), "utf8"));
+  const artifacts = existsSync(releaseDir)
+    ? readdirSync(releaseDir)
+        .filter((name) => name.includes(version) && /\.(dmg|zip|exe)$/.test(name))
+        .map((name) => ({ name, size: statSync(join(releaseDir, name)).size }))
+    : [];
+  const stamp = {
+    version,
+    ...gitInfo(),
+    platform: process.platform,
+    builtAt: new Date().toISOString(),
+    artifacts,
+  };
+  writeFileSync(join(releaseDir, "build.json"), `${JSON.stringify(stamp, null, 2)}\n`, "utf8");
+  console.log(
+    `dist: 已写 build.json（${stamp.commit ? stamp.commit.slice(0, 7) : "no-git"}${stamp.dirty ? ", dirty" : ""}，` +
+      `${artifacts.length} 个产物）`,
+  );
+}

@@ -46,42 +46,66 @@ gh auth status         # 确认账号对 wfdx165/sqraft 有写权限
 
 ### 3. 出包 + 创建 draft
 
-Windows 包必须在 **Windows 机器**上构建（ADR-0033）：仓库拉到 Windows，`pnpm install && pnpm dist`
-（`dist` 按宿主平台出包，macOS 上出 dmg + zip、Windows 上出 NSIS 安装器），
-得到 `release/Sqraft-Setup-<version>.exe`，并在那台机器上按下面的清单手点一遍。
-把 exe 拷回 mac 的 `apps/desktop/release/`（或留给下一步用 `--win <路径>`）。
+构建与上传分开：`pnpm dist` 只负责构建（并写 `release/build.json`），`pnpm release` 只负责验收与上传。
+上传失败可以单独重跑，不用再花几分钟重建。
+
+**macOS（本机）**
+
+```bash
+pnpm dist          # clean → 类型检查 + 构建 → dmg + zip → verify-pack → 写 build.json
+```
+
+**Windows（另一台机器）**
+
+仓库拉到 Windows，`pnpm install && pnpm dist`（按宿主平台出 x64 的 NSIS 安装器），
+得到 `release/Sqraft-Setup-<version>.exe`，并在那台机器上按第 4 节的清单手点一遍。
+把 exe 拷回 mac 的 `apps/desktop/release/`。
+
+**创建 draft**
 
 ```bash
 pnpm release
 # 或：pnpm release --win ~/Downloads/Sqraft-Setup-0.0.5.exe
 ```
 
-依次执行：预检（发布说明存在、版本大于最新已发布版本、发行仓没有同名 release、gh 可用且仓库 public）→ `pnpm test` → `clean` →
-类型检查 + 构建 → `Sqraft-<version>-arm64.dmg` + `Sqraft-<version>-arm64-mac.zip` → `verify-pack` 成品防护验收（ADR-0030）→
-检查 `release/` 里同时有 macOS 两个包与 `Sqraft-Setup-<version>.exe`（缺 Windows 包直接中止）→
+依次执行：预检（发布说明存在、版本大于最新已发布版本、发行仓没有同名 release、gh 可用且仓库 public、
+四语言 README 一致、`dependencies` 为空）→ 读 `release/build.json`（版本要对、commit 必须是 HEAD）→
+检查 `release/` 里 dmg / zip / exe 齐全 → `pnpm test` → `verify-pack`（ADR-0030）→
 sha256 → `latest.json`（`mac-arm64` / `mac-arm64-dmg` / `win-x64` 三个键）→
-`gh release create v<version> --repo wfdx165/sqraft --draft`。
+`gh release create v<version> --draft` → 逐个 `gh release upload --clobber` → 回读断言四个资产齐全。
+
+`build.json` 是"构建与上传解耦"的防护：commit 不是 HEAD、版本对不上、或产物不在清单里，
+都直接中止——不会出现"改完代码忘了重新 dist，把旧包发出去"。构建时工作区不干净只告警。
 
 `pnpm release` 不接受版本参数：版本只认 `apps/desktop/package.json`。
-发布说明缺失或测试失败都会直接中止，不会出包。
+发布说明缺失、测试失败、产物缺失都会直接中止，不会创建 draft。
 
-脚本**不看本地仓库**：在哪个分支、工作区是否干净、有没有源码 tag，都不影响发版。
-发行仓的 `v<version>` tag 由 `gh release create` 创建，同时充当源码的版本标记。
+脚本**不看分支与源码 tag**；发行仓的 `v<version>` tag 由 `gh release create` 创建，
+同时充当源码的版本标记。
 
 `verify-pack` 不通过也会中止：asar 里只允许 `out/**` 与 `package.json`，
 出现 `.ts` / `.map` / `node_modules`，或者压缩、fuse 状态不符合预期，都不会把包传上去。
-报错信息会指出是"依赖分类改回去了"还是"构建配置被改坏了"。Windows 侧的同一套断言已接在
-`pnpm dist` 末尾（检查 `release/win-unpacked/resources/app.asar` 与 `Sqraft.exe` 的 fuse），
-不通过就不会产出可拷走的 exe。macOS 侧同样由 `pnpm dist` 收尾（`verify-pack` 按平台挑产物）。
+Windows 侧的同一套断言接在 `pnpm dist` 末尾（检查 `release/win-unpacked/resources/app.asar`
+与 `Sqraft.exe` 的 fuse），不通过就不会产出可拷走的 exe；`release` 会再跑一次 mac 侧。
 
 draft 阶段线上不可见（`/releases/latest` 仍指向上一个版本），此时**验证不了自动更新**。
 
+**上传失败怎么重试**（draft 已建好，别再跑 `release`）：
+
+```bash
+gh release upload v<version> \
+  apps/desktop/release/Sqraft-<version>-arm64.dmg \
+  apps/desktop/release/Sqraft-<version>-arm64-mac.zip \
+  apps/desktop/release/Sqraft-Setup-<version>.exe \
+  apps/desktop/release/latest.json \
+  --repo wfdx165/sqraft --clobber
+```
+
 可选参数：
 
-- `pnpm release --skip-build`：复用 `release/` 里已有产物（跳过测试）
 - `pnpm release --win <路径>`：把指定 exe 复制成 `Sqraft-Setup-<version>.exe` 放进 `release/`
-- `pnpm release --publish`：构建后直接正式发布（跳过 draft）
-- `pnpm release --preflight`：只跑检查（发布说明 + GitHub 侧），不构建
+- `pnpm release --publish`：验收后直接正式发布（跳过 draft）
+- `pnpm release --preflight`：只跑检查（发布说明 + README + GitHub 侧），不构建、不上传
 
 ### 4. 验收 draft
 
