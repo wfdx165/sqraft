@@ -1,0 +1,60 @@
+name: Bug report
+description: Something in Sqraft does not work as expected
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. For security problems, use the private
+        process in SECURITY.md instead of this form.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened
+      description: The actual behaviour, including any error message.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open ...
+        2. Draw ...
+        3. Save ...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Sqraft version
+      description: Shown in Sqraft → About.
+      placeholder: 0.0.3
+    validations:
+      required: true
+  - type: input
+    id: macos
+    attributes:
+      label: macOS version and chip
+      placeholder: macOS 15.1, Apple M2
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        Help → Open Logs Folder, then paste the relevant lines from
+        sqraft.log. Remove anything private first.
+      render: text
+  - type: textarea
+    id: screenshots
+    attributes:
+      label: Screenshots or screen recording
+      description: Drag files here if the issue is visual.
