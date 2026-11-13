@@ -14,9 +14,8 @@ The app is fully local: no account, no cloud, no model calls. A design is simply
 
 ### [⬇ Download the latest version](https://github.com/wfdx165/sqraft/releases/latest)
 
-**macOS · Apple Silicon (M series)** · about 120 MB · unsigned
-**Windows · x64** · about 100 MB · unsigned
-
+- **macOS · Apple Silicon (M series)** · about 120 MB · unsigned
+- **Windows · x64** · about 100 MB · unsigned
 - Under **Assets** on the Releases page pick `Sqraft-<version>-arm64.dmg` (manual install) or `Sqraft-Setup-<version>.exe`; the `.zip` is what the macOS updater downloads
 - Windows 10 22H2 or Windows 11, x64. Linux is not supported
 - Older versions and release notes: [Releases](https://github.com/wfdx165/sqraft/releases)
@@ -122,7 +121,7 @@ The endpoint only listens on `127.0.0.1` and rejects requests carrying an `Origi
 ## Requirements and known limitations
 
 - **macOS Apple Silicon (M series)**; Intel Macs are not supported
-- **Windows 10 22H2+ or Windows 11 (x64)**; Linux is not supported
+- **Windows 10 22H2+ or Windows 11 (x64)**; Windows on ARM (ARM64) and Linux are not supported
 - The app is **unsigned and not notarized** on both platforms: the first launch needs a manual allow (see Install)
 - Auto-update is macOS-only; on Windows you download and run the new installer yourself
 - CJK text uses each system's own fonts, so line breaks can shift between macOS and Windows

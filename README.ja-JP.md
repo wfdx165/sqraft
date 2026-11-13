@@ -14,9 +14,8 @@
 
 ### [⬇ 最新版をダウンロード](https://github.com/wfdx165/sqraft/releases/latest)
 
-**macOS · Apple Silicon（M シリーズ）** · 約 120 MB · 未署名
-**Windows · x64** · 約 100 MB · 未署名
-
+- **macOS · Apple Silicon（M シリーズ）** · 約 120 MB · 未署名
+- **Windows · x64** · 約 100 MB · 未署名
 - Releases ページの **Assets** から `Sqraft-<バージョン>-arm64.dmg`（手動インストール）または `Sqraft-Setup-<バージョン>.exe` を選んでください。`.zip` は macOS の自動更新がダウンロードするパッケージです
 - Windows は Windows 10 22H2 以降または Windows 11（x64）が必要です。Linux は未対応
 - 過去のバージョンと更新内容は [Releases](https://github.com/wfdx165/sqraft/releases) を参照
@@ -122,7 +121,7 @@ claude mcp add --transport http sqraft http://127.0.0.1:7331/mcp
 ## 動作環境と既知の制限
 
 - **macOS Apple Silicon（M シリーズ）**。Intel Mac は未対応
-- **Windows 10 22H2 以降または Windows 11（x64）**。Linux は未対応
+- **Windows 10 22H2 以降または Windows 11（x64）**。Windows ARM64（Windows on ARM）と Linux は未対応
 - 両プラットフォームともインストーラーは**未署名・未公証**です。初回起動時は手動で許可が必要です（「インストール」を参照）
 - 自動更新は macOS のみ。Windows では新しいインストーラーを自分でダウンロードして実行します
 - 中国語・日本語・韓国語は各 OS のフォントを使うため、同じドキュメントでも macOS と Windows で改行位置が変わることがあります

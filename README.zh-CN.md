@@ -14,9 +14,8 @@
 
 ### [⬇ 下载最新版](https://github.com/wfdx165/sqraft/releases/latest)
 
-**macOS · Apple Silicon（M 系列）** · 约 120 MB · 未签名
-**Windows · x64** · 约 100 MB · 未签名
-
+- **macOS · Apple Silicon（M 系列）** · 约 120 MB · 未签名
+- **Windows · x64** · 约 100 MB · 未签名
 - 在 Releases 页面的 **Assets** 里选 `Sqraft-<版本>-arm64.dmg`（手动安装）或 `Sqraft-Setup-<版本>.exe`；`.zip` 是 macOS 自动更新下载的包
 - Windows 需要 Windows 10 22H2 或 Windows 11（x64）；Linux 暂不支持
 - 历史版本与更新说明见 [Releases](https://github.com/wfdx165/sqraft/releases)
@@ -122,7 +121,7 @@ claude mcp add --transport http sqraft http://127.0.0.1:7331/mcp
 ## 系统要求与已知限制
 
 - **macOS Apple Silicon（M 系列）**；Intel Mac 不支持
-- **Windows 10 22H2 及以上或 Windows 11（x64）**；Linux 不支持
+- **Windows 10 22H2 及以上或 Windows 11（x64）**；Windows ARM64 与 Linux 不支持
 - 两个平台的安装包都**未签名、未公证**：首次打开需要手动放行（见「安装」）
 - 自动更新只在 macOS 上提供；Windows 需要自己下载新版安装器覆盖安装
 - 中日韩文字使用各系统自带字体，同一文档在 macOS 与 Windows 上换行位置可能不同
