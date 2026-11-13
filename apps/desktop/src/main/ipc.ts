@@ -12,7 +12,8 @@ import {
   type SaveFileResult,
   type UnsavedChoice,
 } from "../shared/ipc";
-import { mtimeChanged, mtimeOf, readFileSnapshot, writeFileAtomic } from "./files";
+import { mtimeChanged, mtimeOf, writeFileAtomic } from "./files";
+import { stageDocument } from "./doc-stream";
 import { basename, join } from "node:path";
 import { logApp, logRenderer } from "./mcp/log";
 import { flushPendingOpen, forgetRecentFile, listRecentFiles, requestOpen, touchRecentFile, updateLanguagePreference } from "./recent-state";
@@ -58,9 +59,9 @@ export function registerFileChannels(): void {
       return { status: "canceled" };
     }
     try {
-      const file = await readFileSnapshot(path);
+      const file = await stageDocument(path);
       await touchRecentFile(path);
-      logApp("info", "file/open ok", { path, bytes: file.bytes.length, ms: Date.now() - started });
+      logApp("info", "file/open ok", { path, bytes: file.size, ms: Date.now() - started });
       return { status: "ok", file };
     } catch (error) {
       logApp("error", "file/open failed", { path, error: messageOf(error), ms: Date.now() - started });
@@ -71,9 +72,9 @@ export function registerFileChannels(): void {
   ipcMain.handle(CHANNELS.fileOpenPath, async (_event, path: string): Promise<OpenFileResult> => {
     const started = Date.now();
     try {
-      const file = await readFileSnapshot(path);
+      const file = await stageDocument(path);
       await touchRecentFile(path);
-      logApp("info", "file/open-path ok", { path, bytes: file.bytes.length, ms: Date.now() - started });
+      logApp("info", "file/open-path ok", { path, bytes: file.size, ms: Date.now() - started });
       return { status: "ok", file };
     } catch (error) {
       await forgetRecentFile(path);

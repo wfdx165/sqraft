@@ -16,8 +16,16 @@ import {
   type Rect,
   type VectorPath,
 } from "@sqraft/core";
-import { Canvas2DBackend, drawDocument, screenToWorld, worldToScreen, type Viewport } from "@sqraft/render";
-import { ensureAssetDecoded, imageFor } from "../assets";
+import {
+  Canvas2DBackend,
+  createRootBoundsCache,
+  drawDocument,
+  screenToWorld,
+  worldToScreen,
+  type DrawOptions,
+  type Viewport,
+} from "@sqraft/render";
+import { ensureAssetDecoded, imageFor, imagePending } from "../assets";
 import {
   dropImages,
   insertImages,
@@ -373,6 +381,65 @@ function clearLayer(g: CanvasRenderingContext2D): void {
   g.restore();
 }
 
+/**
+ * 效果层缓存的失效纪元（ADR-0033）：文档对象 + 版本 + 异步资源纪元。
+ * 链接图解码完、字体加载完、语言切换都会改变绘制结果却不改文档，所以由 `requestRedraw` / 字体事件推进 `renderEpoch`。
+ * 嵌入图片解码走 `requestRepaint`（只重绘）：缓存层自己记录画的时候哪些图还没就绪。
+ */
+let renderEpoch = 0;
+const docSerials = new WeakMap<object, number>();
+let docSerialSeq = 0;
+function effectCacheEpoch(): string {
+  const doc = docStore.doc;
+  let serial = docSerials.get(doc);
+  if (serial === undefined) {
+    serial = ++docSerialSeq;
+    docSerials.set(doc, serial);
+  }
+  return `${serial}.${doc.version}.${renderEpoch}`;
+}
+/**
+ * 本帧拉伸了旧缓存（缩放手势中，或补清晰超出单帧预算）：
+ * - 缩放手势中：停下 150ms 后再补（期间又有新帧就顺延）；
+ * - 已经在补清晰：下一帧接着补，直到全部清晰（每帧只花约 30ms，见 Canvas2DBackend 的 RENDER_BUDGET_MS）。
+ */
+let settleTimer: ReturnType<typeof setTimeout> | null = null;
+let settling = false;
+function scheduleSettleRedraw(): void {
+  if (settleTimer) clearTimeout(settleTimer);
+  if (settling && lastSettleZoom === vp.zoom) {
+    settleTimer = null;
+    markDirty();
+    return;
+  }
+  lastSettleZoom = vp.zoom;
+  settleTimer = setTimeout(() => {
+    settleTimer = null;
+    settling = true;
+    markDirty();
+  }, 150);
+}
+let lastSettleZoom = 0;
+
+function bumpRenderEpoch(): void {
+  renderEpoch += 1;
+  markDirty();
+}
+
+/** 根节点包围盒缓存：按文档版本失效，供视口剔除用（ADR-0032）。 */
+const rootBounds = createRootBoundsCache();
+/** 剔除余量（CSS 像素）：盖住页面投影（blur 32 + 偏移 10）这类不进包围盒的装饰。 */
+const CULL_MARGIN_PX = 64;
+
+/** 当前视口的剔除参数：视口外的页面 / 主组件整棵跳过。 */
+function viewportCull(): DrawOptions["cull"] {
+  return {
+    rect: { x: vp.x, y: vp.y, width: vp.width / vp.zoom, height: vp.height / vp.zoom },
+    rootBounds: (id) => rootBounds(docStore.doc, id),
+    pad: CULL_MARGIN_PX / vp.zoom,
+  };
+}
+
 /** 钢笔逻辑的依赖：文档、UI 状态与命令入口（显式注入，模块内不 import 单例）。 */
 const penDeps = { docStore, ui, dispatch, select, markDirty };
 
@@ -417,10 +484,18 @@ function draw() {
     vectorPreview: editing ? (vectorPreview ?? undefined) : undefined,
     geometryPreview: insertPreview?.boxes,
     dimPageIds,
-    resolveImage: (assetId) => imageFor(assetId),
+    cull: viewportCull(),
+    // 按屏幕上实际需要的分辨率取图（降采样解码）：大图不必每帧以原图尺寸上传、缩放
+    pixelRatio: vp.zoom * vp.dpr,
+    // 效果层（投影 / 模糊）跨帧复用：平移时不必每帧重新合成（ADR-0033）
+    effectCacheEpoch: effectCacheEpoch(),
+    resolveImage: (assetId, want) => imageFor(assetId, want),
+    imagePending,
     resolveLinkedImage: (url) => linkedImage(url),
   });
   backend.endFrame();
+  if (backend.stats.staleHits > 0) scheduleSettleRedraw();
+  else settling = false;
 
   // 覆盖层（UI 层）：独立画布，永远在文档之上；每帧自行清屏
   syncLayerSize(ctx.canvas);
@@ -520,7 +595,7 @@ function draw() {
 
   if (DEV_HUD) {
     const total = performance.now() - frameStarted;
-    devHud.value = `${total.toFixed(1)}ms · 离屏 ${backend.stats.layers} (${backend.stats.layerMs.toFixed(1)}ms)`;
+    devHud.value = `${total.toFixed(1)}ms · 离屏 ${backend.stats.layers} (${backend.stats.layerMs.toFixed(1)}ms) · 缓存 ${backend.stats.cacheHits} · 拉伸 ${backend.stats.staleHits}`;
   }
 }
 
@@ -2295,6 +2370,8 @@ onMounted(() => {
     const offBackend = new Canvas2DBackend(offCtx);
     offBackend.beginFrame(vp);
     drawDocument(offBackend, docStore.doc, {
+      // 截图与画布同一视口：视口外的根同样不必画
+      cull: viewportCull(),
       resolveImage: (assetId) => imageFor(assetId),
       resolveLinkedImage: (url) => linkedImage(url),
     });
@@ -2379,7 +2456,10 @@ onMounted(() => {
     if (bounds) focusBounds(bounds, 160);
     markDirty();
   };
-  hooks.requestRedraw = markDirty;
+  hooks.requestRedraw = bumpRenderEpoch;
+  // 图片解码完只重绘：缓存层自己记得哪些内容画的时候图还没好（ADR-0033）
+  hooks.requestRepaint = markDirty;
+  document.fonts.addEventListener("loadingdone", bumpRenderEpoch);
   unsub = docStore.subscribe(markDirty);
   stopShortcuts = registerShortcuts({
     "file.insertImage": () => openImagePicker(imageInput.value),
@@ -2465,6 +2545,9 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  document.fonts.removeEventListener("loadingdone", bumpRenderEpoch);
+  if (settleTimer) clearTimeout(settleTimer);
+  backend?.clearEffectCache();
   if (resizeTimer) clearTimeout(resizeTimer);
   cancelAnimationFrame(raf);
   unsub();

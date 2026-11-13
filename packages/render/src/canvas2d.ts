@@ -58,6 +58,11 @@ interface EffectFrame {
   node: DocNode | null;
   /** 拿不到离屏上下文时退化为直通，保证 push/pop 仍然配对 */
   passthrough: boolean;
+  /**
+   * 世界坐标 → **本层**像素的矩阵。层位图的原点在父画布的 `device.x/y`，
+   * 用主画布的矩阵换算会差出这段偏移，嵌套层（蒙版 / 不透明度 / 效果）就会被裁错位置。
+   */
+  worldToDevice: DOMMatrix | null;
 }
 
 export interface FrameStats {
@@ -65,16 +70,62 @@ export interface FrameStats {
   layers: number;
   /** 本帧离屏合成累计耗时（ms） */
   layerMs: number;
+  /** 本帧直接复用缓存的效果层数 */
+  cacheHits: number;
+  /** 本帧在缩放手势中拉伸复用旧缩放缓存的层数（>0 时宿主应在缩放停下后补画一帧清晰的） */
+  staleHits: number;
+}
+
+/** 合成好的效果层（位图 1:1 对应设备像素）。 */
+interface CachedEffect {
+  canvas: HTMLCanvasElement;
+  /** 写入时的旋转角（弧度）：缩放手势中只拉伸旋转相同的缓存 */
+  angle: number;
+  /** 画的时候有图片还没就绪：只作临时替身，不当精确命中 */
+  incomplete: boolean;
+  /** 变换的缩放 / 旋转与亚像素偏移：平移整数像素才能原样复用 */
+  sig: string;
+  bytes: number;
+}
+
+/** 效果层缓存总量上限（按 RGBA 字节）。 */
+const EFFECT_CACHE_BUDGET = 192 * 1024 * 1024;
+/** 能缓存的效果层设备尺寸上限：超过就会降采样，整块缓存会糊，退回逐帧合成可见部分 */
+const EFFECT_CACHE_MAX_SIDE = 2040;
+/**
+ * 一帧里重画（写缓存）的时间预算：超了之后，还有旧缩放缓存可拉伸的内容先拉伸顶上、留到下一帧再画清晰。
+ * 缩放停下后的"补清晰"因此分摊到多帧，不会一帧卡上近一秒。
+ */
+const RENDER_BUDGET_MS = 30;
+
+function frac(v: number): string {
+  return (v - Math.floor(v)).toFixed(3);
 }
 
 export class Canvas2DBackend implements RenderBackend {
   private main: CanvasRenderingContext2D;
   private frames: EffectFrame[] = [];
   /** 上一帧的离屏统计（开发态帧耗时 HUD 用；不影响绘制） */
-  readonly stats: FrameStats = { layers: 0, layerMs: 0 };
+  readonly stats: FrameStats = { layers: 0, layerMs: 0, cacheHits: 0, staleHits: 0 };
+  /** 效果层缓存：跨帧保留（LRU），key 由渲染器给出 */
+  private effectCache = new Map<string, CachedEffect>();
+  private effectCacheBytes = 0;
+  /** 与 pushEffects / popEffects 一一对应：命中缓存的、要写入缓存的、普通的 */
+  private effectStack: Array<
+    | { kind: "hit"; entry: CachedEffect; x: number; y: number; width: number; height: number; alpha: number }
+    | { kind: "store"; key: string; sig: string; angle: number; incomplete?: boolean }
+    | { kind: "plain" }
+  > = [];
   private viewport: Viewport | null = null;
   /** 页面坐标 → 设备像素（由 beginFrame 的视口推导） */
   private worldToDevice: DOMMatrix | null = null;
+  /**
+   * 本帧缩放（dpr × zoom）与上一帧不同：正在缩放手势中。这时精确签名不可能命中，
+   * 改为把旧缩放下的缓存**拉伸**回贴（短暂发虚），缩放停下后宿主补画一帧清晰的。
+   */
+  private scaleChanged = true;
+  private lastScale = 0;
+  private frameStarted = 0;
 
   constructor(ctx: CanvasRenderingContext2D) {
     this.main = ctx;
@@ -87,10 +138,16 @@ export class Canvas2DBackend implements RenderBackend {
 
   beginFrame(vp: Viewport): void {
     this.frames = [];
+    this.effectStack = [];
     this.stats.layers = 0;
     this.stats.layerMs = 0;
+    this.stats.cacheHits = 0;
+    this.stats.staleHits = 0;
     this.viewport = vp;
     const k = vp.dpr * vp.zoom;
+    this.frameStarted = performance.now();
+    this.scaleChanged = k !== this.lastScale;
+    this.lastScale = k;
     this.worldToDevice = new DOMMatrix([k, 0, 0, k, -vp.x * k, -vp.y * k]);
     const canvas = this.main.canvas;
     const pw = Math.round(vp.width * vp.dpr);
@@ -158,14 +215,156 @@ export class Canvas2DBackend implements RenderBackend {
     this.finishFrame();
   }
 
-  pushEffects(node: DocNode, effects: readonly RenderEffect[]): void {
+  pushAlpha(alpha: number): void {
+    this.ctx.save();
+    this.ctx.globalAlpha *= Math.max(0, Math.min(1, alpha));
+  }
+
+  popAlpha(): void {
+    this.ctx.restore();
+  }
+
+  pushEffects(node: DocNode, effects: readonly RenderEffect[], cacheKey?: string): boolean {
     const pad = effectPadding(effects);
-    const box = intersectRect(rotatedBounds(node, pad), this.worldRectToLocal(this.visibleWorldRect()));
-    this.openLayer(box, { downsample: true, effects, alpha: 1, node });
+    const full = rotatedBounds(node, pad);
+    // 背景模糊取样的是"下面已经画好的内容"，平移后就变了，不能缓存
+    const open = (box: Rect) => this.openLayer(box, { downsample: true, effects, alpha: 1, node });
+    const cacheable = cacheKey !== undefined && !effects.some((e) => e.type === "backdrop-blur");
+    const state = cacheable ? this.tryCachedLayer(cacheKey, full, open) : "uncached";
+    if (state === "hit") return true;
+    if (state === "uncached") {
+      open(intersectRect(full, this.worldRectToLocal(this.visibleWorldRect())));
+      this.effectStack.push({ kind: "plain" });
+    }
+    return false;
+  }
+
+  /**
+   * 带缓存的开层，三种结果：
+   * - `hit`：命中，记一条"回贴缓存"，调用方跳过子树；
+   * - `stored`：未命中，已按 `full`（不裁视口）开层，并记下"合成完写缓存"；
+   * - `uncached`：尺寸太大（整块缓存会被降采样），什么都没做，调用方按原路径（裁到视口）开层。
+   */
+  private tryCachedLayer(key: string, full: Rect, open: (box: Rect) => void, alpha = 1): "hit" | "stored" | "uncached" {
+    const t = this.ctx.getTransform();
+    const device = this.deviceRectOf(full, t);
+    if (Math.max(device.width, device.height) > EFFECT_CACHE_MAX_SIDE) return "uncached";
+    const sig = [t.a, t.b, t.c, t.d].map((v) => v.toFixed(6)).join(",") + `|${frac(device.x)},${frac(device.y)}`;
+    const angle = Math.atan2(t.b, t.a);
+    const hit = this.effectCache.get(key);
+    const exact = hit && hit.sig === sig && !hit.incomplete;
+    // 旧缩放下的同一内容拉伸回贴（比整块重画便宜几个数量级）：缩放手势中，或本帧重画预算已用完时。
+    // 正在写缓存的层里面不能拉伸——否则模糊的内容会被当成清晰结果存进去
+    const storing = this.effectStack.some((e) => e.kind === "store");
+    const overBudget = performance.now() - this.frameStarted > RENDER_BUDGET_MS;
+    const stale =
+      !exact && hit && !storing && (this.scaleChanged || overBudget) && Math.abs(hit.angle - angle) < 1e-4;
+    if (hit && (exact || stale)) {
+      // LRU：挪到末尾
+      this.effectCache.delete(key);
+      this.effectCache.set(key, hit);
+      // 同一缩放（精确命中或"未完成"的同签名替身）按整像素 1:1 贴，否则拉伸
+      const sameScale = hit.sig === sig;
+      const x = sameScale ? Math.floor(device.x) : device.x;
+      const y = sameScale ? Math.floor(device.y) : device.y;
+      const width = sameScale ? hit.canvas.width : device.width;
+      const height = sameScale ? hit.canvas.height : device.height;
+      this.effectStack.push({ kind: "hit", entry: hit, x, y, width, height, alpha });
+      if (exact) this.stats.cacheHits += 1;
+      else this.stats.staleHits += 1;
+      return "hit";
+    }
+    // 未命中：按**整块内容**开层（不裁到视口），合成结果平移后仍然可用；缩放手势中写入的也能在后续帧拉伸复用
+    open(full);
+    this.effectStack.push({ kind: "store", key, sig, angle });
+    return "stored";
   }
 
   popEffects(): void {
+    const entry = this.effectStack.pop();
+    if (entry?.kind === "hit") {
+      const parent = this.ctx;
+      parent.save();
+      parent.globalAlpha *= entry.alpha;
+      parent.setTransform(1, 0, 0, 1, 0, 0);
+      parent.drawImage(entry.entry.canvas, entry.x, entry.y, entry.width, entry.height);
+      parent.restore();
+      return;
+    }
+    if (entry?.kind === "store") {
+      this.finishFrame((result) => this.storeEffect(entry.key, entry.sig, entry.angle, entry.incomplete === true, result));
+      return;
+    }
     this.finishFrame();
+  }
+
+  /**
+   * 整块缓存一个根节点（页面 / 主组件）：`bounds` 是世界坐标下的完整绘制范围（含投影余量），
+   * `alpha` 在回贴时整体乘上（淡化页面不必再单开一层）。
+   * - `hit`：命中，调用方跳过整页绘制，直接 popRootCache；
+   * - `drawing`：已开层，调用方照常画整页（不要再自己处理 alpha），画完 popRootCache 写入缓存；
+   * - `uncached`：太大不缓存，调用方按原路径画，**不要**调用 popRootCache。
+   */
+  pushRootCache(bounds: Rect, cacheKey: string, alpha: number): "hit" | "drawing" | "uncached" {
+    const open = (box: Rect) => this.openLayer(box, { downsample: false, effects: [], alpha, node: null });
+    const state = this.tryCachedLayer(cacheKey, this.worldRectToLocal(bounds), open, alpha);
+    return state === "stored" ? "drawing" : state;
+  }
+
+  popRootCache(): void {
+    this.popEffects();
+  }
+
+  /** 清空效果层缓存（换文档 / 关窗时宿主可调；不调也会按 LRU 自然淘汰）。 */
+  clearEffectCache(): void {
+    for (const entry of this.effectCache.values()) this.release(entry.canvas);
+    this.effectCache.clear();
+    this.effectCacheBytes = 0;
+  }
+
+  /** 正在写的缓存层全部记为未完成（嵌套的外层也一样：它包含了这块不完整的内容）。 */
+  noteIncomplete(): void {
+    for (const entry of this.effectStack) if (entry.kind === "store") entry.incomplete = true;
+  }
+
+  private storeEffect(key: string, sig: string, angle: number, incomplete: boolean, canvas: HTMLCanvasElement): void {
+    const bytes = canvas.width * canvas.height * 4;
+    const old = this.effectCache.get(key);
+    if (old) {
+      this.effectCache.delete(key);
+      this.effectCacheBytes -= old.bytes;
+      if (old.canvas !== canvas) this.release(old.canvas);
+    }
+    if (bytes > EFFECT_CACHE_BUDGET) {
+      this.release(canvas);
+      return;
+    }
+    this.effectCache.set(key, { canvas, sig, angle, incomplete, bytes });
+    this.effectCacheBytes += bytes;
+    for (const [k, entry] of this.effectCache) {
+      if (this.effectCacheBytes <= EFFECT_CACHE_BUDGET) break;
+      this.effectCache.delete(k);
+      this.effectCacheBytes -= entry.bytes;
+      this.release(entry.canvas);
+    }
+  }
+
+  /** 当前坐标系里的矩形 → 设备像素外接框（未取整）。 */
+  private deviceRectOf(box: Rect, t: DOMMatrix): Rect {
+    const xs: number[] = [];
+    const ys: number[] = [];
+    for (const [x, y] of [
+      [box.x, box.y],
+      [box.x + box.width, box.y],
+      [box.x + box.width, box.y + box.height],
+      [box.x, box.y + box.height],
+    ] as const) {
+      xs.push(t.a * x + t.c * y + t.e);
+      ys.push(t.b * x + t.d * y + t.f);
+    }
+    const x = Math.min(...xs);
+    const y = Math.min(...ys);
+    return { x, y, width: Math.max(...xs) - x, height: Math.max(...ys) - y };
   }
 
   /**
@@ -188,11 +387,15 @@ export class Canvas2DBackend implements RenderBackend {
       project(box.x + box.width, box.y + box.height),
       project(box.x, box.y + box.height),
     ];
+    // 外接框向外取整到整设备像素：位图宽高本来就是整数，框若带小数，
+    // 回贴时会被拉伸 / 错半个像素，层边缘（页面投影、半透明组的轮廓）因此发糊
+    const left = Math.floor(Math.min(...corners.map((p) => p.x)));
+    const top = Math.floor(Math.min(...corners.map((p) => p.y)));
     const device = {
-      x: Math.min(...corners.map((p) => p.x)),
-      y: Math.min(...corners.map((p) => p.y)),
-      width: Math.max(...corners.map((p) => p.x)) - Math.min(...corners.map((p) => p.x)),
-      height: Math.max(...corners.map((p) => p.y)) - Math.min(...corners.map((p) => p.y)),
+      x: left,
+      y: top,
+      width: Math.ceil(Math.max(...corners.map((p) => p.x))) - left,
+      height: Math.ceil(Math.max(...corners.map((p) => p.y))) - top,
     };
     // 样点倍率：效果层按 2048 封顶降采样；不透明度层保持设备分辨率（降采样会糊文字）
     const scale = options.downsample
@@ -227,6 +430,13 @@ export class Canvas2DBackend implements RenderBackend {
       alpha: options.alpha,
       node: options.node,
       passthrough: !ctx,
+      // 层像素 = (父画布像素 − device 原点) × s
+      worldToDevice: (() => {
+        const parentWorld = this.currentWorldToDevice();
+        return parentWorld
+          ? new DOMMatrix([s, 0, 0, s, -device.x * s, -device.y * s]).multiply(parentWorld)
+          : null;
+      })(),
     };
     if (ctx) {
       ctx.setTransform(matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f);
@@ -242,10 +452,19 @@ export class Canvas2DBackend implements RenderBackend {
     return { x: vp.x, y: vp.y, width: vp.width / vp.zoom, height: vp.height / vp.zoom };
   }
 
+  /** 当前绘图层（最内层离屏，或主画布）的世界 → 像素矩阵。 */
+  private currentWorldToDevice(): DOMMatrix | null {
+    for (let i = this.frames.length - 1; i >= 0; i--) {
+      const frame = this.frames[i];
+      if (!frame.passthrough) return frame.worldToDevice;
+    }
+    return this.worldToDevice;
+  }
+
   /** 页面坐标 → 当前绘图层坐标（取四角反变换的外接框；旋转时略大）。 */
   private worldRectToLocal(box: Rect): Rect {
     const localToDevice = this.ctx.getTransform();
-    const worldToDevice = this.worldToDevice;
+    const worldToDevice = this.currentWorldToDevice();
     if (!worldToDevice) return box;
     const m = localToDevice.inverse().multiply(worldToDevice);
     let minX = Number.POSITIVE_INFINITY;
@@ -269,7 +488,8 @@ export class Canvas2DBackend implements RenderBackend {
   }
 
   /** 结束当前层：施加效果、按组不透明度合成回父级。 */
-  private finishFrame(): void {
+  /** `keep` 给了就把合成结果交给它保管（写入效果层缓存），不释放。 */
+  private finishFrame(keep?: (result: HTMLCanvasElement) => void): void {
     const frame = this.frames.pop();
     if (!frame || frame.passthrough) return;
     this.stats.layers += 1;
@@ -283,8 +503,13 @@ export class Canvas2DBackend implements RenderBackend {
     parent.setTransform(1, 0, 0, 1, 0, 0);
     parent.drawImage(result, 0, 0, result.width, result.height, frame.device.x, frame.device.y, frame.device.width, frame.device.height);
     parent.restore();
-    this.release(frame.canvas);
-    if (result !== frame.canvas) this.release(result);
+    if (keep) {
+      keep(result);
+      if (result !== frame.canvas) this.release(frame.canvas);
+    } else {
+      this.release(frame.canvas);
+      if (result !== frame.canvas) this.release(result);
+    }
     this.stats.layerMs += performance.now() - started;
   }
 
@@ -811,6 +1036,8 @@ export class Canvas2DBackend implements RenderBackend {
     const sy = Math.max(0, crop.y);
     const sw = Math.max(1, Math.min(crop.width, image.width - sx));
     const sh = Math.max(1, Math.min(crop.height, image.height - sy));
+    // 裁切是原图像素；降采样位图按比例换到它自己的像素
+    const k = image.scale ?? 1;
     ctx.save();
     // 叶子节点在父坐标系里绘制：必须先按 node.x/y 落位（与 drawRect 一致），
     // 否则图片会画到父容器原点，和选中框/命中区完全错位。
@@ -820,7 +1047,7 @@ export class Canvas2DBackend implements RenderBackend {
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
     try {
-      ctx.drawImage(image.source, sx, sy, sw, sh, node.x, node.y, node.width, node.height);
+      ctx.drawImage(image.source, sx * k, sy * k, sw * k, sh * k, node.x, node.y, node.width, node.height);
     } catch {
       // 位图已失效（被 GC/尺寸为 0）：退回占位，别让整帧失败
       this.paintImagePlaceholder(node, radius);
@@ -847,6 +1074,9 @@ export class Canvas2DBackend implements RenderBackend {
         // 用 pattern 平铺：1×1 的图在整页上也不会变成百万次 drawImage（每帧热路径）
         ctx.translate(rect.x, rect.y);
         const pattern = ctx.createPattern(image.source, "repeat");
+        // 降采样位图平铺时放大回原图尺寸，否则砖块会变小
+        const k = image.scale ?? 1;
+        if (pattern && k !== 1) pattern.setTransform(new DOMMatrix().scale(1 / k));
         if (pattern) {
           ctx.fillStyle = pattern;
           ctx.fillRect(0, 0, rect.width, rect.height);
@@ -901,17 +1131,25 @@ export class Canvas2DBackend implements RenderBackend {
     ctx.restore();
   }
 
-  pushMaskLayer(bounds?: Rect): void {
-    const world = intersectRect(bounds ?? this.visibleWorldRect(), this.visibleWorldRect());
-    this.openLayer(this.worldRectToLocal(world), {
-      downsample: false,
-      effects: [],
-      alpha: 1,
-      node: null,
-    });
+  pushMaskLayer(bounds?: Rect, cacheKey?: string): boolean {
+    const open = (box: Rect) => this.openLayer(box, { downsample: false, effects: [], alpha: 1, node: null });
+    const state = cacheKey && bounds ? this.tryCachedLayer(cacheKey, this.worldRectToLocal(bounds), open) : "uncached";
+    if (state === "hit") return true;
+    if (state === "uncached") {
+      const world = intersectRect(bounds ?? this.visibleWorldRect(), this.visibleWorldRect());
+      open(this.worldRectToLocal(world));
+      this.effectStack.push({ kind: "plain" });
+    }
+    return false;
   }
 
   popMaskLayer(drawMask: () => void, alpha = 1): void {
+    const entry = this.effectStack[this.effectStack.length - 1];
+    if (entry?.kind === "hit") {
+      // 缓存里存的是"已裁好的结果"：直接回贴，不用再画蒙版
+      this.popEffects();
+      return;
+    }
     const frame = this.frames[this.frames.length - 1];
     if (frame && !frame.passthrough) {
       const ctx = frame.ctx;
@@ -922,7 +1160,8 @@ export class Canvas2DBackend implements RenderBackend {
       drawMask();
       ctx.restore();
     }
-    this.finishFrame();
+    // 与效果层共用同一个栈：写缓存 / 普通收尾的逻辑完全一样
+    this.popEffects();
   }
 
   endFrame(): void {

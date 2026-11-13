@@ -14,6 +14,22 @@ describe(".sqraft 容器", () => {
     expect(parsed.files["assets/abcd1234.png"]).toEqual(image);
   });
 
+  it("打开 → 再保存 → 再打开：图片字节（零拷贝视图）与文档原样保留", async () => {
+    const state = createDocWithPage("页面");
+    const images = [
+      { name: "assets/aaaa0000.png", bytes: new Uint8Array(5000).map((_, i) => i % 251) },
+      { name: "assets/bbbb1111.jpg", bytes: new Uint8Array(3000).map((_, i) => (i * 7) % 253) },
+    ];
+    const first = await parseDoc(await serializeDoc(state, images));
+    // 打开后的图片是原文件缓冲区的视图：直接拿它们再保存
+    const again = Object.entries(first.files)
+      .filter(([name]) => name.startsWith("assets/"))
+      .map(([name, bytes]) => ({ name, bytes }));
+    const second = await parseDoc(await serializeDoc(first.state, again));
+    expect(second.state).toEqual(first.state);
+    for (const image of images) expect(second.files[image.name]).toEqual(image.bytes);
+  });
+
   it("没有资源时也能正常往返", async () => {
     const bytes = await serializeDoc(createEmptyDoc());
     const parsed = await parseDoc(bytes);

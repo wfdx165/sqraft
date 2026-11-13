@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { legacyDotDirOf, migrateFromLegacyDotDir, relocateImageCache, userDataDirOf } from "./data-dir";
 import { attachCloseGuard, registerCloseChannels } from "./close-guard";
 import { registerFileChannels } from "./ipc";
+import { registerDocProtocol, registerDocSchemePrivileges } from "./doc-stream";
 import { registerImageCacheChannels } from "./image-cache";
 import { registerMcpChannels, shutdownMcp, startMcp } from "./mcp";
 import { logApp } from "./mcp/log";
@@ -16,6 +17,8 @@ import { initUpdater, installOnQuit, registerUpdateChannels, scheduleAutoCheck }
 import { restoreBounds } from "./window-state";
 
 app.setName("Sqraft");
+// 自定义协议的权限声明必须早于 app ready
+registerDocSchemePrivileges();
 
 // 数据目录走平台惯例的 userData（macOS `~/Library/Application Support/Sqraft`，见 data-dir.ts）：
 // 必须在 app ready 之前改，之后的 getPath 才走新目录；dev 与打包版共用同一目录。
@@ -96,7 +99,7 @@ function applyContentSecurityPolicy(): void {
       responseHeaders: {
         ...details.responseHeaders,
         "Content-Security-Policy": [
-          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self'",
+          "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' sqraft-doc:",
         ],
       },
     });
@@ -209,6 +212,7 @@ app.whenReady().then(async () => {
     packaged: app.isPackaged,
   });
   if (!isDev) applyContentSecurityPolicy();
+  registerDocProtocol();
   registerFileChannels();
   registerImageCacheChannels();
   registerCloseChannels();
