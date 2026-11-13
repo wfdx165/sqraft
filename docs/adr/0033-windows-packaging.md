@@ -43,3 +43,12 @@ Windows 用户拿不到任何包，README 也明写"不支持 Windows"。
 - 未签名 + SmartScreen 会劝退一部分用户，这是这个版本接受的成本。
 - `verify-pack` 增加 Windows 分支：检查 `win-unpacked/resources/app.asar` 的内容与 `Sqraft.exe` 的 fuse 状态。
 - macOS Intel、Linux、代码签名、Windows 静默自动升级仍是缺口，需要各自单独决策。
+
+## 后续修订
+
+- 2026-11-13：打包命令合并为单一的 `pnpm dist`。它按宿主平台选目标（macOS 固定
+  `--mac --arm64`、Windows 固定 `--win --x64`，其余宿主直接报错），构建完统一跑
+  `verify-pack`；`dist:mac` / `dist:win` 删除，也不提供 `--win` 之类的强制平台入口。
+  `pnpm release` 仍是 macOS 专用的发版编排，并新增"非 darwin 立即退出"的守卫
+  （避免在别的平台上先 `clean` 掉 `release/` 再失败）。
+  决策 1–11 全部不变：仍不交叉构建、仍是 NSIS、仍只在 mac 上编排发版。

@@ -46,7 +46,8 @@ gh auth status         # 确认账号对 wfdx165/sqraft 有写权限
 
 ### 3. 出包 + 创建 draft
 
-Windows 包必须在 **Windows 机器**上构建（ADR-0033）：仓库拉到 Windows，`pnpm install && pnpm dist:win`，
+Windows 包必须在 **Windows 机器**上构建（ADR-0033）：仓库拉到 Windows，`pnpm install && pnpm dist`
+（`dist` 按宿主平台出包，macOS 上出 dmg + zip、Windows 上出 NSIS 安装器），
 得到 `release/Sqraft-Setup-<version>.exe`，并在那台机器上按下面的清单手点一遍。
 把 exe 拷回 mac 的 `apps/desktop/release/`（或留给下一步用 `--win <路径>`）。
 
@@ -70,8 +71,8 @@ sha256 → `latest.json`（`mac-arm64` / `mac-arm64-dmg` / `win-x64` 三个键�
 `verify-pack` 不通过也会中止：asar 里只允许 `out/**` 与 `package.json`，
 出现 `.ts` / `.map` / `node_modules`，或者压缩、fuse 状态不符合预期，都不会把包传上去。
 报错信息会指出是"依赖分类改回去了"还是"构建配置被改坏了"。Windows 侧的同一套断言已接在
-`pnpm dist:win` 末尾（检查 `release/win-unpacked/resources/app.asar` 与 `Sqraft.exe` 的 fuse），
-不通过就不会产出可拷走的 exe。
+`pnpm dist` 末尾（检查 `release/win-unpacked/resources/app.asar` 与 `Sqraft.exe` 的 fuse），
+不通过就不会产出可拷走的 exe。macOS 侧同样由 `pnpm dist` 收尾（`verify-pack` 按平台挑产物）。
 
 draft 阶段线上不可见（`/releases/latest` 仍指向上一个版本），此时**验证不了自动更新**。
 

@@ -107,6 +107,16 @@ const skipBuild = flags.includes("--skip-build");
 
 if (publish && publishDraft) fail("--publish 与 --publish-draft 不能同时用");
 
+// 发版编排只在 macOS 上成立：它要出 arm64 的 dmg/zip，而 dist 的第一步是 clean，
+// 在其它平台上会先清空 release/ 再失败（连预先放好的 exe 一起删掉）。早退，别动手。
+// --publish-draft 只翻 GitHub 上的 draft，不构建，不受此限。
+if (process.platform !== "darwin" && !publishDraft) {
+  fail(
+    "release 只能在 macOS 上执行。Windows 产物请先在 Windows 机器上跑 pnpm dist，" +
+      "把 Sqraft-Setup-<version>.exe 放进 apps/desktop/release/ 再发版",
+  );
+}
+
 const desktopPkgPath = join(desktopRoot, "package.json");
 const desktopPkg = JSON.parse(readFileSync(desktopPkgPath, "utf8"));
 const version = desktopPkg.version;
@@ -246,7 +256,7 @@ function resolveWinSource() {
   if (existsSync(existing)) return existing;
   fail(
     `release/ 里找不到 Windows 安装包 Sqraft-Setup-${version}.exe。\n` +
-      "  在 Windows 机器上跑 pnpm dist:win，把产物拷进 apps/desktop/release/，" +
+      "  在 Windows 机器上跑 pnpm dist，把产物拷进 apps/desktop/release/，" +
       "或用 --win <路径> 指定（macOS 与 Windows 必须同一版本一起发）",
   );
 }

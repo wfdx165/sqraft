@@ -16,10 +16,10 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 - 开发：`pnpm dev` → `electron-vite dev`，同时起主进程、preload 与渲染层（Vite，渲染层 HMR）。dev **默认不开**调试端口；需要只读检查时用 `SQRAFT_DEBUG_PORT=9222 pnpm dev` 显式开启（`=0` 关闭）。渲染层源码在 `apps/desktop/src/renderer`，主进程在 `src/main`，preload 在 `src/preload`
 - 类型检查 + 构建：`pnpm build` —— packages 内 `tsc` 只做类型检查（`noEmit`）；桌面应用先跑 `typecheck`（main / preload / renderer 三份 `tsc --noEmit`）再 `electron-vite build` 到 `apps/desktop/out`
 - 测试：`pnpm test` —— 递归跑有 `test` 脚本的包（`@sqraft/core`、`@sqraft/ai-tools`、`@sqraft/desktop` 的 vitest）；`@sqraft/render` 无测试运行器
-- 打包：`pnpm dist` / `pnpm dist:mac` —— 本机出 macOS arm64 的 dmg 与 zip（zip 供自动更新）；`pnpm dist:win` —— Windows x64 的 NSIS 安装器（ADR-0033），**必须在 Windows 机器上跑**（macOS 交叉构建要 wine，Apple Silicon 上不可靠，且无法验收）。产物都在 `apps/desktop/release/`；不生成 sourcemap（ADR-0030）
-- 桌面包的 `dist` / `dist:mac` / `dist:win` / `dist:dir` 都先跑 `pnpm clean`：清空 `apps/desktop/out/` 与 `release/`，避免旧产物被打进 asar 或堆在 release 里；想保留上一次的 dmg 用 `pnpm --filter @sqraft/desktop exec node scripts/clean.mjs --keep-release`
-- 快速出包（只出 `.app`、不建 dmg，约 4s）：`pnpm dist:dir` —— 验证"打包后能不能跑 / MCP 通不通"用它
-- 成品防护验收：`pnpm --filter @sqraft/desktop run verify:pack [产物路径]` —— 断言 asar 里只有 `out/**` 与 `package.json`、没有源码 / map / `node_modules`、渲染层已压缩、fuse 已翻转（ADR-0030）；默认按平台挑 `release/mac-arm64/Sqraft.app` 或 `release/win-unpacked`。`pnpm release` 会自动跑 macOS 侧，`pnpm dist:win` 末尾已内置 Windows 侧
+- 打包：`pnpm dist` —— 按宿主平台出包：macOS 出 arm64 的 dmg 与 zip（zip 供自动更新），Windows 出 x64 的 NSIS 安装器（ADR-0033）；**不支持交叉构建**，Windows 包必须在 Windows 机器上跑，其它宿主（Linux / 容器）直接报错。mac 固定 `--mac --arm64`、Windows 固定 `--win --x64`，不提供指定平台的口子。产物都在 `apps/desktop/release/`；不生成 sourcemap（ADR-0030）
+- 桌面包的 `dist` / `dist:dir` 都先跑 `pnpm clean`：清空 `apps/desktop/out/` 与 `release/`，避免旧产物被打进 asar 或堆在 release 里；想保留上一次的 dmg 用 `pnpm --filter @sqraft/desktop exec node scripts/clean.mjs --keep-release`
+- 快速出包（只出 `.app` / `win-unpacked`、不建 dmg 或安装器，约 4s）：`pnpm dist:dir` —— 验证"打包后能不能跑 / MCP 通不通"用它
+- 成品防护验收：`pnpm --filter @sqraft/desktop run verify:pack [产物路径]` —— 断言 asar 里只有 `out/**` 与 `package.json`、没有源码 / map / `node_modules`、渲染层已压缩、fuse 已翻转（ADR-0030）；默认按平台挑 `release/mac-arm64/Sqraft.app` 或 `release/win-unpacked`。`pnpm release` 与 `pnpm dist` 末尾都会自动跑当前平台那一侧
 - 发版：`pnpm release`（draft；出包前要求发布说明存在 + `pnpm test` 通过，不检查本地 git 状态）/ `pnpm publish:release`（翻正式）/ `pnpm publish:readme`（同步四语言下载页）；版本号手动改 `apps/desktop/package.json`（唯一真源，脚本只读、不接受版本参数），日常只升 patch，完整流程见 `docs/releasing.md`
 - 界面文案：一律走 `t()`（渲染层 `renderer/i18n.ts`、主进程 `main/i18n.ts`）；新键同时补 `src/shared/i18n/` 下的 `zh-CN.ts`、`en-US.ts`、`ja-JP.ts`、`ko-KR.ts`（四份类型强制对齐），模板里写死中文会被 `i18n.test.ts` 拦下
 - 界面语言：`auto` / `zh-CN` / `en-US` / `ja-JP` / `ko-KR`；`auto` 按系统 `zh*` / `ja*` / `ko*` 匹配，其余回退英文。字体栈与日文禁则的约定见 ADR-0031 与 `GLOSSARY.md`；已有文档的 `fontFamily` 不改
@@ -95,10 +95,10 @@ Sqraft：AI 驱动的轻量 UI 设计工具（纯单机、桌面优先，Electro
 - 打包版用不了 `--inspect`、`ELECTRON_RUN_AS_NODE`、`NODE_OPTIONS`：fuse 已关（ADR-0030）。排障只能靠日志（`~/Library/Logs/Sqraft/`）与渲染层上报
 - 打包版与 `/Applications` 里的已装版本共用同一个 `userData` 单实例锁，且 `main/index.ts` 会 `app.setPath("userData", …)` 覆盖 `--user-data-dir`：用户开着 Sqraft 时，另起一个 `.app` 会拿不到锁、立刻 `exit 0`。这不是 fuse 或签名坏了，别误判
 - macOS 用 `hiddenInset` 标题栏：左栏顶部为红绿灯让出 58px，左上 340×46 是拖拽区（`-webkit-app-region: drag`），改布局时别把这块盖住（标题栏只留拖拽，不放控件）。当前文件名与「回欢迎页」是工具栏品牌名右侧的两个胶囊（`Toolbar.vue`）
-- Windows 用系统默认标题栏（`main/index.ts` 的 `isMac` 分支），`App.vue` 只对 `data-platform="darwin"` 加 58px 留白与拖拽条；别把这两条规则改成全局，否则 Windows 顶部会凭空多出一条空白
+- Windows 用系统默认标题栏（`main/index.ts` 的 `isMac` 分支），`App.vue` 只对 `data-platform="darwin"` 加 58px 留白与拖拽条；别把这两条规则改成全局，否则 Windows 顶部会凭空多出一条空白。Windows / Linux 的菜单栏**常显**（`autoHideMenuBar: false`）：改成隐藏后只有 Alt 能唤起，「打开日志目录」「清空图片缓存」这些入口等于找不到
 - 键位显示必须走 `formatBinding()`（`shared/binding.ts`）：内部存储是 `⌘⇧Z` 规范串，Windows 显示 `Ctrl+Shift+Z`。渲染层用 `keyLabel(id)`，主进程菜单在 `actionItem()` 里格式化；直接把 `keyOf()` 拼进 Windows 菜单或 tooltip 会显示 ⌘
-- Windows 包只能在 Windows 上构建（`pnpm dist:win`）：mac 交叉编译要装 wine，Apple Silicon 上有 NSIS 失败案例，且出包后没法验收。`apps/desktop/release/` 是唯一产物收件箱，`pnpm release` 缺 `Sqraft-Setup-<version>.exe` 会直接中止（ADR-0033）
-- `pnpm dist:win` 会先 `pnpm clean` 清空 `release/`：不要把已构建的 exe 提前放进去再跑 `dist:win`。`pnpm release` 会先确认 Windows 包存在并挪到临时目录，再构建 macOS（clean 不会吃掉它），所以「拷进 release/ 再 release」与 `--win <路径>` 两种顺序都安全；只有 `--skip-build` 时才需要 mac 产物本来就在 release/ 里
+- Windows 包只能在 Windows 上构建（`pnpm dist` 在 Windows 宿主上出 exe）：mac 交叉编译要装 wine，Apple Silicon 上有 NSIS 失败案例，且出包后没法验收。`apps/desktop/release/` 是唯一产物收件箱，`pnpm release` 缺 `Sqraft-Setup-<version>.exe` 会直接中止（ADR-0033）
+- `pnpm dist` 会先 `pnpm clean` 清空 `release/`：不要把已构建的 exe 提前放进去再跑 `dist`。`pnpm release` 会先确认 Windows 包存在并挪到临时目录，再构建 macOS（clean 不会吃掉它），所以「拷进 release/ 再 release」与 `--win <路径>` 两种顺序都安全；只有 `--skip-build` 时才需要 mac 产物本来就在 release/ 里。`pnpm release` 只在 macOS 上跑，其它平台会在任何 clean 之前直接退出
 - Windows 未签名：首次运行会弹 SmartScreen，发布说明与 README 要给「更多信息 → 仍要运行」的步骤；`win-x64` 在 `latest.json` 里只用于以后接静默安装，客户端当前只读 `version`
 - `build/icon.ico` 由 `build/icon.png` 生成（16–256 多尺寸 PNG 条目），改图标要同时更新 `.icns` 与 `.ico`
 - NSIS 配置是 `perMachine: false` + `oneClick: false`：安装器会显示安装范围页（默认仅当前用户），不是"静默装到用户目录"。electron-builder 的向导**没有**"创建桌面快捷方式"勾选项：`createDesktopShortcut: true` 就是安装时直接建，用户删掉后重装不会强制重建（别改成 `"always"`）

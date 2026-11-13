@@ -6,6 +6,7 @@
   "pnpm": {
     "onlyBuiltDependencies": [
       "electron",
+      "electron-winstaller",
       "esbuild"
     ]
   },
@@ -14,7 +15,6 @@
     "build": "pnpm -r --if-present run build",
     "test": "pnpm -r --if-present run test",
     "dist": "pnpm --filter @sqraft/desktop run dist",
-    "dist:win": "pnpm --filter @sqraft/desktop run dist:win",
     "dist:dir": "pnpm --filter @sqraft/desktop run dist:dir",
     "release": "pnpm --filter @sqraft/desktop run release",
     "publish:release": "pnpm --filter @sqraft/desktop run publish:release",
