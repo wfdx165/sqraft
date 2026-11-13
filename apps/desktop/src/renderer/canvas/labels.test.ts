@@ -2,8 +2,8 @@ import { beforeEach, describe, expect, it } from "vitest";
 import { createDocWithPage, createNode, DocStore, firstPageId, type NodeId } from "@sqraft/core";
 import type { Viewport } from "@sqraft/render";
 import { docStore, ui } from "../store";
-import { LABEL_CHIP_MIN_Y, labelChipWidth } from "./label-metrics";
-import { labelAt, labelOrigin, rootLabelRect } from "./labels";
+import { LABEL_CHIP_MIN_Y, labelChipWidth, ROOT_LABEL_MIN_ZOOM } from "./label-metrics";
+import { labelAt, labelOrigin, rootLabelHidden, rootLabelRect } from "./labels";
 
 const vp: Viewport = { x: 0, y: 0, zoom: 1, width: 1200, height: 900, dpr: 1 };
 
@@ -88,5 +88,30 @@ describe("根节点名称标签", () => {
     expect(
       labelOrigin(node, { drag: { ...drag, moved: false }, resizePreview: null, selection: [masterId] }),
     ).toEqual({ x: 600, y: 40 });
+  });
+
+  it("缩放低于阈值时标签隐藏且不可点；选中的仍保留", () => {
+    const { pageId, masterId } = setup();
+    const small: Viewport = { ...vp, zoom: ROOT_LABEL_MIN_ZOOM / 2 };
+    const master = docStore.doc.nodes[masterId];
+    const page = docStore.doc.nodes[pageId];
+    expect(rootLabelHidden(master, small, [])).toBe(true);
+    expect(rootLabelRect(master, small, null)).toBeNull();
+    expect(rootLabelRect(page, small, null)).toBeNull();
+    // 母版左上 (600,40) 缩一半阈值 → 屏幕 (75,5)，标签夹到视口顶
+    expect(labelAt(75, LABEL_CHIP_MIN_Y + 4, small, null)).toBeNull();
+
+    // 选中后保留标签：子节点铺满时它是拖动母版的唯一抓手
+    ui.selection = [masterId];
+    expect(rootLabelHidden(master, small, ui.selection)).toBe(false);
+    expect(rootLabelRect(master, small, null)).not.toBeNull();
+    expect(labelAt(75, LABEL_CHIP_MIN_Y + 4, small, null)?.id).toBe(masterId);
+    expect(rootLabelRect(page, small, null)).toBeNull();
+  });
+
+  it("缩放恰好等于阈值时照常显示", () => {
+    const { masterId } = setup();
+    const atMin: Viewport = { ...vp, zoom: ROOT_LABEL_MIN_ZOOM };
+    expect(rootLabelRect(docStore.doc.nodes[masterId], atMin, null)).not.toBeNull();
   });
 });
