@@ -9,23 +9,35 @@
  * 1. `dependencies` 为空（运行时不需要任何 node_modules，见 ADR-0030）；
  * 2. asar 里只有 `out/**` 与 `package.json`，不含 `.ts/.tsx/.vue/.map/.md`、不含 `node_modules`；
  * 3. 渲染层 bundle 是压缩过的（行数很少）；
- * 4. Electron fuse 已按要求翻转。
+ * 4. Electron fuse 已按要求翻转；
+ * 5. `--expect-signed` 时（macOS 发版）：Developer ID 签名、Team、hardened runtime、
+ *    entitlements、Gatekeeper 接受、公证票据已 staple（ADR-0034）。
  *
- * 用法：`node scripts/verify-pack.mjs [产物路径]`。
+ * 用法：`node scripts/verify-pack.mjs [产物路径] [--expect-signed] [--team-id <id>]`。
  * 默认按平台挑：Windows 用 `release/win-unpacked`，其余用 `release/mac-arm64/Sqraft.app`。
  */
+import { spawnSync } from "node:child_process";
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { FuseState, FuseV1Options, getCurrentFuseWire } from "@electron/fuses";
+import { parseVerifyPackArgs } from "./release-utils.mjs";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const MAC_APP = join(packageRoot, "release", "mac-arm64", "Sqraft.app");
 const WIN_DIR = join(packageRoot, "release", "win-unpacked");
 
+/** 命令行：位置参数是产物路径，其余是开关。发版时 dist/release 会传 `--expect-signed`。 */
+const parsedArgs = parseVerifyPackArgs(process.argv.slice(2));
+if (parsedArgs.error) {
+  console.error(`verify-pack: ${parsedArgs.error}`);
+  process.exit(1);
+}
+const { target: targetArg, expectSigned, expectedTeam } = parsedArgs;
+
 /** 默认产物：显式参数优先；否则看 release/ 里实际有什么。 */
 function defaultTarget() {
-  if (process.argv[2]) return process.argv[2];
+  if (targetArg) return targetArg;
   if (existsSync(WIN_DIR) && process.platform === "win32") return WIN_DIR;
   if (existsSync(MAC_APP)) return MAC_APP;
   if (existsSync(WIN_DIR)) return WIN_DIR;
@@ -154,7 +166,7 @@ const EXPECTED = [
   [FuseV1Options.EnableNodeOptionsEnvironmentVariable, FuseState.DISABLE, "从 NODE_OPTIONS 注入"],
   [FuseV1Options.EnableNodeCliInspectArguments, FuseState.DISABLE, "附带调试参数启动"],
   [FuseV1Options.OnlyLoadAppFromAsar, FuseState.ENABLE, "只能从 asar 加载"],
-  [FuseV1Options.EnableEmbeddedAsarIntegrityValidation, FuseState.DISABLE, "asar 完整性校验（未签名时无效）"],
+  [FuseV1Options.EnableEmbeddedAsarIntegrityValidation, FuseState.DISABLE, "asar 完整性校验（本轮不开，另开票评估）"],
 ];
 
 try {
@@ -169,6 +181,68 @@ try {
   problems.push(`读不了 fuse 状态（${String(error)}），确认 ${binary} 存在`);
 }
 
+/* ---------- 5. macOS 签名 / 公证（仅 --expect-signed） ---------- */
+
+/** 跑一条 macOS 工具命令并把 stdout + stderr 合起来（codesign / spctl 主要往 stderr 写）。 */
+function exec(command, commandArgs) {
+  const result = spawnSync(command, commandArgs, { encoding: "utf8" });
+  return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim() };
+}
+
+if (expectSigned) {
+  if (!isMacBundle) {
+    problems.push("--expect-signed 只对 macOS .app 产物有意义");
+  } else {
+    // 1) 整包签名有效（含嵌套 helper / framework）
+    const verify = exec("codesign", ["--verify", "--deep", "--strict", appPath]);
+    if (verify.status !== 0) problems.push(`codesign --verify 不通过：${verify.out || `exit ${verify.status}`}`);
+
+    // 2) 身份必须是 Developer ID Application，Team 与构建时记录的一致
+    const info = exec("codesign", ["-dv", "--verbose=4", appPath]).out;
+    const authorities = info
+      .split("\n")
+      .filter((line) => line.startsWith("Authority="))
+      .map((line) => line.slice("Authority=".length));
+    if (!authorities.some((name) => name.startsWith("Developer ID Application"))) {
+      problems.push(
+        `主程序不是 Developer ID Application 签名（实际：${authorities.join(" / ") || "读不到签名信息"}）`,
+      );
+    }
+    const team = info.match(/^TeamIdentifier=(.+)$/m)?.[1]?.trim() ?? "";
+    if (!team) problems.push("签名信息里没有 TeamIdentifier——不是有效分发签名");
+    else if (expectedTeam && team !== expectedTeam) {
+      problems.push(`TeamIdentifier=${team}，与构建时记录的 ${expectedTeam} 不一致`);
+    }
+    // 公证要求 hardened runtime；`allow-jit` 存在不等于 runtime 打开，直接读产物上的标志
+    if (!info.includes("(runtime)")) {
+      problems.push(
+        "主程序没开 hardened runtime（codesign -dv 的 flags 里没有 runtime）：公证前提不成立",
+      );
+    }
+
+    // 3) entitlements 对了才敢发：缺 allow-jit 会崩，带 get-task-allow 是调试签名
+    const entitlements = exec("codesign", ["-d", "--entitlements", ":-", appPath]).out;
+    if (!entitlements.includes("com.apple.security.cs.allow-jit")) {
+      problems.push("签名 entitlements 里缺 com.apple.security.cs.allow-jit（V8 JIT 在 hardened runtime 下会崩）");
+    }
+    if (entitlements.includes("com.apple.security.get-task-allow")) {
+      problems.push("签名 entitlements 里出现了 get-task-allow：这是可调试的签名，不能发版");
+    }
+
+    // 4) Gatekeeper 接受：不是在公证之前的状态
+    const assess = exec("spctl", ["--assess", "--type", "execute", "--verbose=4", appPath]);
+    if (assess.status !== 0 || !/accepted/.test(assess.out)) {
+      problems.push(`Gatekeeper 未接受该包（spctl）：${assess.out || `exit ${assess.status}`}`);
+    }
+
+    // 5) 公证票据已落在 .app 里：离线首启才不会被拦
+    const staple = exec("xcrun", ["stapler", "validate", appPath]);
+    if (staple.status !== 0) {
+      problems.push(`公证票据没有 staple 到 .app：${staple.out || `exit ${staple.status}`}`);
+    }
+  }
+}
+
 /* ---------- 结论 ---------- */
 
 if (problems.length > 0) {
@@ -179,5 +253,6 @@ if (problems.length > 0) {
 
 console.log(
   `verify-pack: 通过（${isMacBundle ? "macOS .app" : "Windows win-unpacked"}）——asar ${asar.entries.length} 个条目，` +
-    `全部在 out/ 与 package.json 内；无源码 / 无 map / 无 node_modules；渲染层已压缩；fuse 已按要求翻转`,
+    `全部在 out/ 与 package.json 内；无源码 / 无 map / 无 node_modules；渲染层已压缩；fuse 已按要求翻转` +
+    `${expectSigned && isMacBundle ? `；Developer ID 签名与公证票据已验证（Team ${expectedTeam || "由签名决定"}）` : ""}`,
 );

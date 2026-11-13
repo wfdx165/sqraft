@@ -28,10 +28,12 @@ These are documented design decisions, not vulnerabilities:
   rejects requests carrying an `Origin` header, but any process on the
   same machine can connect while the app is running. Do not run Sqraft on
   a shared or untrusted machine.
-- **The build is unsigned and not notarized.** macOS Gatekeeper will block
-  the first launch until you allow it. The updater verifies HTTPS hosts
-  and the SHA-256 of the downloaded zip, but the package itself carries no
-  code signature.
+- **The Windows installer is unsigned.** macOS builds are signed with a
+  Developer ID certificate and notarized, so Gatekeeper opens them without
+  a manual allow; the Windows `.exe` still triggers SmartScreen on first
+  run. The updater verifies HTTPS hosts, the SHA-256 of the downloaded zip,
+  and the code signature plus Team ID of the extracted bundle before it
+  replaces the app.
 - **There is no telemetry and no crash reporting.** Logs stay on disk
   (`~/Library/Logs/Sqraft/`).
 

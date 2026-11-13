@@ -17,7 +17,8 @@ Windows 用户拿不到任何包，README 也明写"不支持 Windows"。
 2. **per-user 安装（`perMachine: false`）+ 经典向导**：`oneClick: false`、`allowToChangeInstallationDirectory: true`。
    安装器会显示安装范围页（默认仅当前用户），需要全机器安装的用户可以自己选，但不会默认提权。
 3. **不签名**：Windows 首次运行会出现 SmartScreen 提示，README 与发布说明给出「更多信息 → 仍要运行」的步骤。
-   证书（OV/EV）等有真实 Windows 用户后再评估。
+   证书（OV/EV）等有真实 Windows 用户后再评估。macOS 侧已于 2026-11 改为 Developer ID 签名 + 公证
+   （ADR-0034），Windows 不跟着做——两条链路各自决策。
 4. **Windows 不做自动安装**：主进程只检查 `latest.json` 的版本，发现新版本把状态置为 `available`，
    界面给「前往下载」按钮打开 GitHub Releases 页面。`install.ts` 的替换脚本是 macOS 专用的
    （`/bin/sh` + `ditto` + 替换 `.app`），不复用到 Windows。
@@ -42,7 +43,8 @@ Windows 用户拿不到任何包，README 也明写"不支持 Windows"。
 - Windows 用户更新要手动去下载页；工具栏会常驻「前往下载」胶囊直到更新。
 - 未签名 + SmartScreen 会劝退一部分用户，这是这个版本接受的成本。
 - `verify-pack` 增加 Windows 分支：检查 `win-unpacked/resources/app.asar` 的内容与 `Sqraft.exe` 的 fuse 状态。
-- macOS Intel、Linux、代码签名、Windows 静默自动升级仍是缺口，需要各自单独决策。
+- macOS Intel、Linux、Windows 代码签名、Windows 静默自动升级仍是缺口，需要各自单独决策
+  （macOS 签名已单独落地，见 ADR-0034）。
 
 ## 后续修订
 
@@ -52,3 +54,5 @@ Windows 用户拿不到任何包，README 也明写"不支持 Windows"。
   `pnpm release` 仍是 macOS 专用的发版编排，并新增"非 darwin 立即退出"的守卫
   （避免在别的平台上先 `clean` 掉 `release/` 再失败）。
   决策 1–11 全部不变：仍不交叉构建、仍是 NSIS、仍只在 mac 上编排发版。
+- 2026-11-13：macOS 包改为 Developer ID 签名 + 公证（ADR-0034）。Windows 侧不变（仍不签名、
+  仍只提示更新）；`dist.mjs` / `verify-pack` 的签名断言只对 macOS 生效。

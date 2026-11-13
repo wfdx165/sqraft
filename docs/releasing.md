@@ -4,6 +4,8 @@ Sqraft 发布 **macOS arm64** 与 **Windows x64** 两个平台的安装包：
 源码、安装包与下载页都在同一个公开仓库 [`wfdx165/sqraft`](https://github.com/wfdx165/sqraft)。
 macOS 的自动更新靠该仓库的 `releases/latest/download/latest.json`（ADR-0029）；
 Windows 只做「检查并提示」，更新靠手动下载安装器（ADR-0033）。
+macOS 包自 2026-11 起用 **Developer ID Application 签名 + 公证**（ADR-0034），
+发版机必须有证书、Xcode（`notarytool`）与公证凭据；Windows 包仍未签名。
 
 > 发行仓库必须保持 **public**。私有仓库 = `latest.json` 404 = 自动更新静默失效。
 
@@ -16,6 +18,35 @@ gh auth status         # 确认账号对 wfdx165/sqraft 有写权限
 ```
 
 `gh auth login` 是整条链路上唯一必须人工完成的步骤。
+
+### macOS 签名与公证（一次性）
+
+发版机（目前是作者本机）需要三样东西，缺一样 `pnpm dist` 会在构建前就报错退出：
+
+1. **Developer ID Application 证书**（不是 `Apple Development`）：
+   Xcode → Settings → Accounts → 选团队 → Manage Certificates… → `+` → Developer ID Application。
+   验收：`security find-identity -v -p codesigning` 里能看到 `Developer ID Application: … (TEAMID)`。
+2. **Xcode**（不是只有 Command Line Tools）：公证要用 `xcrun notarytool`。
+   验收：`xcrun --find notarytool` 有输出。
+3. **公证凭据**：推荐 App Store Connect → Users and Access → Integrations → App Store Connect API
+   → Team Keys → `+`（角色 Developer），下载 `.p8`（只给一次）并记下 Key ID 与 Issuer ID。
+   ```bash
+   mkdir -p ~/.config/sqraft && install -m 600 ~/Downloads/AuthKey_XXXXXXXXXX.p8 ~/.config/sqraft/
+   ```
+   然后写进 shell profile（`.p8` 与密钥**不进仓库、不进 CI**）：
+   ```bash
+   export APPLE_API_KEY="$HOME/.config/sqraft/AuthKey_XXXXXXXXXX.p8"
+   export APPLE_API_KEY_ID="XXXXXXXXXX"
+   export APPLE_API_ISSUER="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+   ```
+   验收（只读，不产生公证提交）：
+   ```bash
+   xcrun notarytool history --key "$APPLE_API_KEY" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER"
+   ```
+   返回 `No submission history.` 或历史列表即通过；`401` 说明 Key / Issuer / 角色不对。
+
+证书与凭据只影响 `pnpm dist`（发版）；只想快速出个能跑的包用 `pnpm dist:dir`（不签名、不公证）。
+证书到期（当前 2027-12-13）后续期，续期后重跑一次 `pnpm dist` 验收。
 
 ## 版本策略
 
@@ -42,6 +73,9 @@ gh auth status         # 确认账号对 wfdx165/sqraft 有写权限
 
 文件缺失、或内容只有空白，`pnpm release` 直接中止；没有跳过开关。说明文件不必提交——脚本不读 git 状态。
 
+**签名首发那版要写明**：macOS 包已签名并公证，首次打开不再需要右键 / `xattr` 放行；
+从旧版本自动更新上来的那一次仍由旧版（未签名）执行替换，更新完成后才进入"无提示"状态。
+
 **文件格式变更必须写进说明**：`.sqraft` 的 `formatVersion` 提升后，旧版本客户端打开新文件不会报错，但会**静默丢弃**它不认识的新字段（例如 0.0.4 的原型链接）。发布说明里要写清"用旧版本打开会丢失什么"，不能只列新增功能。
 
 ### 3. 出包 + 创建 draft
@@ -52,8 +86,11 @@ gh auth status         # 确认账号对 wfdx165/sqraft 有写权限
 **macOS（本机）**
 
 ```bash
-pnpm dist          # clean → 类型检查 + 构建 → dmg + zip → verify-pack → 写 build.json
+pnpm dist          # clean → 类型检查 + 构建 → 签名 → 公证 → dmg + zip → verify-pack → 写 build.json
 ```
+
+公证需要联网，通常 1–3 分钟（首次可能更久）；失败会直接中止、不产出 dmg / zip，
+改完重跑即可。`pnpm dist:dir` 只出未打包目录（adhoc、不公证），不能发版。
 
 **Windows（另一台机器）**
 
@@ -69,8 +106,9 @@ pnpm release
 ```
 
 依次执行：预检（发布说明存在、版本大于最新已发布版本、发行仓没有同名 release、gh 可用且仓库 public、
-四语言 README 一致、`dependencies` 为空）→ 读 `release/build.json`（版本要对、commit 必须是 HEAD）→
-检查 `release/` 里 dmg / zip / exe 齐全 → `pnpm test` → `verify-pack`（ADR-0030）→
+四语言 README 一致、`dependencies` 为空）→ 读 `release/build.json`（版本要对、commit 必须是 HEAD、
+签名 / 公证信息齐全）→ 检查 `release/` 里 dmg / zip / exe 齐全 → `pnpm test` →
+`verify-pack --expect-signed`（ADR-0030 / ADR-0034）→
 sha256 → `latest.json`（`mac-arm64` / `mac-arm64-dmg` / `win-x64` 三个键）→
 `gh release create v<version> --draft` → 逐个 `gh release upload --clobber` → 回读断言四个资产齐全。
 
@@ -84,7 +122,9 @@ sha256 → `latest.json`（`mac-arm64` / `mac-arm64-dmg` / `win-x64` 三个键�
 同时充当源码的版本标记。
 
 `verify-pack` 不通过也会中止：asar 里只允许 `out/**` 与 `package.json`，
-出现 `.ts` / `.map` / `node_modules`，或者压缩、fuse 状态不符合预期，都不会把包传上去。
+出现 `.ts` / `.map` / `node_modules`，压缩或 fuse 状态不符合预期，或者（macOS）
+签名不是 Developer ID Application、entitlements 缺 `allow-jit`、Gatekeeper 不接受、
+公证票据没 staple，都不会把包传上去。
 Windows 侧的同一套断言接在 `pnpm dist` 末尾（检查 `release/win-unpacked/resources/app.asar`
 与 `Sqraft.exe` 的 fuse），不通过就不会产出可拷走的 exe；`release` 会再跑一次 mac 侧。
 
@@ -117,13 +157,27 @@ gh release view v0.0.2 --repo wfdx165/sqraft --json isDraft,assets \
 应看到四个资产：`Sqraft-<version>-arm64.dmg`、`Sqraft-<version>-arm64-mac.zip`、
 `Sqraft-Setup-<version>.exe`、`latest.json`。
 
-macOS 装一次再发布：
+macOS 装一次再发布。**用浏览器下载**（这样会带上隔离标记，才是用户真实路径），别用 `gh`：
 
 ```bash
 mkdir -p /tmp/sqraft-check
-gh release download v0.0.2 --repo wfdx165/sqraft --pattern '*arm64.dmg' --dir /tmp/sqraft-check
-open /tmp/sqraft-check/*.dmg
+open https://github.com/wfdx165/sqraft/releases   # 找到 v<version> 的 draft，下载 dmg
 ```
+
+拖进「应用程序」后双击：**不应出现任何 Gatekeeper 提示**（签名 + 公证生效）。
+若出现提示，先在本机复查产物：
+
+```bash
+APP=apps/desktop/release/mac-arm64/Sqraft.app
+codesign --verify --deep --strict --verbose=2 "$APP"
+codesign -dv --verbose=4 "$APP" | grep -E "Authority|TeamIdentifier|flags"
+xcrun stapler validate "$APP"
+spctl --assess --type execute --verbose=4 "$APP"
+```
+
+`spctl` 应输出 `source=Notarized Developer ID`、`stapler validate` 应输出
+`The validate action worked`。首次验证签名时建议再开一个干净的 macOS 用户账号
+（Gatekeeper 有缓存，同一账号重复安装看不准）。
 
 Windows 侧在装过 `Sqraft-Setup-<version>.exe` 的机器上确认：
 
@@ -186,7 +240,16 @@ pnpm --filter @sqraft/desktop run check:readmes
 | `release vX 已存在` | 先改 `apps/desktop/package.json` 的 version；或删掉旧 release 与同名 tag 再重试 |
 | 预检报"缺少发布说明" | 写 `docs/releases/vX.Y.Z.md`（可复制上一版）；不能为空 |
 | 预检报"版本必须大于最新已发布版本" | 改 `apps/desktop/package.json` 的 version，发版一律 patch |
-| 构建失败 | 版本号已改好，修完直接重跑 `pnpm release` |
+| `dist: 找不到 Developer ID Application 证书` | Xcode → Manage Certificates 建证书；或先 `pnpm dist:dir` 出个不签名的快包 |
+| `dist: 缺少公证凭据` / 凭据不完整 | 在 shell profile 配 `APPLE_API_KEY` + `APPLE_API_KEY_ID` + `APPLE_API_ISSUER`（或备用两组），`source` 后重试 |
+| 公证报 `401` / `Authentication failed` | Key ID / Issuer ID 对不上，或该 Key 被吊销；重下一把 Team Key |
+| `notarytool` 找不到 | 装完整 Xcode（只有 Command Line Tools 没有 notarytool），然后 `sudo xcode-select -s /Applications/Xcode.app` |
+| 公证失败 `Invalid` | `xcrun notarytool log <submission-id> --key …` 看原因：常见是 entitlements 缺 `allow-jit`、嵌套包签名不完整 |
+| `stapler validate` 失败 | 公证没跑（凭据没生效）或公证后又改过包；重跑 `pnpm dist`，别手工改产物 |
+| 公证超时 / 网络错误 | 重跑 `pnpm dist`；API Key 有频率限制，调参阶段用 `pnpm dist:dir` |
+| `signing` 之后长时间没有输出 | 正常现象：签名（逐个嵌套 bundle）与公证（上传 + 等 Apple 处理）都不打印进度，通常 1–3 分钟、链路慢时更久。另开终端用 `xcrun notarytool history --key …` 看有没有新提交 |
+| 签名阶段异常慢（5 分钟以上/每次发版都这样） | 代理把 `timestamp.apple.com` 劫持到 `198.18.x.x`（fake-ip）会让 `codesign --timestamp` 反复重试。给该域名加 **DIRECT** 规则或临时关 VPN；验收：`dig +short timestamp.apple.com` 返回真实 Apple IP |
+| 构建失败 | 版本号已改好，修完直接重跑 `pnpm dist` |
 | 资产缺失 / 体积异常 | 删掉 draft 重跑，不要手动补传（sha256 必须和包一致） |
 | 发布后才发现包坏了 | 用户侧会回滚；发下一个 patch 版本修复，不回滚 tag |
 | `latest.json` 一时还是旧版本 | GitHub 缓存，等几十秒重试；`publish:release` 已经内置轮询 |

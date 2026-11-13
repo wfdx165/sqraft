@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!--
+      最小 entitlements：只开 V8 必需的两条，不加 disable-library-validation。
+
+      - allow-jit：V8 需要 W^X 内的可执行内存，hardened runtime 下缺它主进程直接崩；
+      - allow-unsigned-executable-memory：Electron 的渲染层仍会写可执行内存，
+        arm64 + hardened runtime 不开会在启动阶段被内核拒绝。
+
+      注意：electron-builder 在找不到 entitlements 文件时的隐式模板还含
+      com.apple.security.cs.disable-library-validation（允许加载非同一 Team 的 dylib）。
+      本应用没有第三方原生模块，所有嵌套代码都由同一张证书签，不需要它——
+      少一条就少一个被注入动态库的入口。若将来加了原生插件且启动失败，再加回来，
+      并在 ADR-0034 里记原因。
+    -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+  </dict>
+</plist>

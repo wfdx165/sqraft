@@ -2,12 +2,14 @@
  * 安装：应用退出后由一个 detached 的 `/bin/sh` 脚本替换 `Sqraft.app`。
  *
  * 为什么不用 `electron-updater` / Squirrel.Mac：macOS 上它会校验代码签名，
- * 本项目未签名（ADR-0029），启动时就报 "Could not get code signature"。
+ * 立项时本项目未签名（ADR-0029），启动时就报 "Could not get code signature"。
+ * 2026-11 起 macOS 包已签名 + 公证（ADR-0034），但这条链路已验过替换与回滚，
+ * 迁移仍是独立一票。
  *
  * 脚本做四件事：等进程退出 → 备份旧包 → 解包并落位 → 启动后等启动标记，
  * 超时自动回滚。只有"新版本真的跑起来了"才算安装成功。
  */
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { access, chmod, mkdir, rm, writeFile } from "node:fs/promises";
 import { chmodSync, mkdirSync, rmSync, writeFileSync, constants } from "node:fs";
 import { dirname, join } from "node:path";
@@ -113,8 +115,25 @@ export interface ScriptOptions extends InstallPaths {
   version: string;
   /** `.app` 的目录名，解包后就在 staging 下 */
   appName: string;
+  /**
+   * 当前正在运行的 App 的签名 Team（ADR-0034）。替换前用它在脚本里校验新包：
+   * 签名无效或 Team 不同就保留旧版本。旧版本（未签名）启动时这里是空串，脚本跳过校验。
+   */
+  expectedTeam?: string;
   /** 启动看门狗轮询次数（每次 0.5s） */
   waitTicks?: number;
+}
+
+/**
+ * 读当前 App 的签名 Team ID；读不到（未签名 / 非 mac）返回空串。
+ *
+ * 不写死 Team：期望值来自"当前正在运行的包"，新版本必须与它同源——换证书续期后
+ * 老客户端自然会要求一次同 Team 的签名，不需要跟着改代码。
+ */
+export function signingTeamOf(appPath: string): string {
+  const result = spawnSync("/usr/bin/codesign", ["-dv", "--verbose=4", appPath], { encoding: "utf8" });
+  const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
+  return output.match(/^TeamIdentifier=(.+)$/m)?.[1]?.trim() ?? "";
 }
 
 /**
@@ -135,6 +154,7 @@ FAILED=${shellQuote(options.failedPath)}
 LOG=${shellQuote(options.logPath)}
 APPNAME=${shellQuote(options.appName)}
 VERSION=${shellQuote(options.version)}
+EXPECTED_TEAM=${shellQuote(options.expectedTeam ?? "")}
 PID=${options.pid}
 WAIT_TICKS=${waitTicks}
 
@@ -160,6 +180,26 @@ if [ ! -d "$STAGING/$APPNAME" ]; then
   log "解包后找不到 $APPNAME，保留旧版本"
   rm -rf "$STAGING"
   exit 1
+fi
+
+# 替换前校验新包身份（ADR-0034）：签名无效或 Team 不同就保留旧版本。
+# 旧版本未签名时 EXPECTED_TEAM 为空，跳过这段（0.0.4 → 签名首发的过渡）。
+if [ -n "$EXPECTED_TEAM" ]; then
+  if ! /usr/bin/codesign --verify --deep --strict "$STAGING/$APPNAME" >> "$LOG" 2>&1; then
+    log "新包签名校验失败，保留旧版本（包不完整或被篡改）"
+    rm -rf "$STAGING"
+    rm -f "$ZIP"
+    printf '%s\\n' "$VERSION" > "$FAILED"
+    exit 1
+  fi
+  NEW_TEAM=$(/usr/bin/codesign -dv --verbose=4 "$STAGING/$APPNAME" 2>&1 | sed -n 's/^TeamIdentifier=//p' | head -1)
+  if [ "$NEW_TEAM" != "$EXPECTED_TEAM" ]; then
+    log "新包 Team 为 $NEW_TEAM，与当前 $EXPECTED_TEAM 不一致，保留旧版本"
+    rm -rf "$STAGING"
+    rm -f "$ZIP"
+    printf '%s\\n' "$VERSION" > "$FAILED"
+    exit 1
+  fi
 fi
 
 rm -rf "$BACKUP"

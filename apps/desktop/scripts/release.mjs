@@ -2,7 +2,7 @@
  * 发版：验收已有产物 → 创建 draft → 逐个上传。
  *
  * **本脚本不构建**：`pnpm dist` 负责"clean + build + 打包 + verify-pack"，并把
- * `release/build.json`（version / commit / dirty / 产物清单）写进产物目录。
+ * `release/build.json`（version / commit / dirty / 签名信息 / 产物清单）写进产物目录。
  * 这里只读那份印章，确认产物就是当前提交构建出来的，然后上传。
  * 分开的好处：上传失败能单独重试，不用再花几分钟重建；Windows 的 exe 也不用
  * 因为 `clean` 被反复搬运。
@@ -23,7 +23,7 @@
  *   pnpm publish:release                      # 把现有 draft 翻成正式发布
  *
  * 发布门槛：发布说明必须存在且非空、pnpm test 必须通过、build.json 的 commit 必须是 HEAD、
- * release/ 里 dmg / zip / exe 齐全；任一不满足即中止。
+ * build.json 记录签名 / 公证已完成（macOS）、release/ 里 dmg / zip / exe 齐全；任一不满足即中止。
  * 版本策略：0.0.1 是内部开发版；0.0.2 是首个公开版；之后每次发版 patch。
  * macOS 只出 arm64；Windows 出 x64 的 NSIS 安装包，但必须在 Windows 机器上构建
  * （本机 mac 交叉构建不可靠，且无法验收）。两者缺一即中止发版。
@@ -299,6 +299,13 @@ function stampProblems() {
   if (stamp.version !== version) {
     problems.push(`build.json 的版本是 ${String(stamp.version)}，package.json 是 ${version}：重跑 pnpm dist`);
   }
+  // macOS 发版必须签名 + 公证（ADR-0034）：没有 signing 说明是 dist:dir 或签名上线前的构建。
+  if (!stamp.signing || !stamp.signing.identity || !stamp.signing.teamId || !stamp.signing.notarized) {
+    problems.push(
+      "build.json 里没有完整的签名 / 公证信息：那是 dist:dir 或签名上线前的产物。" +
+        "发版请重跑 pnpm dist（需要 Developer ID 证书与公证凭据）",
+    );
+  }
   const head = gitHead();
   if (stamp.commit && head && stamp.commit !== head) {
     problems.push(
@@ -474,9 +481,12 @@ report(stampProblemsList);
 const { problems: artifactProblemsList, artifacts } = artifactProblems(stamp);
 report(artifactProblemsList);
 
-// 3) 成品防护验收（ADR-0030）：源码 / 依赖漏回包里就在这里中止，而不是把包传上去。
-//    它只读产物、秒级完成，所以放在测试前面——产物不合格时不必先等一遍测试。
-run("node", [join(desktopRoot, "scripts", "verify-pack.mjs")], { cwd: desktopRoot });
+// 3) 成品防护验收（ADR-0030 / ADR-0034）：源码 / 依赖漏回包里、或签名公证不合格，都在这里中止，
+//    而不是把包传上去。它只读产物、秒级完成，所以放在测试前面——产物不合格时不必先等一遍测试。
+const verifyPackArgs = [join(desktopRoot, "scripts", "verify-pack.mjs"), "--expect-signed"];
+const builtTeam = stamp?.signing?.teamId;
+if (builtTeam) verifyPackArgs.push("--team-id", builtTeam);
+run("node", verifyPackArgs, { cwd: desktopRoot });
 // 4) 发版闸门：没测过不发版（本脚本不再构建，测试是唯一与产物无关的硬检查）
 run("pnpm", ["test"]);
 

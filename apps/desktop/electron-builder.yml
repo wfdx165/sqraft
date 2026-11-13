@@ -26,6 +26,20 @@ electronDist: node_modules/electron/dist
 mac:
   icon: build/icon.icns
   category: public.app-category.design
+  # 发版必须签名（Developer ID Application，见 ADR-0034）：找不到证书直接让构建失败，
+  # 而不是像默认行为那样 warn 一句就静默出不签名的包。快验用 `pnpm dist:dir`（会关掉它）。
+  # 身份不写死，靠钥匙串自动发现；一台机器上有多张 Developer ID 证书时用 CSC_NAME 指定。
+  forceCodeSigning: true
+  # 公证要求 hardened runtime 打开。electron-builder 默认就是 true，写出来防止被随手关掉。
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  # 只开 V8 必需的两条；不要照抄 electron-builder 的隐式模板（它还含 disable-library-validation）
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  # 公证走 electron-builder 内建的 @electron/notarize：凭据只从环境变量读
+  # （APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER，或 APPLE_ID 三件套、APPLE_KEYCHAIN_PROFILE），
+  # 公证完成后会把票据 staple 到 .app；产物是否真的签好、公证好由 verify-pack --expect-signed 断言。
+  notarize: true
   target:
     - target: dmg
       arch:

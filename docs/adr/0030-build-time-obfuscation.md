@@ -17,6 +17,7 @@
   `OnlyLoadAppFromAsar=OFF`、`EnableEmbeddedAsarIntegrityValidation=OFF`。打包版没有任何理由
   保留 `--inspect` 或 `ELECTRON_RUN_AS_NODE` 这类入口。
 - 未签名、未公证（adhoc，`spctl` 拒绝），见 ADR-0029；不引入 Apple 开发者账号。
+  （2026-11 已改为 Developer ID 签名 + 公证，见 ADR-0034；这条保留为当时的背景。）
 - `.sqraft` 仍是明文 zip：它是调试、排障与互通的基础，客户端加密对本地文件没有意义。
 
 目标：
@@ -43,6 +44,8 @@
    日常验证本来就不跑打包版（AGENTS.md）。
    `EnableEmbeddedAsarIntegrityValidation` **保持关**：`ElectronAsarIntegrity` 的哈希写在
    `Info.plist` 里，未签名时改包的人顺手就能改，开了只增加构建失败点。
+   （2026-11 起 macOS 已签名，哈希受签名保护；开启仍需要一次"改包必挂"的负向测试，
+   且 Windows exe 未签名时收益有限，另开票评估，见 ADR-0034。）
 5. **成品验收**：`scripts/verify-pack.mjs` 挂进 `release.mjs` 的发版前置检查——断言 asar 只有
    `out/**` + `package.json`、不含 `.ts`/`.map`、`dependencies` 为空、渲染层已压缩、fuse 状态符合第 4 条；
    任一不满足即中止发版。不挂进 `pnpm test`（测试不该依赖构建产物）。
@@ -65,6 +68,7 @@ MCP 工具名与 JSON 字段字符串、`.sqraft` 的 `formatVersion` 契约。�
 
 1. 引入付费授权或闭源模块，需要防 patch；
 2. 拿到 Apple 开发者账号并开始签名——届时“防改包”回到讨论范围，asar 完整性 fuse 才有意义；
+   **2026-11 已触发**（ADR-0034）：签名已落地，但 asar 完整性仍保持关闭，另开票评估。
 3. 出现真实证据表明成品包被篡改后对外分发。
 
 **文件格式**：明文 zip 保持。
@@ -74,8 +78,9 @@ MCP 工具名与 JSON 字段字符串、`.sqraft` 的 `formatVersion` 契约。�
 - **保留 `dependencies`，用 `files: ["!node_modules/**"]` 排除**：与 electron-builder 的依赖收集逻辑对抗，
   每次升级打包器都可能失效。移动依赖分类是语义正确的做法。
 - **给每个包加 `files` 字段只进 `src/index.ts`**：只解决一半，`.map` 与编译器源码仍在包里。
-- **`EnableEmbeddedAsarIntegrityValidation` 开启**：未签名状态下是纸糊的，纯负收益。
-- **签名 + 公证**：能顺带解决 Gatekeeper 首启拦截，但属于另一票。
+- **`EnableEmbeddedAsarIntegrityValidation` 开启**：未签名状态下是纸糊的，纯负收益
+  （签名后条件已满足，但需要负向测试，见 ADR-0034）。
+- **签名 + 公证**：能顺带解决 Gatekeeper 首启拦截，但属于另一票（2026-11 已落地，ADR-0034）。
 - **对渲染层保留可读错误栈（不压缩）**：包体积与启动解析差一个量级。
 
 ## Consequences

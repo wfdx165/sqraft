@@ -14,7 +14,7 @@
 
 ### [⬇ 최신 버전 다운로드](https://github.com/wfdx165/sqraft/releases/latest)
 
-- **macOS · Apple Silicon(M 시리즈)** · 약 120 MB · 미서명
+- **macOS · Apple Silicon(M 시리즈)** · 약 120 MB
 - **Windows · x64** · 약 100 MB · 미서명
 - Releases 페이지의 **Assets**에서 `Sqraft-<버전>-arm64.dmg`(수동 설치) 또는 `Sqraft-Setup-<버전>.exe`를 선택하세요. `.zip`은 macOS 자동 업데이트가 내려받는 패키지입니다
 - Windows는 Windows 10 22H2 이상 또는 Windows 11(x64)이 필요합니다. Linux는 지원하지 않습니다
@@ -25,18 +25,8 @@
 ### macOS
 
 1. 내려받은 `.dmg`를 열고 **Sqraft**를 「응용 프로그램」으로 끌어다 놓습니다
-2. 첫 실행은 Gatekeeper가 막습니다(앱이 서명되지 않음). 안내는 두 가지 중 하나입니다
-   - "개발자를 확인할 수 없습니다": 앱을 **오른쪽 클릭 → 열기**, 또는 「시스템 설정 → 개인정보 보호 및 보안」에서 「그래도 열기」를 선택합니다
-   - "Sqraft가 손상되었습니다": 파일이 손상된 것이 아니므로 아래 명령을 실행합니다
+2. 「응용 프로그램」에서 **Sqraft**를 두 번 클릭하면 실행됩니다(보안 경고가 표시되지 않습니다)
 3. 이후에는 실행할 때 업데이트를 확인합니다. 새 버전은 백그라운드에서 내려받고 툴바에 「재시동하여 업데이트」가 나타납니다. 종료하거나 그 버튼을 누르면 업그레이드가 끝납니다
-
-"손상되었습니다" 안내가 나오면 앱을 「응용 프로그램」으로 옮긴 뒤 터미널에서 실행하세요.
-
-```bash
-xattr -dr com.apple.quarantine /Applications/Sqraft.app
-```
-
-다시 열면 실행됩니다. 이후 업데이트는 앱이 직접 내려받아 격리 플래그가 붙지 않으므로 이 안내는 다시 나오지 않습니다.
 
 자동 업데이트를 원하지 않아도 메뉴 **도움말 → 업데이트 확인…**에서 언제든 직접 확인할 수 있습니다.
 
@@ -127,7 +117,7 @@ pnpm install
 pnpm dev      # 개발 서버, 렌더러 HMR
 pnpm test     # 각 패키지의 vitest
 pnpm build    # 타입 검사 + 프로덕션 빌드
-pnpm dist     # 호스트 플랫폼용 빌드(macOS는 미서명 arm64 dmg와 zip, Windows는 x64 설치 프로그램)
+pnpm dist     # 호스트 플랫폼용 빌드(macOS는 arm64 dmg와 zip, Windows는 x64 설치 프로그램)
 ```
 
 프로젝트 구조와 리뷰 절차는 [CONTRIBUTING.md](CONTRIBUTING.md)를 참고하세요.
@@ -136,7 +126,7 @@ pnpm dist     # 호스트 플랫폼용 빌드(macOS는 미서명 arm64 dmg와 zi
 
 - **macOS Apple Silicon(M 시리즈)**. Intel Mac은 지원하지 않습니다
 - **Windows 10 22H2 이상 또는 Windows 11(x64)**. Windows ARM64(Windows on ARM)와 Linux는 지원하지 않습니다
-- 두 플랫폼 모두 설치 프로그램이 **미서명·미공증**이므로 첫 실행 시 직접 허용해야 합니다(「설치」 참고)
+- Windows 설치 프로그램은 **미서명**이므로 첫 실행 시 SmartScreen 경고가 나타납니다(「설치」 참고)
 - 자동 업데이트는 macOS에서만 제공합니다. Windows에서는 새 설치 프로그램을 직접 내려받아 실행합니다
 - 중국어·일본어·한국어는 각 OS의 글꼴을 사용하므로 같은 문서라도 macOS와 Windows에서 줄바꿈 위치가 달라질 수 있습니다
 - 실시간 협업, 계정 시스템, 클라우드 동기화는 없습니다
