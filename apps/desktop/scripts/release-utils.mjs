@@ -27,3 +27,8 @@ export function pickArm64Zip(names, version) {
 export function pickArm64Dmg(names, version) {
   return names.find((name) => name.endsWith(`-${version}-arm64.dmg`)) ?? null;
 }
+
+/** Windows NSIS 安装包：`Sqraft-Setup-0.0.5.exe`（见 electron-builder.yml 的 artifactName）。 */
+export function pickWinSetup(names, version) {
+  return names.find((name) => name.endsWith(`-Setup-${version}.exe`)) ?? null;
+}

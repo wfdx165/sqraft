@@ -1,6 +1,6 @@
 # 发布说明
 
-每个版本一个文件：`v<version>.md`（与 GitHub Release 的 tag 同名，如 `v0.0.3.md`）。`pnpm release` 会把它当作 GitHub Release 的正文，并写进更新客户端的「关于」面板。
+每个版本一个文件：`v<version>.md`（与发行仓的 release tag 同名，如 `v0.0.3.md`）。`pnpm release` 会把它当作 GitHub Release 的正文，并写进更新客户端的「关于」面板。
 
 **这个文件必须存在且内容非空**：缺失或只有空白字符时 `pnpm release` 直接中止，没有跳过开关。文件不需要提交——发版脚本不检查本地的分支、工作区或 tag。
 

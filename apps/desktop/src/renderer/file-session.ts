@@ -132,6 +132,8 @@ export async function newDocument(): Promise<boolean> {
   fileState.name = "";
   fileState.mtimeMs = 0;
   ui.docOpen = true;
+  // 换文档时演示模式必须显式退出：不能指望"页面被删"的 watcher 顺带收拾
+  ui.presenter = null;
   ui.activePageId = firstPageId(docStore.doc);
   ui.expandedPageId = ui.activePageId;
   ui.selection = [];
@@ -155,6 +157,7 @@ export async function closeDocument(): Promise<void> {
   fileState.name = "";
   fileState.mtimeMs = 0;
   ui.docOpen = false;
+  ui.presenter = null;
   ui.selection = [];
   ui.instanceContext = [];
   ui.cropNodeId = null;
@@ -204,6 +207,7 @@ async function adoptFile(file: { path: string; name: string; mtimeMs: number; by
     // 必须在 replace 之后：registerDocFonts 要遍历新文档的字体表，否则注册的是旧文档
     void registerDocFonts(state);
     ui.docOpen = true;
+    ui.presenter = null;
     fileState.path = file.path;
     fileState.name = file.name;
     fileState.mtimeMs = file.mtimeMs;

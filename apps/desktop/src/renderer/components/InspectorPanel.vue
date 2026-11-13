@@ -156,6 +156,18 @@ const {
   allComponents,
   overrideView,
   outerOverrideView,
+  inspectorTab,
+  setInspectorTab,
+  link,
+  extraLinkCount,
+  linkPages,
+  linkTargetValue,
+  linkBlocked,
+  setLinkTarget,
+  setLinkTransition,
+  setLinkDuration,
+  removeLink,
+  setScrollDirection,
 } = useInspector();
 </script>
 
@@ -168,7 +180,14 @@ const {
       <span>{{ t("inspector.browseHint") }}</span>
     </div>
 
-    <template v-else-if="node">
+    <template v-else>
+      <div class="tabs seg small">
+        <button :class="{ on: inspectorTab === 'design' }" @click="setInspectorTab('design')">{{ t("inspector.tabDesign") }}</button>
+        <button :class="{ on: inspectorTab === 'prototype' }" @click="setInspectorTab('prototype')">{{ t("inspector.tabPrototype") }}</button>
+      </div>
+
+      <template v-if="inspectorTab === 'design'">
+    <template v-if="node">
       <section class="block meta">
         <div class="meta-row">
           <label>{{ multi ? t("inspector.selection") : t("inspector.name") }}</label>
@@ -824,6 +843,78 @@ const {
       <p>{{ t("inspector.noSelection") }}</p>
       <span>{{ t("inspector.selectHint") }}</span>
     </div>
+      </template>
+
+      <template v-else>
+        <div v-if="!node" class="empty">
+          <p>{{ t("inspector.linkHintEmpty") }}</p>
+        </div>
+
+        <template v-else>
+          <section v-if="node.type === 'page'" class="block">
+            <span class="micro-label">{{ t("inspector.scroll") }}</span>
+            <div class="row">
+              <select :value="node.scrollDirection ?? 'none'" :disabled="multi" @change="setScrollDirection">
+                <option value="none">{{ t("inspector.scrollNone") }}</option>
+                <option value="vertical">{{ t("inspector.scrollVertical") }}</option>
+                <option value="horizontal">{{ t("inspector.scrollHorizontal") }}</option>
+              </select>
+            </div>
+            <div class="row">
+              <span class="muted">{{ multi ? t("inspector.scrollHintMulti") : t("inspector.scrollHint") }}</span>
+            </div>
+          </section>
+
+          <section v-else class="block">
+            <span class="micro-label">{{ t("inspector.link") }}</span>
+
+            <div v-if="linkBlocked" class="row">
+              <span class="muted">{{ linkBlocked }}</span>
+            </div>
+
+            <template v-else>
+              <div class="row">
+                <label>{{ t("inspector.linkTarget") }}</label>
+                <select :value="linkTargetValue" @change="setLinkTarget">
+                  <option value="">{{ t("inspector.linkNone") }}</option>
+                  <option value="__back__">{{ t("inspector.linkBack") }}</option>
+                  <option v-for="page in linkPages" :key="page.id" :value="page.id">{{ page.name }}</option>
+                </select>
+              </div>
+
+              <template v-if="link && link.action === 'navigate'">
+                <div class="row">
+                  <label>{{ t("inspector.linkTransition") }}</label>
+                  <select :value="link.transition.type" @change="setLinkTransition">
+                    <option value="instant">{{ t("inspector.transitionInstant") }}</option>
+                    <option value="dissolve">{{ t("inspector.transitionDissolve") }}</option>
+                  </select>
+                </div>
+                <div v-if="link.transition.type === 'dissolve'" class="row">
+                  <label>{{ t("inspector.linkDuration") }}</label>
+                  <input
+                    class="mono"
+                    type="number"
+                    min="60"
+                    max="2000"
+                    step="10"
+                    :value="link.transition.durationMs"
+                    @change="setLinkDuration"
+                  />
+                </div>
+              </template>
+
+              <div v-if="link" class="row">
+                <button class="mini" @click="removeLink">{{ t("inspector.removeLink") }}</button>
+              </div>
+              <div v-if="extraLinkCount" class="row">
+                <span class="muted">{{ t("inspector.extraLinks", { count: extraLinkCount }) }}</span>
+              </div>
+            </template>
+          </section>
+        </template>
+      </template>
+    </template>
   </div>
 </template>
 
@@ -1251,6 +1342,14 @@ select:disabled {
 .seg.small button {
   padding: 3px 6px;
   font-size: 11px;
+}
+
+.tabs {
+  margin: 0 2px 8px;
+}
+
+.tabs button {
+  padding: 5px 6px;
 }
 
 .seg button {

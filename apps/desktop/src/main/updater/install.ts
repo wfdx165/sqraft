@@ -34,8 +34,13 @@ export function appBundlePathOf(executable: string): string | null {
 }
 
 export interface InstallSupport {
-  ok: boolean;
-  /** 不支持的面向用户原因（支持时为空串） */
+  /**
+   * install：能下载并替换应用包（macOS arm64）。
+   * notify：只能提示新版本并打开下载页（Windows，本版不做静默安装）。
+   * none：连检查都不做（开发态 / 其他平台）。
+   */
+  mode: "install" | "notify" | "none";
+  /** 不支持的面向用户原因（可检查时为空串） */
   reason: string;
   appPath: string | null;
 }
@@ -64,22 +69,24 @@ async function defaultIsWritable(dir: string): Promise<boolean> {
  */
 export async function resolveInstallSupport(options: SupportOptions): Promise<InstallSupport> {
   const writable = options.isWritable ?? defaultIsWritable;
-  if (!options.packaged) return { ok: false, reason: t("update.dev"), appPath: null };
+  if (!options.packaged) return { mode: "none", reason: t("update.dev"), appPath: null };
+  // Windows 没有自替换逻辑：只检查版本并引导用户去下载页（安装器不支持静默升级）
+  if (options.platform === "win32") return { mode: "notify", reason: "", appPath: null };
   if (options.platform !== "darwin") {
-    return { ok: false, reason: t("update.reasonPlatform"), appPath: null };
+    return { mode: "none", reason: t("update.reasonPlatform"), appPath: null };
   }
   if (options.arch !== "arm64") {
-    return { ok: false, reason: t("update.reasonArch"), appPath: null };
+    return { mode: "none", reason: t("update.reasonArch"), appPath: null };
   }
   const appPath = appBundlePathOf(options.executable);
-  if (!appPath) return { ok: false, reason: t("update.reasonNoApp"), appPath: null };
+  if (!appPath) return { mode: "none", reason: t("update.reasonNoApp"), appPath: null };
   if (appPath.startsWith("/Volumes/") || appPath.includes("/AppTranslocation/")) {
-    return { ok: false, reason: t("update.reasonReadOnly"), appPath };
+    return { mode: "none", reason: t("update.reasonReadOnly"), appPath };
   }
   if (!(await writable(dirname(appPath)))) {
-    return { ok: false, reason: t("update.reasonNoPermission"), appPath };
+    return { mode: "none", reason: t("update.reasonNoPermission"), appPath };
   }
-  return { ok: true, reason: "", appPath };
+  return { mode: "install", reason: "", appPath };
 }
 
 function shellQuote(value: string): string {

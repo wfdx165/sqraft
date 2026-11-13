@@ -35,6 +35,7 @@ import { putAsset } from "../assets";
 import { firstFamilyOf, fontFamilies, fontWeightsOf, putFont } from "../fonts";
 import { selectionBounds as boundsOf } from "../canvas/selection-bounds";
 import { createTokenBindings } from "./token-bindings";
+import { usePrototype } from "./usePrototype";
 import { t } from "../i18n";
 import { cjkSans, cjkSerif, uiFontStack } from "../font-stack";
 import type { MessageKey } from "../../shared/i18n";
@@ -1158,6 +1159,11 @@ function resetOuterField(field: string): void {
   );
 }
 
+/* ---------- 原型：设计 / 原型 tab ---------- */
+
+// 链接与页面滚动设置单独放进 usePrototype（控制单文件体积）；这里只把选区快照转交过去
+const prototype = usePrototype({ node, multi, lockedChain });
+
   return {
     lockedChain,
     targets,
@@ -1297,5 +1303,7 @@ function resetOuterField(field: string): void {
     allComponents,
     overrideView,
     outerOverrideView,
+    // 原型 tab：链接读写与页面滚动设置（usePrototype）
+    ...prototype,
   };
 }

@@ -44,50 +44,45 @@ describe("检查更新的闸门", () => {
 });
 
 describe("拿到 latest.json 之后", () => {
+  const base = { currentVersion: "0.1.0", failedVersion: null, manual: false, installable: true } as const;
+
   it("不高于当前版本 → 已是最新，不下载", () => {
-    expect(planForLatest({ currentVersion: "0.2.0", manifest: manifest("0.2.0"), failedVersion: null, manual: true }).kind).toBe(
+    expect(planForLatest({ ...base, currentVersion: "0.2.0", manifest: manifest("0.2.0"), manual: true }).kind).toBe(
       "up-to-date",
     );
-    expect(planForLatest({ currentVersion: "0.3.0", manifest: manifest("0.2.9"), failedVersion: null, manual: true }).kind).toBe(
+    expect(planForLatest({ ...base, currentVersion: "0.3.0", manifest: manifest("0.2.9"), manual: true }).kind).toBe(
       "up-to-date",
     );
   });
 
   it("更高版本 → 带 mac-arm64 资产去下载", () => {
-    const plan = planForLatest({ currentVersion: "0.1.0", manifest: manifest("0.2.0"), failedVersion: null, manual: false });
+    const plan = planForLatest({ ...base, manifest: manifest("0.2.0") });
     expect(plan.kind).toBe("update");
     if (plan.kind !== "update") throw new Error("unreachable");
     expect(plan.asset.sha256).toBe(sha);
     expect(plan.notes).toBe("说明");
   });
 
+  it("不能就地安装的平台（Windows）只提示新版本，不要求资产", () => {
+    const plan = planForLatest({ ...base, manifest: manifest("0.2.0"), installable: false });
+    expect(plan.kind).toBe("available");
+    if (plan.kind !== "available") throw new Error("unreachable");
+    expect(plan.version).toBe("0.2.0");
+    expect(plan.notes).toBe("说明");
+  });
+
   it("自动检查跳过上次装坏的同一个版本", () => {
-    const plan = planForLatest({
-      currentVersion: "0.1.0",
-      manifest: manifest("0.2.0"),
-      failedVersion: "0.2.0",
-      manual: false,
-    });
+    const plan = planForLatest({ ...base, manifest: manifest("0.2.0"), failedVersion: "0.2.0" });
     expect(plan.kind).toBe("skipped-failed");
   });
 
   it("手动检查仍允许重试失败过的版本（偶发失败可以自愈）", () => {
-    const plan = planForLatest({
-      currentVersion: "0.1.0",
-      manifest: manifest("0.2.0"),
-      failedVersion: "0.2.0",
-      manual: true,
-    });
+    const plan = planForLatest({ ...base, manifest: manifest("0.2.0"), failedVersion: "0.2.0", manual: true });
     expect(plan.kind).toBe("update");
   });
 
   it("失败版本之后出现更高版本时自动检查恢复", () => {
-    const plan = planForLatest({
-      currentVersion: "0.1.0",
-      manifest: manifest("0.2.1"),
-      failedVersion: "0.2.0",
-      manual: false,
-    });
+    const plan = planForLatest({ ...base, manifest: manifest("0.2.1"), failedVersion: "0.2.0" });
     expect(plan.kind).toBe("update");
   });
 });

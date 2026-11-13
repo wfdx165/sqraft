@@ -1,10 +1,11 @@
 # 发版手册
 
-Sqraft 只发布 **macOS arm64**：源码、安装包与下载页都在同一个公开仓库
-[`wfdx165/sqraft`](https://github.com/wfdx165/sqraft)。
-自动更新靠该仓库的 `releases/latest/download/latest.json`（ADR-0029）。
+Sqraft 发布 **macOS arm64** 与 **Windows x64** 两个平台的安装包：
+源码、安装包与下载页都在同一个公开仓库 [`wfdx165/sqraft`](https://github.com/wfdx165/sqraft)。
+macOS 的自动更新靠该仓库的 `releases/latest/download/latest.json`（ADR-0029）；
+Windows 只做「检查并提示」，更新靠手动下载安装器（ADR-0033）。
 
-> 仓库必须保持 **public**。私有仓库 = `latest.json` 404 = 自动更新静默失效。
+> 发行仓库必须保持 **public**。私有仓库 = `latest.json` 404 = 自动更新静默失效。
 
 ## 一次性准备
 
@@ -27,7 +28,7 @@ gh auth status         # 确认账号对 wfdx165/sqraft 有写权限
 - 版本号唯一真源是 `apps/desktop/package.json`；根 `package.json` 不带 `version` 字段。
 - **完全手动**：直接编辑那个字段，`pnpm release` 只读不写，也不接受 `--bump` / `--version` 参数。
 - 不做预发布版本，每次发版一律 patch。
-- 发版门槛只有两件事：**发布说明必须存在且非空**、`pnpm test` 通过。脚本不检查分支、工作区或 tag。
+- 发版门槛只有两件与源码仓库无关的事：**发布说明必须存在且非空**、`pnpm test` 通过。脚本不检查分支、工作区或 tag。
 
 ## 每次发版
 
@@ -41,36 +42,70 @@ gh auth status         # 确认账号对 wfdx165/sqraft 有写权限
 
 文件缺失、或内容只有空白，`pnpm release` 直接中止；没有跳过开关。说明文件不必提交——脚本不读 git 状态。
 
+**文件格式变更必须写进说明**：`.sqraft` 的 `formatVersion` 提升后，旧版本客户端打开新文件不会报错，但会**静默丢弃**它不认识的新字段（例如 0.0.4 的原型链接）。发布说明里要写清"用旧版本打开会丢失什么"，不能只列新增功能。
+
 ### 3. 出包 + 创建 draft
+
+构建与上传分开：`pnpm dist` 只负责构建（并写 `release/build.json`），`pnpm release` 只负责验收与上传。
+上传失败可以单独重跑，不用再花几分钟重建。
+
+**macOS（本机）**
+
+```bash
+pnpm dist          # clean → 类型检查 + 构建 → dmg + zip → verify-pack → 写 build.json
+```
+
+**Windows（另一台机器）**
+
+仓库拉到 Windows，`pnpm install && pnpm dist`（按宿主平台出 x64 的 NSIS 安装器），
+得到 `release/Sqraft-Setup-<version>.exe`，并在那台机器上按第 4 节的清单手点一遍。
+把 exe 拷回 mac 的 `apps/desktop/release/`。
+
+**创建 draft**
 
 ```bash
 pnpm release
+# 或：pnpm release --win ~/Downloads/Sqraft-Setup-0.0.5.exe
 ```
 
-依次执行：预检（发布说明存在、版本大于最新已发布版本、仓库没有同名 release、gh 可用且仓库 public）→ `pnpm test` → `clean` →
-类型检查 + 构建 → `Sqraft-<version>-arm64.dmg` + `Sqraft-<version>-arm64-mac.zip` → `verify-pack` 成品防护验收（ADR-0030）→
-sha256 → `latest.json` → `gh release create v<version> --repo wfdx165/sqraft --draft`。
+依次执行：预检（发布说明存在、版本大于最新已发布版本、发行仓没有同名 release、gh 可用且仓库 public、
+四语言 README 一致、`dependencies` 为空）→ 读 `release/build.json`（版本要对、commit 必须是 HEAD）→
+检查 `release/` 里 dmg / zip / exe 齐全 → `pnpm test` → `verify-pack`（ADR-0030）→
+sha256 → `latest.json`（`mac-arm64` / `mac-arm64-dmg` / `win-x64` 三个键）→
+`gh release create v<version> --draft` → 逐个 `gh release upload --clobber` → 回读断言四个资产齐全。
+
+`build.json` 是"构建与上传解耦"的防护：commit 不是 HEAD、版本对不上、或产物不在清单里，
+都直接中止——不会出现"改完代码忘了重新 dist，把旧包发出去"。构建时工作区不干净只告警。
 
 `pnpm release` 不接受版本参数：版本只认 `apps/desktop/package.json`。
-发布说明缺失或测试失败都会直接中止，不会出包。
+发布说明缺失、测试失败、产物缺失都会直接中止，不会创建 draft。
 
-脚本**不看本地仓库**：在哪个分支、工作区是否干净、有没有源码 tag，都不影响发版。
-`v<version>` tag 由 `gh release create` 在本仓库创建，同时就是源码的版本标记。
-
-CI（`.github/workflows/ci.yml`）在 PR 与 `main` 上跑 `pnpm test && pnpm build`；
-发版仍在本机执行，不占用 CI。
+脚本**不看分支与源码 tag**；发行仓的 `v<version>` tag 由 `gh release create` 创建，
+同时充当源码的版本标记。
 
 `verify-pack` 不通过也会中止：asar 里只允许 `out/**` 与 `package.json`，
 出现 `.ts` / `.map` / `node_modules`，或者压缩、fuse 状态不符合预期，都不会把包传上去。
-报错信息会指出是"依赖分类改回去了"还是"构建配置被改坏了"。
+Windows 侧的同一套断言接在 `pnpm dist` 末尾（检查 `release/win-unpacked/resources/app.asar`
+与 `Sqraft.exe` 的 fuse），不通过就不会产出可拷走的 exe；`release` 会再跑一次 mac 侧。
 
 draft 阶段线上不可见（`/releases/latest` 仍指向上一个版本），此时**验证不了自动更新**。
 
+**上传失败怎么重试**（draft 已建好，别再跑 `release`）：
+
+```bash
+gh release upload v<version> \
+  apps/desktop/release/Sqraft-<version>-arm64.dmg \
+  apps/desktop/release/Sqraft-<version>-arm64-mac.zip \
+  apps/desktop/release/Sqraft-Setup-<version>.exe \
+  apps/desktop/release/latest.json \
+  --repo wfdx165/sqraft --clobber
+```
+
 可选参数：
 
-- `pnpm release --skip-build`：复用 `release/` 里已有产物（跳过测试）
-- `pnpm release --publish`：构建后直接正式发布（跳过 draft）
-- `pnpm release --preflight`：只跑检查（发布说明 + GitHub 侧），不构建
+- `pnpm release --win <路径>`：把指定 exe 复制成 `Sqraft-Setup-<version>.exe` 放进 `release/`
+- `pnpm release --publish`：验收后直接正式发布（跳过 draft）
+- `pnpm release --preflight`：只跑检查（发布说明 + README + GitHub 侧），不构建、不上传
 
 ### 4. 验收 draft
 
@@ -79,15 +114,23 @@ gh release view v0.0.2 --repo wfdx165/sqraft --json isDraft,assets \
   --jq '{draft:.isDraft, assets:[.assets[].name]}'
 ```
 
-应看到三个资产：`Sqraft-0.0.2-arm64.dmg`、`Sqraft-0.0.2-arm64-mac.zip`、`latest.json`。
+应看到四个资产：`Sqraft-<version>-arm64.dmg`、`Sqraft-<version>-arm64-mac.zip`、
+`Sqraft-Setup-<version>.exe`、`latest.json`。
 
-装一次再发布：
+macOS 装一次再发布：
 
 ```bash
 mkdir -p /tmp/sqraft-check
 gh release download v0.0.2 --repo wfdx165/sqraft --pattern '*arm64.dmg' --dir /tmp/sqraft-check
 open /tmp/sqraft-check/*.dmg
 ```
+
+Windows 侧在装过 `Sqraft-Setup-<version>.exe` 的机器上确认：
+
+- 安装向导能改目录；安装后开始菜单与桌面都有快捷方式；卸载后 `%APPDATA%\Sqraft` 还在
+- 双击 `.sqraft` 文件能直接打开
+- 新建 → 画图 → 保存 → 关窗重开内容一致；嵌图、MCP 建节点、演示模式都正常
+- 工具栏/「关于」里的更新提示能打开下载页
 
 确认：能启动、关于面板版本正确、能新建/保存 `.sqraft`、MCP 能连。
 
@@ -108,13 +151,16 @@ curl -s https://github.com/wfdx165/sqraft/releases/latest/download/latest.json |
 
 返回的 `version` 是新版本即成功。
 
-### 6. 更新下载页（改了 README / 截图才需要）
+### 6. 改 README / 截图时
 
-四份 README（`README.md` 英文首屏 + `README.zh-CN.md` / `README.ja-JP.md` / `README.ko-KR.md`）
-就在仓库根目录，直接改、直接提交，没有同步脚本。
+四份 README 直接改在本仓库（发行仓就是本仓库），随代码一起提交：
 
-改一份必须同步其余三份：首行语言切换链接保持完整，四份的二级标题数量必须一致
-（没有脚本校验，靠评审）。截图放在 `docs/images/`。
+```bash
+pnpm --filter @sqraft/desktop run check:readmes
+```
+
+校验四份文件齐全、首行语言切换链接完整、二级标题数量一致、许可段都指向 Apache-2.0；
+`pnpm release` 的预检与 CI 也会跑同一条命令，不一致直接中止。
 
 ## 第一个版本（0.0.2）的特殊之处
 
@@ -156,12 +202,14 @@ curl -s https://github.com/wfdx165/sqraft/releases/latest/download/latest.json |
   "notes": "…",
   "assets": {
     "mac-arm64": { "url": "…zip", "size": 123, "sha256": "…" },
-    "mac-arm64-dmg": { "url": "…dmg", "size": 123, "sha256": "…" }
+    "mac-arm64-dmg": { "url": "…dmg", "size": 123, "sha256": "…" },
+    "win-x64": { "url": "…exe", "size": 123, "sha256": "…" }
   }
 }
 ```
 
+- `win-x64` 指向 `Sqraft-Setup-<version>.exe`；Windows 客户端当前只读 `version` 做提示，键为以后接静默安装预留
 - 仓库地址的唯一真源：`apps/desktop/update.config.json`（客户端与脚本读同一份）
 - 发布说明：`docs/releases/v<version>.md`（必须存在且非空）
-- 下载页 README 有四份，改一份必须同步其余三份，并保持二级标题数量一致（没有脚本校验）
+- 下载页 README 有四份，改一份要同步其余三份（`pnpm --filter @sqraft/desktop run check:readmes` 会校验）
 - 客户端检查地址：`https://github.com/<repo>/releases/latest/download/latest.json`

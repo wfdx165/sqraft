@@ -37,6 +37,8 @@
    `RunAsNode` 关、`EnableNodeOptionsEnvironmentVariable` 关、`EnableNodeCliInspectArguments` 关、
    `OnlyLoadAppFromAsar` 开；`afterPack` 里翻转，`strictlyRequireAllFuses` 打开——
    Electron 升级新增 fuse 时构建直接失败，逼着我们复核一次（Electron 45 已有 9 个）。
+   **Windows 的 `Sqraft.exe` 同样翻转**（同一个 `after-pack.mjs`，ADR-0033）：`RunAsNode` /
+   `NODE_OPTIONS` 注入 / 调试参数在 Windows 包上一样不该保留。
    代价：打包版不能 `--inspect`、不能 `ELECTRON_RUN_AS_NODE`、不能用 `NODE_OPTIONS` 注入；
    日常验证本来就不跑打包版（AGENTS.md）。
    `EnableEmbeddedAsarIntegrityValidation` **保持关**：`ElectronAsarIntegrity` 的哈希写在

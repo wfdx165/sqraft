@@ -14,13 +14,15 @@ The app is fully local: no account, no cloud, no model calls. A design is simply
 
 ### [⬇ Download the latest version](https://github.com/wfdx165/sqraft/releases/latest)
 
-**macOS · Apple Silicon (M series)** · about 120 MB · unsigned
-
-- macOS arm64 only; Intel Macs, Windows and Linux are not supported
-- Every release ships both `.dmg` (manual install) and `.zip` (used by the updater); pick `Sqraft-<version>-arm64.dmg` under **Assets** on the Releases page
+- **macOS · Apple Silicon (M series)** · about 120 MB · unsigned
+- **Windows · x64** · about 100 MB · unsigned
+- Under **Assets** on the Releases page pick `Sqraft-<version>-arm64.dmg` (manual install) or `Sqraft-Setup-<version>.exe`; the `.zip` is what the macOS updater downloads
+- Windows 10 22H2 or Windows 11, x64. Linux is not supported
 - Older versions and release notes: [Releases](https://github.com/wfdx165/sqraft/releases)
 
 ## Install
+
+### macOS
 
 1. Open the downloaded `.dmg` and drag **Sqraft** into Applications
 2. Gatekeeper blocks the first launch (the app is unsigned); you will see one of two prompts:
@@ -38,16 +40,24 @@ Open it again and it works. Later updates are downloaded by the app itself witho
 
 If you would rather not auto-update, **Help → Check for Updates…** checks manually at any time.
 
+### Windows
+
+1. Run `Sqraft-Setup-<version>.exe`. SmartScreen warns because the installer is unsigned: click **More info → Run anyway**
+2. The wizard lets you choose the install folder; by default it installs for the current user (no administrator rights). Start-menu and desktop shortcuts are created — just delete the desktop one if you don't want it
+3. Double-click any `.sqraft` file to open it in Sqraft
+4. Updates are manual: when a new version is out, the app shows a **Download** chip that opens the Releases page; uninstalling keeps your data in `%APPDATA%\Sqraft`
+
 ## What you can do
 
 - **Vector canvas**: rectangles, ellipses, polygons, lines, pen paths, text; infinite canvas with multiple pages
 - **Auto layout**: direction, gap, padding, hug / fill / fixed, wrapping, drag to reorder
 - **Components**: main components, instances, slots, instance overrides and swapping
+- **Prototype links**: click a layer to jump to another page or go back, with instant / fade transitions; present mode scrolls pages and `H` highlights hotspots
 - **Design tokens**: colors and numbers (font size, radius, spacing…); change once and it applies everywhere
 - **Editing**: multi-select, marquee, align and distribute, drag to reparent, grouping, guides, snapping
 - **Effects**: drop shadow, inner shadow, layer blur, background blur
 - **Images**: drag in, paste, crop, mask, linked images (cached locally)
-- **AI editing**: agents create nodes, change styles and screenshot the result over MCP; one tool call = one undo step
+- **AI editing**: agents create nodes, change styles and screenshot the result over MCP; they can also wire prototype links, so a generated design is clickable; one tool call = one undo step
 - **Export**: PNG (with scale)
 - **Interface languages**: 中文 / English / 日本語 / 한국어, with optional automatic system-language detection
 
@@ -59,7 +69,7 @@ Sqraft never calls a model and needs no API key. While the app is running it ser
 http://127.0.0.1:7331/mcp
 ```
 
-The app must stay running (there is no CLI, and clients cannot launch it). If the port is taken the app moves to the next free one; the actual address is shown on the welcome page and under **Sqraft → Configure MCP…** (in the File menu on Windows/Linux).
+The app must stay running (there is no CLI, and clients cannot launch it). If the port is taken the app moves to the next free one; the actual address is shown on the welcome page and under **Sqraft → Configure MCP…** (in the File menu on Windows).
 
 <details>
 <summary>Claude Code</summary>
@@ -106,27 +116,29 @@ The endpoint only listens on `127.0.0.1` and rejects requests carrying an `Origi
 - A design is a `.sqraft` file on disk (a zip container: snapshot + image assets); no cloud service involved
 - No account, no backend, no telemetry; the only outbound requests are update checks and linked images you added yourself
 - Operation logs go to the system log directory (macOS: `~/Library/Logs/Sqraft/`); **Help → Open Logs Folder** takes you there
-- Uninstalling removes the app; data and preferences stay in `~/Library/Application Support/Sqraft/` and can be deleted as well
+- Uninstalling removes the app; data and preferences stay in `~/Library/Application Support/Sqraft/` (macOS) or `%APPDATA%\Sqraft` (Windows) and can be deleted as well
 
 ## Build from source
 
-Requirements: macOS on Apple Silicon, Node.js 22.12 (see `.nvmrc`) and pnpm 10.33.4.
+Requirements: macOS on Apple Silicon or Windows x64, Node.js 22.12 (see `.nvmrc`) and pnpm 10.33.4.
 
 ```bash
 pnpm install
 pnpm dev      # electron-vite dev server with renderer HMR
 pnpm test     # vitest across packages
 pnpm build    # type check + production bundle
-pnpm dist     # unsigned macOS arm64 dmg + zip
+pnpm dist     # builds for the host platform: macOS arm64 dmg + zip, or the Windows x64 installer
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the project layout and the review process.
 
 ## Requirements and known limitations
 
-- **macOS Apple Silicon**; Intel Macs are not supported
-- The app is **unsigned and not notarized**: the first launch needs a manual allow (see Install)
-- Auto-update is only available on macOS arm64; there are no Windows or Linux builds
+- **macOS Apple Silicon (M series)**; Intel Macs are not supported
+- **Windows 10 22H2+ or Windows 11 (x64)**; Windows on ARM (ARM64) and Linux are not supported
+- The app is **unsigned and not notarized** on both platforms: the first launch needs a manual allow (see Install)
+- Auto-update is macOS-only; on Windows you download and run the new installer yourself
+- CJK text uses each system's own fonts, so line breaks can shift between macOS and Windows
 - No real-time collaboration, no accounts, no cloud sync
 
 ## License and feedback

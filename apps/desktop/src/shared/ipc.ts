@@ -143,8 +143,20 @@ export interface CloseRequest {
   quit: boolean;
 }
 
-/** 更新器阶段：`dev` / `unsupported` 都不发请求。 */
-export type UpdatePhase = "dev" | "unsupported" | "idle" | "checking" | "up-to-date" | "downloading" | "ready" | "error";
+/**
+ * 更新器阶段：`dev` / `unsupported` 都不发请求。
+ * `available` = 平台不支持自动安装（Windows），只提示新版本并引导去下载页。
+ */
+export type UpdatePhase =
+  | "dev"
+  | "unsupported"
+  | "idle"
+  | "checking"
+  | "up-to-date"
+  | "available"
+  | "downloading"
+  | "ready"
+  | "error";
 
 export interface UpdateState {
   phase: UpdatePhase;
@@ -158,7 +170,7 @@ export interface UpdateState {
   message: string | null;
   /** 进入"已就绪"的时间（毫秒）；未就绪为 null */
   readyAt: number | null;
-  /** 当前安装位置是否支持自动更新 */
+  /** 当前平台是否支持检查更新（Windows 只提示，不自动安装） */
   supported: boolean;
 }
 
@@ -203,6 +215,8 @@ export interface SqraftApi {
     check(manual?: boolean): Promise<UpdateState>;
     /** 重启以安装已就绪的版本：走关闭守卫（未保存时有保存/不保存/取消） */
     restart(): Promise<void>;
+    /** 打开发布页下载新版（Windows 没有自动安装，只能走这里）；被系统拦下时返回 false */
+    download(): Promise<boolean>;
     /** 主进程推送的状态变化 */
     onState(handler: (state: UpdateState) => void): () => void;
   };
@@ -294,6 +308,7 @@ export const CHANNELS = {
   updateState: "update:state",
   updateCheck: "update:check",
   updateRestart: "update:restart",
+  updateDownload: "update:download",
   updateChanged: "update:changed",
   menuCommand: "menu:command",
   menuSetBindings: "menu:set-bindings",

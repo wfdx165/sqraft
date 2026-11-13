@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { compareVersions, pickArm64Dmg, pickArm64Zip } from "./release-utils.mjs";
+import { compareVersions, pickArm64Dmg, pickArm64Zip, pickWinSetup } from "./release-utils.mjs";
 
 describe("发布产物匹配", () => {
   it("接受 electron-builder 默认的 -mac zip 后缀", () => {
@@ -15,6 +15,13 @@ describe("发布产物匹配", () => {
   it("只匹配当前版本，并正确找到 dmg", () => {
     expect(pickArm64Zip(["Sqraft-0.0.1-arm64-mac.zip"], "0.0.2")).toBeNull();
     expect(pickArm64Dmg(["Sqraft-0.0.2-arm64.dmg"], "0.0.2")).toBe("Sqraft-0.0.2-arm64.dmg");
+  });
+
+  it("Windows 只认当前版本的 Setup exe", () => {
+    const names = ["Sqraft-Setup-0.0.2.exe", "Sqraft-Setup-0.0.2.exe.blockmap", "Sqraft-Setup-0.0.2.exe.sha256"];
+    expect(pickWinSetup(names, "0.0.2")).toBe("Sqraft-Setup-0.0.2.exe");
+    expect(pickWinSetup(["Sqraft-Setup-0.0.1.exe"], "0.0.2")).toBeNull();
+    expect(pickWinSetup(["Sqraft Setup 0.0.2.exe"], "0.0.2")).toBeNull();
   });
 });
 

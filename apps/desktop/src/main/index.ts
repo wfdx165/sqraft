@@ -144,10 +144,11 @@ function createWindow(): void {
     show: false,
     title: "Sqraft",
     backgroundColor: "#eef0f4",
-    // macOS 让红绿灯浮在左栏上；其他平台用系统标题栏并隐藏菜单栏
+    // macOS 让红绿灯浮在左栏上；Windows / Linux 用系统标题栏并常显菜单栏——
+    // 隐藏后只有 Alt 能唤起，"打开日志目录""清空图片缓存"这类排障入口等于找不到
     titleBarStyle: isMac ? "hiddenInset" : "default",
     trafficLightPosition: isMac ? { x: 18, y: 18 } : undefined,
-    autoHideMenuBar: !isMac,
+    autoHideMenuBar: false,
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),
       contextIsolation: true,

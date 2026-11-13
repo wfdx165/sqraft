@@ -27,6 +27,8 @@
   `pnpm release` 只面向这个仓库，不检查本地分支、工作区或 tag，`latest.json` 也不记录 commit；
   `vX` tag 由 `gh release create` 创建，同时充当源码的版本标记。
 - 产物是 **dmg + zip**：dmg 给手动安装，zip 给自动替换（`electron-builder.yml` 两个 target）。
+- Windows 出 x64 的 NSIS 安装器（ADR-0033）。客户端**只提示、不安装**：`latest.json` 的
+  `win-x64` 键为以后接静默安装预留，当前只读 `version`；安装器由用户自己下载执行。
 - `pnpm release`（`scripts/release.mjs`）一条命令：打包 → 算 sha256 → 生成 `latest.json` →
   `gh release create`。默认 **draft**（用来核对 notes 与资产），`--publish` 直接发。
 - **draft 阶段验证不了自动更新**：`/releases/latest` 不含 draft，draft 资产匿名下载也是 404。
@@ -49,7 +51,10 @@
 - **替换**：`/bin/sh` 脚本等主进程退出 → 旧 `.app` 改名为 `.backup` → `ditto -x -k` 解包落位 →
   `open` 新版本 → 等启动标记（60 秒）→ 写失败回执、删除坏包并换回备份、重新启动旧版。
   启动标记由新版本在 `initUpdater()` 一开始写入。
-- **前置检查**：非打包 / 非 darwin / 非 arm64 / 从 dmg 挂载点或 AppTranslocation 运行 / 目录不可写，
+- **Windows 只提示**：`resolveInstallSupport` 对 win32 返回 `notify`——检查版本后状态置为
+  `available`，工具栏给「前往下载」打开 Releases 页面；不下载、不替换、不回滚（ADR-0033）。
+  安装器是 per-user 的 NSIS，卸载保留 `%APPDATA%\Sqraft`。
+- **前置检查**：非打包 / 非 darwin（Windows 走 `notify`）/ 非 arm64 / 从 dmg 挂载点或 AppTranslocation 运行 / 目录不可写，
   一律提前拒绝并说明原因（不下载、不占用磁盘）。
 - **信任**：只接受 https + `github.com` 与 `*.githubusercontent.com`；下载时手动跟随重定向、
   每一跳都过白名单；sha256 不匹配即丢弃。`latest.json` 不做签名。
