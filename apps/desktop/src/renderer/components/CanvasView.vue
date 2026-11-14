@@ -16,8 +16,16 @@ import {
   type Rect,
   type VectorPath,
 } from "@sqraft/core";
-import { Canvas2DBackend, drawDocument, screenToWorld, worldToScreen, type Viewport } from "@sqraft/render";
-import { ensureAssetDecoded, imageFor } from "../assets";
+import {
+  Canvas2DBackend,
+  createRootBoundsCache,
+  drawDocument,
+  screenToWorld,
+  worldToScreen,
+  type DrawOptions,
+  type Viewport,
+} from "@sqraft/render";
+import { ensureAssetDecoded, imageFor, imagePending } from "../assets";
 import {
   dropImages,
   insertImages,
@@ -45,6 +53,7 @@ import { containerAt, layoutParentOf, reorderGuide, reorderIndexAt } from "../ca
 import { dropAllowed, dropTargetAt, type DropTarget } from "../canvas/drop-target";
 import { paintDropTarget } from "../canvas/drop-overlay";
 import { hoverContainerAt } from "../canvas/child-outlines";
+import { paintPrototypeLinks, paintPrototypeFlow } from "../canvas/prototype-links";
 import {
   buildInsertPreview,
   isEmptyTransition,
@@ -114,7 +123,7 @@ import {
   type GuideLine,
 } from "../canvas/guides";
 import { paintInfoOverlays } from "../canvas/info-overlays";
-import { keyOf, registerShortcuts } from "../shortcuts";
+import { keyLabel, registerShortcuts } from "../shortcuts";
 import { vTip } from "../tooltip";
 import { t } from "../i18n";
 import Icon from "./Icon.vue";
@@ -141,6 +150,8 @@ const hoverTextId = ref<NodeId | null>(null);
 const hoverLibraryId = ref<NodeId | null>(null);
 /** 悬停的容器（画出其一级子元素边界，纯 UI 状态） */
 const hoverContainerId = ref<NodeId | null>(null);
+/** 悬停的热区（带原型链接的图层，画出到目标页的连线） */
+const hoverLinkId = ref<NodeId | null>(null);
 
 /** UI 叠加层上下文（唯一承接指针事件的画布） */
 let ctx: CanvasRenderingContext2D | null = null;
@@ -370,6 +381,65 @@ function clearLayer(g: CanvasRenderingContext2D): void {
   g.restore();
 }
 
+/**
+ * 效果层缓存的失效纪元（ADR-0033）：文档对象 + 版本 + 异步资源纪元。
+ * 链接图解码完、字体加载完、语言切换都会改变绘制结果却不改文档，所以由 `requestRedraw` / 字体事件推进 `renderEpoch`。
+ * 嵌入图片解码走 `requestRepaint`（只重绘）：缓存层自己记录画的时候哪些图还没就绪。
+ */
+let renderEpoch = 0;
+const docSerials = new WeakMap<object, number>();
+let docSerialSeq = 0;
+function effectCacheEpoch(): string {
+  const doc = docStore.doc;
+  let serial = docSerials.get(doc);
+  if (serial === undefined) {
+    serial = ++docSerialSeq;
+    docSerials.set(doc, serial);
+  }
+  return `${serial}.${doc.version}.${renderEpoch}`;
+}
+/**
+ * 本帧拉伸了旧缓存（缩放手势中，或补清晰超出单帧预算）：
+ * - 缩放手势中：停下 150ms 后再补（期间又有新帧就顺延）；
+ * - 已经在补清晰：下一帧接着补，直到全部清晰（每帧只花约 30ms，见 Canvas2DBackend 的 RENDER_BUDGET_MS）。
+ */
+let settleTimer: ReturnType<typeof setTimeout> | null = null;
+let settling = false;
+function scheduleSettleRedraw(): void {
+  if (settleTimer) clearTimeout(settleTimer);
+  if (settling && lastSettleZoom === vp.zoom) {
+    settleTimer = null;
+    markDirty();
+    return;
+  }
+  lastSettleZoom = vp.zoom;
+  settleTimer = setTimeout(() => {
+    settleTimer = null;
+    settling = true;
+    markDirty();
+  }, 150);
+}
+let lastSettleZoom = 0;
+
+function bumpRenderEpoch(): void {
+  renderEpoch += 1;
+  markDirty();
+}
+
+/** 根节点包围盒缓存：按文档版本失效，供视口剔除用（ADR-0032）。 */
+const rootBounds = createRootBoundsCache();
+/** 剔除余量（CSS 像素）：盖住页面投影（blur 32 + 偏移 10）这类不进包围盒的装饰。 */
+const CULL_MARGIN_PX = 64;
+
+/** 当前视口的剔除参数：视口外的页面 / 主组件整棵跳过。 */
+function viewportCull(): DrawOptions["cull"] {
+  return {
+    rect: { x: vp.x, y: vp.y, width: vp.width / vp.zoom, height: vp.height / vp.zoom },
+    rootBounds: (id) => rootBounds(docStore.doc, id),
+    pad: CULL_MARGIN_PX / vp.zoom,
+  };
+}
+
 /** 钢笔逻辑的依赖：文档、UI 状态与命令入口（显式注入，模块内不 import 单例）。 */
 const penDeps = { docStore, ui, dispatch, select, markDirty };
 
@@ -414,10 +484,18 @@ function draw() {
     vectorPreview: editing ? (vectorPreview ?? undefined) : undefined,
     geometryPreview: insertPreview?.boxes,
     dimPageIds,
-    resolveImage: (assetId) => imageFor(assetId),
+    cull: viewportCull(),
+    // 按屏幕上实际需要的分辨率取图（降采样解码）：大图不必每帧以原图尺寸上传、缩放
+    pixelRatio: vp.zoom * vp.dpr,
+    // 效果层（投影 / 模糊）跨帧复用：平移时不必每帧重新合成（ADR-0033）
+    effectCacheEpoch: effectCacheEpoch(),
+    resolveImage: (assetId, want) => imageFor(assetId, want),
+    imagePending,
     resolveLinkedImage: (url) => linkedImage(url),
   });
   backend.endFrame();
+  if (backend.stats.staleHits > 0) scheduleSettleRedraw();
+  else settling = false;
 
   // 覆盖层（UI 层）：独立画布，永远在文档之上；每帧自行清屏
   syncLayerSize(ctx.canvas);
@@ -450,6 +528,16 @@ function draw() {
     hoverTextId: hoverTextId.value,
     hoverLibraryId: hoverLibraryId.value,
   });
+
+  // 原型链接：选中/悬停热区时画到目标页的连线（只读信息层）
+  if (editing && !busyGesture) {
+    const linkIds = [...ui.selection];
+    if (hoverLinkId.value) linkIds.push(hoverLinkId.value);
+    if (linkIds.length > 0) paintPrototypeLinks(ctx, { doc: docStore.doc, vp, nodeIds: linkIds });
+  } else if (!editing && !ui.presenter) {
+    // 拖动模式：全量流向图（只画两端都在视口内的连线）
+    paintPrototypeFlow(ctx, { doc: docStore.doc, vp });
+  }
 
   const activePageNode = ui.activePageId ? docStore.doc.nodes[ui.activePageId] : null;
   if (editing) {
@@ -507,7 +595,7 @@ function draw() {
 
   if (DEV_HUD) {
     const total = performance.now() - frameStarted;
-    devHud.value = `${total.toFixed(1)}ms · 离屏 ${backend.stats.layers} (${backend.stats.layerMs.toFixed(1)}ms)`;
+    devHud.value = `${total.toFixed(1)}ms · 离屏 ${backend.stats.layers} (${backend.stats.layerMs.toFixed(1)}ms) · 缓存 ${backend.stats.cacheHits} · 拉伸 ${backend.stats.staleHits}`;
   }
 }
 
@@ -984,9 +1072,16 @@ function setHoverLibrary(id: NodeId | null) {
   markDirty();
 }
 
+function setHoverLink(id: NodeId | null) {
+  if (hoverLinkId.value === id) return;
+  hoverLinkId.value = id;
+  markDirty();
+}
+
 function clearHover() {
   setHoverText(null);
   setHoverLibrary(null);
+  setHoverLink(null);
   if (hoverContainerId.value) {
     hoverContainerId.value = null;
     markDirty();
@@ -1032,6 +1127,12 @@ function updateHover(e: PointerEvent) {
   const hit = hitTest(vp, w.x, w.y);
   const node = hit && !hit.inactive ? docStore.doc.nodes[hit.id] : null;
   setHoverText(node?.type === "text" ? node.id : null);
+  // 原型链接：子图层没有链接时向上找热区祖先（点按钮里的文字也算点按钮）
+  let linkNode: DocNode | null = node;
+  while (linkNode && !linkNode.interactions?.some((link) => link.trigger === "click")) {
+    linkNode = linkNode.parentId ? docStore.doc.nodes[linkNode.parentId] : null;
+  }
+  setHoverLink(linkNode?.type === "page" ? null : (linkNode?.id ?? null));
   // 根节点名称标签：用 move 光标提示可拖；悬停母版标签时连它的紫色悬停框一起点亮
   const label = rootLabelAtPointer(vp, ctx, sx, sy, Boolean(pen.draft));
   const hover = rootLabelHover(label, node);
@@ -2120,6 +2221,8 @@ function onWheel(e: WheelEvent) {
 
 /** 画布只保留 Esc 的分层退出；其余快捷键由 shortcuts.ts 统一分发。 */
 function onKey(e: KeyboardEvent) {
+  // 演示模式是只读播放层：画布的 Esc / 删除 / 微移全部让位
+  if (ui.presenter) return;
   const target = e.target as HTMLElement;
   if (target.tagName === "INPUT" || target.tagName === "SELECT" || target.tagName === "TEXTAREA") return;
   if (e.type !== "keydown") return;
@@ -2267,6 +2370,8 @@ onMounted(() => {
     const offBackend = new Canvas2DBackend(offCtx);
     offBackend.beginFrame(vp);
     drawDocument(offBackend, docStore.doc, {
+      // 截图与画布同一视口：视口外的根同样不必画
+      cull: viewportCull(),
       resolveImage: (assetId) => imageFor(assetId),
       resolveLinkedImage: (url) => linkedImage(url),
     });
@@ -2351,7 +2456,10 @@ onMounted(() => {
     if (bounds) focusBounds(bounds, 160);
     markDirty();
   };
-  hooks.requestRedraw = markDirty;
+  hooks.requestRedraw = bumpRenderEpoch;
+  // 图片解码完只重绘：缓存层自己记得哪些内容画的时候图还没好（ADR-0033）
+  hooks.requestRepaint = markDirty;
+  document.fonts.addEventListener("loadingdone", bumpRenderEpoch);
   unsub = docStore.subscribe(markDirty);
   stopShortcuts = registerShortcuts({
     "file.insertImage": () => openImagePicker(imageInput.value),
@@ -2437,6 +2545,9 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  document.fonts.removeEventListener("loadingdone", bumpRenderEpoch);
+  if (settleTimer) clearTimeout(settleTimer);
+  backend?.clearEffectCache();
   if (resizeTimer) clearTimeout(resizeTimer);
   cancelAnimationFrame(raf);
   unsub();
@@ -2519,14 +2630,14 @@ onBeforeUnmount(() => {
     />
 
     <div class="zoom-bar glass">
-      <button v-tip="{ label: t('canvas.zoomOut'), shortcut: keyOf('view.zoomOut') }" @click="zoomStep(1 / 1.2)">−</button>
+      <button v-tip="{ label: t('canvas.zoomOut'), shortcut: keyLabel('view.zoomOut') }" @click="zoomStep(1 / 1.2)">−</button>
       <button class="zoom-pct" v-tip="{ label: t('canvas.zoomSelect') }" @click="zoomMenuOpen = !zoomMenuOpen">{{ zoomPct }}%</button>
-      <button v-tip="{ label: t('canvas.zoomIn'), shortcut: keyOf('view.zoomIn') }" @click="zoomStep(1.2)">＋</button>
+      <button v-tip="{ label: t('canvas.zoomIn'), shortcut: keyLabel('view.zoomIn') }" @click="zoomStep(1.2)">＋</button>
       <span class="z-divider" />
-      <button class="z-fit" v-tip="{ label: ui.mode === 'edit' ? t('canvas.fitActive') : t('canvas.fitAll'), shortcut: keyOf('view.fit') }" @click="fitView()">
+      <button class="z-fit" v-tip="{ label: ui.mode === 'edit' ? t('canvas.fitActive') : t('canvas.fitAll'), shortcut: keyLabel('view.fit') }" @click="fitView()">
         <Icon name="fit" :size="13" />
       </button>
-      <button class="z-fit" v-tip="{ label: t('canvas.viewAll'), shortcut: keyOf('view.fitAll') }" @click="fitAll()">
+      <button class="z-fit" v-tip="{ label: t('canvas.viewAll'), shortcut: keyLabel('view.fitAll') }" @click="fitAll()">
         <Icon name="pages" :size="13" />
       </button>
     </div>

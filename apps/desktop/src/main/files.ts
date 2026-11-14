@@ -53,13 +53,40 @@ export async function writeFileAtomic(path: string, bytes: Uint8Array): Promise<
   const temp = join(directory, `.${basename(path)}.${process.pid}.${++tempSeq}.tmp`);
   try {
     await writeFile(temp, bytes);
-    await rename(temp, path);
+    await renameOverwrite(temp, path);
     const info = await stat(path);
     return info.mtimeMs;
   } catch (error) {
     await rm(temp, { force: true });
     throw error;
   }
+}
+
+/**
+ * Windows 的 `MoveFileEx(MOVEFILE_REPLACE_EXISTING)` 在目标正被另一次 rename 替换的
+ * 瞬间会返回 ERROR_ACCESS_DENIED（映射成 EPERM），于是并发保存同一路径会随机失败——
+ * 这不是真的没有权限，短暂退避后重试即可。只在 win32 上对这几个"瞬时"码重试，
+ * 其余错误（以及 POSIX 上的 EACCES 等真权限问题）立刻抛出，不掩盖问题。
+ */
+const RENAME_RETRY_DELAYS_MS = [10, 20, 40, 80];
+
+async function renameOverwrite(from: string, to: string): Promise<void> {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await rename(from, to);
+      return;
+    } catch (error) {
+      const delay = RENAME_RETRY_DELAYS_MS[attempt];
+      if (delay === undefined || !isTransientRenameError(error)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+  }
+}
+
+function isTransientRenameError(error: unknown): boolean {
+  if (process.platform !== "win32") return false;
+  const code = (error as { code?: string }).code;
+  return code === "EPERM" || code === "EACCES" || code === "EBUSY";
 }
 
 function isMissing(error: unknown): boolean {

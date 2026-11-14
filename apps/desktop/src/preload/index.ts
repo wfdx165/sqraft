@@ -66,6 +66,7 @@ const api: SqraftApi = {
     state: () => ipcRenderer.invoke(CHANNELS.updateState) as Promise<UpdateState>,
     check: (manual?: boolean) => ipcRenderer.invoke(CHANNELS.updateCheck, manual === true) as Promise<UpdateState>,
     restart: () => ipcRenderer.invoke(CHANNELS.updateRestart) as Promise<void>,
+    download: () => ipcRenderer.invoke(CHANNELS.updateDownload) as Promise<boolean>,
     onState: (handler: (state: UpdateState) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, next: UpdateState) => handler(next);
       ipcRenderer.on(CHANNELS.updateChanged, listener);

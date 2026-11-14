@@ -13,8 +13,6 @@ asar: true
 afterPack: scripts/after-pack.mjs
 # 许可文本随包分发（MIT 要求保留版权声明）；关于面板的「开源许可」打开的就是这里
 extraResources:
-  - from: ../../LICENSE
-    to: licenses/LICENSE-Sqraft
   - from: node_modules/electron/dist/LICENSE
     to: licenses/LICENSE
   - from: node_modules/electron/dist/LICENSES.chromium.html
@@ -28,6 +26,21 @@ electronDist: node_modules/electron/dist
 mac:
   icon: build/icon.icns
   category: public.app-category.design
+  # 发版必须签名（Developer ID Application，见 ADR-0034）：找不到证书直接让构建失败，
+  # 而不是像默认行为那样 warn 一句就静默出不签名的包。快验用 `pnpm dist:dir`（会关掉它）。
+  # 身份不写死，靠钥匙串自动发现；一台机器上有多张 Developer ID 证书时用 CSC_NAME 指定。
+  forceCodeSigning: true
+  # 公证要求 hardened runtime 打开。electron-builder 默认就是 true，写出来防止被随手关掉。
+  hardenedRuntime: true
+  gatekeeperAssess: false
+  # 只开 V8 必需的两条；不要照抄 electron-builder 的隐式模板（它还含 disable-library-validation）
+  entitlements: build/entitlements.mac.plist
+  entitlementsInherit: build/entitlements.mac.inherit.plist
+  # 公证（ADR-0034「后续修订」）：Apple 公证服务连续两次提交各卡在 In Progress 约 24 小时，
+  # 于是本轮先只上签名。恢复时把它改回 true，并同步 `scripts/dist.mjs` 的 NOTARIZE 开关；
+  # 凭据只从环境变量读（APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER，
+  # 或 APPLE_ID 三件套、APPLE_KEYCHAIN_PROFILE），票据由 @electron/notarize staple 到 .app。
+  notarize: false
   target:
     - target: dmg
       arch:
@@ -36,6 +49,32 @@ mac:
     - target: zip
       arch:
         - arm64
+# Windows：只出 x64 的 NSIS 安装器。未签名，本版也不做静默升级（ADR-0033）。
+win:
+  icon: build/icon.ico
+  target:
+    - target: nsis
+      arch:
+        - x64
+  artifactName: ${productName}-Setup-${version}.${ext}
+nsis:
+  # 经典向导：可选安装目录；perMachine 关闭时默认按用户安装（%LOCALAPPDATA%）
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  shortcutName: Sqraft
+  # 卸载不碰用户数据：偏好、最近文件、MCP 配置都留着
+  deleteAppDataOnUninstall: false
+  # 与应用内四语对齐；安装器按系统语言自动选择
+  installerLanguages:
+    - en_US
+    - zh_CN
+    - ja_JP
+    - ko_KR
+  # 没有 electron-updater，差分包只会拖慢构建
+  differentialPackage: false
 fileAssociations:
   - ext: sqraft
     name: Sqraft Design

@@ -18,7 +18,7 @@
 | 方寸 | 与大量测量标注工具混淆 |
 | 尺规 / Chigui | chigui.com 已被注册；搜索与量尺工具混淆；西语中为"豚鼠"（102 个相关仓库） |
 
-最终 Sqraft 资产清单（全清）：npm 包名（registry 404）、sqraft.com（RDAP 404）、GitHub 用户名（当时 404；现为 `wfdx165/sqraft`）、应用商店无同名产品、搜索引擎无混淆项。
+最终 Sqraft 资产清单（全清）：npm 包名（registry 404）、sqraft.com（RDAP 404）、GitHub 用户名（404）、应用商店无同名产品、搜索引擎无混淆项。
 
 ## Consequences
 

@@ -34,11 +34,14 @@ export interface LatestPlanInput {
   /** 上次安装失败的版本：自动检查不要反复重下同一个坏包 */
   failedVersion: string | null;
   manual: boolean;
+  /** 平台能否就地安装（Windows 只能提示，拿不到资产也不需要） */
+  installable: boolean;
 }
 
 export type LatestPlan =
   | { kind: "up-to-date"; version: string; notes: string | null; publishedAt: string | null }
   | { kind: "skipped-failed"; version: string }
+  | { kind: "available"; version: string; notes: string | null; publishedAt: string | null }
   | {
       kind: "update";
       version: string;
@@ -48,12 +51,13 @@ export type LatestPlan =
     };
 
 export function planForLatest(input: LatestPlanInput): LatestPlan {
-  const { currentVersion, manifest, failedVersion, manual } = input;
+  const { currentVersion, manifest, failedVersion, manual, installable } = input;
   const meta = { version: manifest.version, notes: manifest.notes, publishedAt: manifest.publishedAt };
   if (compareVersions(manifest.version, currentVersion) <= 0) return { kind: "up-to-date", ...meta };
   // 自动检查不重试已知坏版本；手动检查是用户明确要求，放行
   if (!manual && failedVersion && failedVersion === manifest.version) {
     return { kind: "skipped-failed", version: manifest.version };
   }
+  if (!installable) return { kind: "available", ...meta };
   return { kind: "update", ...meta, asset: manifest.assets[MAC_ARM64_ASSET] };
 }
