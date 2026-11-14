@@ -29,11 +29,11 @@ These are documented design decisions, not vulnerabilities:
   same machine can connect while the app is running. Do not run Sqraft on
   a shared or untrusted machine.
 - **The Windows installer is unsigned.** macOS builds are signed with a
-  Developer ID certificate and notarized, so Gatekeeper opens them without
-  a manual allow; the Windows `.exe` still triggers SmartScreen on first
-  run. The updater verifies HTTPS hosts, the SHA-256 of the downloaded zip,
-  and the code signature plus Team ID of the extracted bundle before it
-  replaces the app.
+  Developer ID certificate but **not notarized yet**, so Gatekeeper asks once
+  on the first launch (allow it under System Settings → Privacy & Security);
+  the Windows `.exe` still triggers SmartScreen on first run. The updater
+  verifies HTTPS hosts, the SHA-256 of the downloaded zip, and the code
+  signature plus Team ID of the extracted bundle before it replaces the app.
 - **There is no telemetry and no crash reporting.** Logs stay on disk
   (`~/Library/Logs/Sqraft/`).
 

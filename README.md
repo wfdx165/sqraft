@@ -25,7 +25,7 @@ The app is fully local: no account, no cloud, no model calls. A design is simply
 ### macOS
 
 1. Open the downloaded `.dmg` and drag **Sqraft** into Applications
-2. Double-click **Sqraft** in Applications — it opens directly, with no security prompt
+2. The app is signed but not yet notarized, so Gatekeeper asks once on the first launch: open **System Settings → Privacy & Security** and click **Open Anyway** next to Sqraft
 3. Afterwards the app checks for updates on launch: new versions download in the background, a "Restart to update" button appears in the toolbar, and quitting or clicking it finishes the upgrade
 
 If you would rather not auto-update, **Help → Check for Updates…** checks manually at any time.
@@ -126,7 +126,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the project layout and the review pro
 
 - **macOS Apple Silicon (M series)**; Intel Macs are not supported
 - **Windows 10 22H2+ or Windows 11 (x64)**; Windows on ARM (ARM64) and Linux are not supported
-- The Windows installer is **unsigned**, so SmartScreen warns on the first run (see Install)
+- The macOS app is **signed but not notarized**: the first launch needs one manual allow (see Install). The Windows installer is **unsigned**, so SmartScreen warns on the first run
 - Auto-update is macOS-only; on Windows you download and run the new installer yourself
 - CJK text uses each system's own fonts, so line breaks can shift between macOS and Windows
 - No real-time collaboration, no accounts, no cloud sync

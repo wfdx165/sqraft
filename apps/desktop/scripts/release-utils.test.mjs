@@ -91,13 +91,28 @@ describe("公证凭据来源", () => {
 
 describe("verify-pack 参数解析", () => {
   it("默认：无产物路径、不断言签名", () => {
-    expect(parseVerifyPackArgs([])).toEqual({ target: null, expectSigned: false, expectedTeam: "" });
+    expect(parseVerifyPackArgs([])).toEqual({
+      target: null,
+      expectSigned: false,
+      expectNotarized: false,
+      expectedTeam: "",
+    });
   });
 
   it("发版时 dist / release 会传的组合", () => {
     expect(parseVerifyPackArgs(["dist/mac/Sqraft.app", "--expect-signed", "--team-id", "5BJLY53QWY"])).toEqual({
       target: "dist/mac/Sqraft.app",
       expectSigned: true,
+      expectNotarized: false,
+      expectedTeam: "5BJLY53QWY",
+    });
+  });
+
+  it("恢复公证后多一个 --expect-notarized", () => {
+    expect(parseVerifyPackArgs(["Sqraft.app", "--expect-signed", "--expect-notarized", "--team-id", "5BJLY53QWY"])).toEqual({
+      target: "Sqraft.app",
+      expectSigned: true,
+      expectNotarized: true,
       expectedTeam: "5BJLY53QWY",
     });
   });

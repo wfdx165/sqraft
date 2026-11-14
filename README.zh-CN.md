@@ -25,7 +25,7 @@
 ### macOS
 
 1. 打开下载的 `.dmg`，把 **Sqraft** 拖进「应用程序」
-2. 在「应用程序」里双击 **Sqraft** 即可打开，不会出现安全提示
+2. 应用已签名但尚未公证，首次打开 Gatekeeper 会拦一次：到 **系统设置 → 隐私与安全性**，在 Sqraft 旁边点 **仍要打开**
 3. 之后启动时会自动检查更新：有新版本会后台下载，工具栏出现「重启更新」，退出或点它即可完成升级
 
 不想自动更新也没关系：菜单 **帮助 → 检查更新…** 可以随时手动查。
@@ -126,7 +126,7 @@ pnpm dist     # 按宿主平台出包：macOS 出 arm64 dmg 与 zip，Windows �
 
 - **macOS Apple Silicon（M 系列）**；Intel Mac 不支持
 - **Windows 10 22H2 及以上或 Windows 11（x64）**；Windows ARM64 与 Linux 不支持
-- Windows 安装器**未签名**，首次运行会弹 SmartScreen（见「安装」）
+- macOS 包**已签名但未公证**：首次打开需手动放行一次（见「安装」）；Windows 安装器**未签名**，首次运行会弹 SmartScreen
 - 自动更新只在 macOS 上提供；Windows 需要自己下载新版安装器覆盖安装
 - 中日韩文字使用各系统自带字体，同一文档在 macOS 与 Windows 上换行位置可能不同
 - 没有多人协作、没有账户体系、没有云端同步

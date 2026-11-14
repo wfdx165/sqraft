@@ -3,7 +3,7 @@
  *
  * 为什么不用 `electron-updater` / Squirrel.Mac：macOS 上它会校验代码签名，
  * 立项时本项目未签名（ADR-0029），启动时就报 "Could not get code signature"。
- * 2026-11 起 macOS 包已签名 + 公证（ADR-0034），但这条链路已验过替换与回滚，
+ * 2026-11 起 macOS 包已用 Developer ID 签名（公证暂缓，ADR-0034），但这条链路已验过替换与回滚，
  * 迁移仍是独立一票。
  *
  * 脚本做四件事：等进程退出 → 备份旧包 → 解包并落位 → 启动后等启动标记，

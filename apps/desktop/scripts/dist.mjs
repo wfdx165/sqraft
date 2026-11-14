@@ -14,11 +14,11 @@
  * 不支持的平台直接报错，不退化：`electron-builder.yml` 没有 `linux:` 段，
  * `after-pack.mjs` 对非 mac/win 也不翻转 fuse，出来的目录是半成品。
  *
- * macOS 发版必须签名 + 公证（ADR-0034）：
+ * macOS 发版必须签名（ADR-0034）；公证当前关闭（见下方 NOTARIZE）：
  * - 签名身份不写死，靠钥匙串自动发现（`mac.forceCodeSigning` 保证找不到就失败）；
- * - 公证凭据只从环境变量读（`APPLE_API_KEY` 三件套等），由 electron-builder 内建集成调用；
- * - 构建前先查证书 / 凭据 / notarytool，别等 electron-builder 跑完 4 分钟才报错；
- * - 签完再跑 `verify-pack --expect-signed`：签名、Team、entitlements、Gatekeeper、staple 全验一遍。
+ * - 构建前先查证书与 entitlements；恢复公证时再查凭据与 notarytool，别等构建跑完才报错；
+ * - 签完再跑 `verify-pack --expect-signed`：签名、Team、hardened runtime、entitlements；
+ *   真做了公证时再加 `--expect-notarized`（Gatekeeper 接受 + 票据已 staple）。
  * 只想快速出个能跑的包（不签名、不公证）用 `pnpm dist:dir`。
  *
  * 用法：`pnpm dist`（脚本前面已经跑过 clean 与 build）；`pnpm dist:dir` 传 `--dir`，
@@ -68,10 +68,20 @@ function capture(command, commandArgs) {
  */
 
 /**
- * macOS 发版前置检查：证书、entitlements、公证凭据、notarytool。
+ * 本轮是否做公证（ADR-0034「后续修订」）。
+ *
+ * 2026-11 起 macOS 包用 Developer ID 签名；Apple 公证服务当时连续两次提交各卡在
+ * `In Progress` 约 24 小时（`notarytool log` 也取不到），于是先只上签名。
+ * **恢复公证**：这里改成 true，同步 `electron-builder.yml` 的 `mac.notarize`，
+ * verify-pack 的 `--expect-notarized` 会由本开关自动传给发版链路。
+ */
+const NOTARIZE = false;
+
+/**
+ * macOS 发版前置检查：证书、entitlements、（恢复公证时）凭据与 notarytool。
  *
  * 必须在 electron-builder 之前查：它找不到证书时只 warn 一句就**静默跳过签名**，
- * 公证也随之跳过，于是白跑几分钟、还可能把未签名的包传进 draft。
+ * 于是白跑几分钟、还可能把未签名的包传进 draft。
  */
 function macSigningPreflight() {
   // 签名用的都得随仓库提交：少了 plist，electron-builder 会在签名阶段丢一行英文错误
@@ -94,6 +104,13 @@ function macSigningPreflight() {
   }
   const identity = line.match(/"([^"]+)"/)?.[1] ?? line.trim();
   const teamId = identity.match(/\(([A-Z0-9]{10})\)/)?.[1] ?? "";
+
+  if (!NOTARIZE) {
+    console.log(
+      `dist: 签名身份 ${identity}${teamId ? `（Team ${teamId}）` : ""}；本轮不做公证（NOTARIZE=false）`,
+    );
+    return { identity, teamId, credential: null, notarized: false };
+  }
 
   const credential = notaryCredentialSource(process.env);
   if (!credential) {
@@ -156,8 +173,8 @@ if (isMac && dirOnly) {
 console.log(`dist: ${process.platform} → electron-builder ${builderFlags.join(" ")}`);
 if (signing) {
   console.log(
-    "dist: 接下来是签名 → 公证：嵌套 bundle 逐个签、公证要上传并等 Apple 处理，" +
-      "期间没有进度输出，通常 1–3 分钟（链路慢时更久）。",
+    `dist: 接下来是签名${signing.notarized ? " → 公证" : ""}：嵌套 bundle 逐个签，` +
+      "期间没有进度输出，通常 1–3 分钟（TSA 链路慢时可能到 8 分钟）。",
   );
 }
 run(process.execPath, [builderCli, ...builderFlags], { env: builderEnv });
@@ -167,6 +184,8 @@ const verifyArgs = [join(desktopRoot, "scripts", "verify-pack.mjs")];
 if (signing) {
   verifyArgs.push("--expect-signed");
   if (signing.teamId) verifyArgs.push("--team-id", signing.teamId);
+  // 只有真做了公证才断言 Gatekeeper / 票据；本轮 NOTARIZE=false，签名有效但未公证
+  if (signing.notarized) verifyArgs.push("--expect-notarized");
 }
 run(process.execPath, verifyArgs);
 
@@ -201,7 +220,7 @@ if (dirOnly) {
     ...gitInfo(),
     platform: process.platform,
     builtAt: new Date().toISOString(),
-    // macOS 发版会带签名信息；Windows 与 --dir 构建为 null。真正的签名/公证结果由
+    // macOS 发版带签名信息；Windows 与 --dir 构建为 null。真正的签名结果由
     // verify-pack --expect-signed 断言，这里只用来让 release 拒绝"切换前的旧包 / 未签名包"。
     signing,
     artifacts,

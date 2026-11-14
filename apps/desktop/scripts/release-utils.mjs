@@ -72,17 +72,20 @@ export function notaryCredentialSource(env = {}) {
 /**
  * verify-pack 的命令行解析：位置参数是产物路径，其余是开关。
  *
- * 返回 `{ target, expectSigned, expectedTeam }` 或 `{ error }`。`--team-id` 缺值必须报错——
- * 静默退化成空串会让 Team 比对被跳过、脚本仍报"通过"。
+ * 返回 `{ target, expectSigned, expectNotarized, expectedTeam }` 或 `{ error }`。
+ * `--team-id` 缺值必须报错——静默退化成空串会让 Team 比对被跳过、脚本仍报"通过"。
  */
 export function parseVerifyPackArgs(argv) {
   let target = null;
   let expectSigned = false;
+  let expectNotarized = false;
   let expectedTeam = "";
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--expect-signed") {
       expectSigned = true;
+    } else if (arg === "--expect-notarized") {
+      expectNotarized = true;
     } else if (arg === "--team-id") {
       const value = argv[i + 1];
       if (!value || value.startsWith("--")) {
@@ -98,5 +101,5 @@ export function parseVerifyPackArgs(argv) {
       return { error: `只能指定一个产物路径（多余：${arg}）` };
     }
   }
-  return { target, expectSigned, expectedTeam };
+  return { target, expectSigned, expectNotarized, expectedTeam };
 }

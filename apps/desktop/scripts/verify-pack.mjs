@@ -11,9 +11,10 @@
  * 3. 渲染层 bundle 是压缩过的（行数很少）；
  * 4. Electron fuse 已按要求翻转；
  * 5. `--expect-signed` 时（macOS 发版）：Developer ID 签名、Team、hardened runtime、
- *    entitlements、Gatekeeper 接受、公证票据已 staple（ADR-0034）。
+ *    entitlements；再加 `--expect-notarized` 才断言 Gatekeeper 接受与公证票据已 staple
+ *    （公证当前关闭，见 ADR-0034；恢复后 dist 会自动传这个开关）。
  *
- * 用法：`node scripts/verify-pack.mjs [产物路径] [--expect-signed] [--team-id <id>]`。
+ * 用法：`node scripts/verify-pack.mjs [产物路径] [--expect-signed] [--expect-notarized] [--team-id <id>]`。
  * 默认按平台挑：Windows 用 `release/win-unpacked`，其余用 `release/mac-arm64/Sqraft.app`。
  */
 import { spawnSync } from "node:child_process";
@@ -33,7 +34,7 @@ if (parsedArgs.error) {
   console.error(`verify-pack: ${parsedArgs.error}`);
   process.exit(1);
 }
-const { target: targetArg, expectSigned, expectedTeam } = parsedArgs;
+const { target: targetArg, expectSigned, expectNotarized, expectedTeam } = parsedArgs;
 
 /** 默认产物：显式参数优先；否则看 release/ 里实际有什么。 */
 function defaultTarget() {
@@ -229,16 +230,18 @@ if (expectSigned) {
       problems.push("签名 entitlements 里出现了 get-task-allow：这是可调试的签名，不能发版");
     }
 
-    // 4) Gatekeeper 接受：不是在公证之前的状态
-    const assess = exec("spctl", ["--assess", "--type", "execute", "--verbose=4", appPath]);
-    if (assess.status !== 0 || !/accepted/.test(assess.out)) {
-      problems.push(`Gatekeeper 未接受该包（spctl）：${assess.out || `exit ${assess.status}`}`);
-    }
-
-    // 5) 公证票据已落在 .app 里：离线首启才不会被拦
-    const staple = exec("xcrun", ["stapler", "validate", appPath]);
-    if (staple.status !== 0) {
-      problems.push(`公证票据没有 staple 到 .app：${staple.out || `exit ${staple.status}`}`);
+    // 4–5) 只有真做了公证才断言这两条（本轮 NOTARIZE=false：签名有效但未公证，
+    //      Gatekeeper 首启会提示一次，属预期）
+    if (expectNotarized) {
+      const assess = exec("spctl", ["--assess", "--type", "execute", "--verbose=4", appPath]);
+      if (assess.status !== 0 || !/accepted/.test(assess.out)) {
+        problems.push(`Gatekeeper 未接受该包（spctl）：${assess.out || `exit ${assess.status}`}`);
+      }
+      // 公证票据已落在 .app 里：离线首启才不会被拦
+      const staple = exec("xcrun", ["stapler", "validate", appPath]);
+      if (staple.status !== 0) {
+        problems.push(`公证票据没有 staple 到 .app：${staple.out || `exit ${staple.status}`}`);
+      }
     }
   }
 }
@@ -254,5 +257,6 @@ if (problems.length > 0) {
 console.log(
   `verify-pack: 通过（${isMacBundle ? "macOS .app" : "Windows win-unpacked"}）——asar ${asar.entries.length} 个条目，` +
     `全部在 out/ 与 package.json 内；无源码 / 无 map / 无 node_modules；渲染层已压缩；fuse 已按要求翻转` +
-    `${expectSigned && isMacBundle ? `；Developer ID 签名与公证票据已验证（Team ${expectedTeam || "由签名决定"}）` : ""}`,
+    `${expectSigned && isMacBundle ? `；Developer ID 签名已验证（Team ${expectedTeam || "由签名决定"}）` : ""}` +
+    `${expectNotarized && isMacBundle ? "；Gatekeeper 接受、公证票据已验证" : ""}`,
 );
