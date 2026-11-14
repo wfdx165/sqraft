@@ -12,9 +12,11 @@ release/
 
 # 内部文件，不进入公开仓（已从索引移除，别再 add 回来；-f 会绕过这里）
 AGENTS.md
-docs/agents/
-docs/specs/
-docs/roadmap.md
+# docs/ 只公开 images、releases 与 releasing.md，其余（adr、architecture.md、agents、specs、roadmap.md…）只留本地
+docs/*
+!docs/images/
+!docs/releases/
+!docs/releasing.md
 
 # 本地敏感文件
 .env

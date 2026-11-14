@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!--
+      helper 进程（GPU / Renderer / Plugin）继承的 entitlements，必须与主进程一致：
+      只给主进程 allow-jit、helper 不给，渲染进程会在 hardened runtime 下起不来。
+      这里不放 com.apple.security.inherit——那是 App Sandbox 的键，本项目不上架、不沙箱。
+    -->
+    <key>com.apple.security.cs.allow-jit</key>
+    <true/>
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+  </dict>
+</plist>

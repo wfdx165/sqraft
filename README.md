@@ -14,7 +14,7 @@ The app is fully local: no account, no cloud, no model calls. A design is simply
 
 ### [⬇ Download the latest version](https://github.com/wfdx165/sqraft/releases/latest)
 
-- **macOS · Apple Silicon (M series)** · about 120 MB · unsigned
+- **macOS · Apple Silicon (M series)** · about 120 MB
 - **Windows · x64** · about 100 MB · unsigned
 - Under **Assets** on the Releases page pick `Sqraft-<version>-arm64.dmg` (manual install) or `Sqraft-Setup-<version>.exe`; the `.zip` is what the macOS updater downloads
 - Windows 10 22H2 or Windows 11, x64. Linux is not supported
@@ -25,18 +25,8 @@ The app is fully local: no account, no cloud, no model calls. A design is simply
 ### macOS
 
 1. Open the downloaded `.dmg` and drag **Sqraft** into Applications
-2. Gatekeeper blocks the first launch (the app is unsigned); you will see one of two prompts:
-   - "Cannot verify the developer": right-click the app → **Open**, or allow it under System Settings → Privacy & Security
-   - "Sqraft is damaged": the file is fine, run the command below
+2. The app is signed but not yet notarized, so Gatekeeper asks once on the first launch: open **System Settings → Privacy & Security** and click **Open Anyway** next to Sqraft
 3. Afterwards the app checks for updates on launch: new versions download in the background, a "Restart to update" button appears in the toolbar, and quitting or clicking it finishes the upgrade
-
-If you see the "damaged" prompt, drag the app into Applications first, then run:
-
-```bash
-xattr -dr com.apple.quarantine /Applications/Sqraft.app
-```
-
-Open it again and it works. Later updates are downloaded by the app itself without the quarantine flag, so this prompt does not come back.
 
 If you would rather not auto-update, **Help → Check for Updates…** checks manually at any time.
 
@@ -127,7 +117,7 @@ pnpm install
 pnpm dev      # electron-vite dev server with renderer HMR
 pnpm test     # vitest across packages
 pnpm build    # type check + production bundle
-pnpm dist     # builds for the host platform: macOS arm64 dmg + zip, or the Windows x64 installer
+pnpm dist     # host platform: macOS arm64 dmg + zip, or the Windows x64 installer
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the project layout and the review process.
@@ -136,7 +126,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the project layout and the review pro
 
 - **macOS Apple Silicon (M series)**; Intel Macs are not supported
 - **Windows 10 22H2+ or Windows 11 (x64)**; Windows on ARM (ARM64) and Linux are not supported
-- The app is **unsigned and not notarized** on both platforms: the first launch needs a manual allow (see Install)
+- The macOS app is **signed but not notarized**: the first launch needs one manual allow (see Install). The Windows installer is **unsigned**, so SmartScreen warns on the first run
 - Auto-update is macOS-only; on Windows you download and run the new installer yourself
 - CJK text uses each system's own fonts, so line breaks can shift between macOS and Windows
 - No real-time collaboration, no accounts, no cloud sync

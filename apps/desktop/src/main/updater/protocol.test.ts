@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appBundlePathOf, buildInstallScript, installPathsOf, type ScriptOptions } from "./install";
+import { appBundlePathOf, buildInstallScript, installPathsOf, signingTeamOf, type ScriptOptions } from "./install";
 import { compareVersions, isTrustedUpdateUrl, parseLatest, UpdateManifestError } from "./protocol";
 
 const sha = "a".repeat(64);
@@ -112,5 +112,33 @@ describe("安装路径与脚本", () => {
     const paths = installPathsOf("/Volumes/My Disk/Sqraft's.app", "/tmp/upd");
     const script = buildInstallScript({ ...paths, pid: 1, version: "0.1.0", appName: "Sqraft.app" });
     expect(script).toContain(`APP='/Volumes/My Disk/Sqraft'\\''s.app'`);
+  });
+
+  it("有 expectedTeam 时在挪走旧包之前验签与 Team", () => {
+    const paths = installPathsOf("/Applications/Sqraft.app", "/tmp/upd");
+    const script = buildInstallScript({
+      ...paths,
+      pid: 1,
+      version: "0.0.5",
+      appName: "Sqraft.app",
+      expectedTeam: "5BJLY53QWY",
+    });
+    expect(script).toContain("EXPECTED_TEAM='5BJLY53QWY'");
+    expect(script).toContain("/usr/bin/codesign --verify --deep --strict");
+    expect(script).toContain("与当前 $EXPECTED_TEAM 不一致");
+    // 校验必须发生在 `rm -rf "$BACKUP"` 之前：验签失败时旧包要还在原地
+    expect(script.indexOf("codesign --verify")).toBeLessThan(script.indexOf('rm -rf "$BACKUP"'));
+  });
+
+  it("旧版本未签名（expectedTeam 为空）时跳过验签，替换链路不变", () => {
+    const paths = installPathsOf("/Applications/Sqraft.app", "/tmp/upd");
+    const script = buildInstallScript({ ...paths, pid: 1, version: "0.0.5", appName: "Sqraft.app" });
+    expect(script).toContain("EXPECTED_TEAM=''");
+    expect(script).toContain('if [ -n "$EXPECTED_TEAM" ]; then');
+    expect(script).toContain('mv "$STAGING/$APPNAME" "$APP"');
+  });
+
+  it("读不到签名时 signingTeamOf 返回空串（未签名版本 / 路径不存在）", () => {
+    expect(signingTeamOf("/nonexistent/Sqraft.app")).toBe("");
   });
 });

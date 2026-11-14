@@ -1,7 +1,8 @@
 /** .sqraft 文件格式：zip 容器（manifest + 快照 + 操作日志 + 图片资源）。见 architecture.md §10。 */
-import { strToU8, strFromU8, unzipSync, zipSync, type Zippable } from "fflate";
+import { strToU8, unzipSync, zipSync, type Zippable } from "fflate";
 import { CURRENT_FORMAT_VERSION, migrateDoc, type DocState } from "@sqraft/core";
 import { t } from "./i18n";
+import { readZip } from "./zip-read";
 
 export interface AssetEntry {
   /** zip 内路径，形如 `assets/<id>.png` */
@@ -42,20 +43,22 @@ export interface ParsedDoc {
 }
 
 export async function parseDoc(bytes: Uint8Array): Promise<ParsedDoc> {
-  const files = unzipSync(bytes);
+  // 快路径：图片条目零拷贝、doc.json 原生解压（大稿打开主要省在这里）；认不出的结构退回 fflate
+  const files = (await readZip(bytes)) ?? unzipSync(bytes);
   const docEntry = files["doc.json"];
+  const decoder = new TextDecoder();
   if (!docEntry) throw new Error(t("error.invalidSqraft"));
   let formatVersion = 1;
   const manifest = files["manifest.json"];
   if (manifest) {
     try {
-      const parsed = JSON.parse(strFromU8(manifest)) as { formatVersion?: number };
+      const parsed = JSON.parse(decoder.decode(manifest)) as { formatVersion?: number };
       formatVersion = parsed.formatVersion ?? 1;
     } catch {
       formatVersion = 1;
     }
   }
-  const state = JSON.parse(strFromU8(docEntry)) as DocState;
+  const state = JSON.parse(decoder.decode(docEntry)) as DocState;
   const declared = Math.max(state.formatVersion ?? formatVersion, formatVersion);
   // 格式版本只降不升：老版本读新文件必须明确拒绝，而不是"尽量解析"出一份坏稿（ADR-0029）
   if (declared > CURRENT_FORMAT_VERSION) {

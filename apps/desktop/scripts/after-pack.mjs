@@ -40,8 +40,8 @@ function runPlutil(args) {
  *   而不是默默继承默认值。
  * - `resetAdHocDarwinSignature`：翻 fuse 会改主二进制、破坏 adhoc 签名，arm64 上
  *   macOS 会拒绝启动未签名的主二进制；这里让 fuses 自己补一遍 adhoc。
- * - `EnableEmbeddedAsarIntegrityValidation` 保持关：哈希写在 `Info.plist` 里，
- *   未签名时改包的人顺手就能改，开了只增加一个构建失败点。
+ * - `EnableEmbeddedAsarIntegrityValidation` 保持关：哈希写在 `Info.plist` 里，签名之后才受保护
+ *   （ADR-0034）；开启仍需一次"改包必挂"的负向测试，另开票评估。
  * - `GrantFileProtocolExtraPrivileges` 保持开：生产环境用 `file://` 加载渲染层。
  */
 const FUSE_CONFIG = {

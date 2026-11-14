@@ -308,7 +308,7 @@ _Avoid_: 后端、服务端
 窗口在没有打开文档时的形态：新建、打开、最近 8 条。与"空文档"不同，欢迎页不是文档。
 
 **更新器（Updater）**：
-主进程的自动更新链路：检查 `latest.json` → 后台下载 zip 并校验 → 退出时由替换脚本安装（ADR-0029）。客户端只承诺 macOS arm64、未签名。
+主进程的自动更新链路：检查 `latest.json` → 后台下载 zip 并校验 → 退出时由替换脚本安装（ADR-0029）。客户端只承诺 macOS arm64；2026-11 起 macOS 包用 Developer ID 签名（暂未公证，ADR-0034），替换前校验新包签名与 Team。
 _Avoid_: 升级器、自动升级服务、Squirrel
 
 **格式版本（Format Version）**：

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { assetIdFor, decodedSizeOf, imageFor, loadAssets, resetAssets, sniffMime } from "./assets";
+import { assetIdFor, decodedSizeOf, ensureAssetDecoded, imageFor, loadAssets, resetAssets, sniffMime } from "./assets";
 import { hooks } from "./store";
 
 function bytes(...values: number[]): Uint8Array {
@@ -67,7 +67,7 @@ describe("按需解码", () => {
       "createImageBitmap",
       vi.fn(async () => ({ width: 64, height: 32, close: () => {} })),
     );
-    hooks.requestRedraw = vi.fn();
+    hooks.requestRepaint = vi.fn();
     resetAssets();
   });
 
@@ -80,7 +80,7 @@ describe("按需解码", () => {
     loadAssets({ "assets/abc.png": PNG });
     expect(imageFor("abc")).toBeNull();
     // 解码完成后自己叫一次重绘，否则打开文件会一直停在占位块
-    await vi.waitFor(() => expect(hooks.requestRedraw).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(hooks.requestRepaint).toHaveBeenCalledTimes(1));
     expect(imageFor("abc")).not.toBeNull();
   });
 
@@ -91,5 +91,89 @@ describe("按需解码", () => {
     imageFor("def");
     await vi.waitFor(() => expect(imageFor("def")).not.toBeNull());
     expect(vi.mocked(createImageBitmap)).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("分级解码（按屏幕所需分辨率）", () => {
+  /** createImageBitmap 有多个重载，mock 的参数类型推不准：按 (blob, options) 取 */
+  const bitmapOptions = (call: number) =>
+    (vi.mocked(createImageBitmap).mock.calls[call] as unknown[])[1] as ImageBitmapOptions | undefined;
+
+  /** 带 IHDR 的 PNG 头：读文件头就能拿到原图尺寸 */
+  function pngOf(width: number, height: number, seed: number): Uint8Array {
+    const b = new Uint8Array(40);
+    b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52]);
+    new DataView(b.buffer).setUint32(16, width);
+    new DataView(b.buffer).setUint32(20, height);
+    b[39] = seed;
+    return b;
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal(
+      "createImageBitmap",
+      vi.fn(async (_blob: Blob, opts?: ImageBitmapOptions) => ({
+        width: opts?.resizeWidth ?? 6000,
+        height: opts?.resizeHeight ?? 4000,
+        close: () => {},
+      })),
+    );
+    hooks.requestRepaint = vi.fn();
+    resetAssets();
+  });
+
+  afterEach(() => {
+    resetAssets();
+    vi.unstubAllGlobals();
+  });
+
+  it("屏幕只需要 1/5 分辨率时解码 1/4 级：位图变小，宽高仍报原图，scale 记下比例", async () => {
+    loadAssets({ "assets/big.png": pngOf(6000, 4000, 1) });
+    expect(imageFor("big", 0.2)).toBeNull();
+    await vi.waitFor(() => expect(imageFor("big", 0.2)).not.toBeNull());
+    const image = imageFor("big", 0.2)!;
+    expect(image).toMatchObject({ width: 6000, height: 4000, scale: 0.25 });
+    expect(bitmapOptions(0)).toMatchObject({ resizeWidth: 1500, resizeHeight: 1000 });
+  });
+
+  it("需要原图（导出）时不降采样；放大后先用粗一级顶上，同时后台解原图", async () => {
+    loadAssets({ "assets/big.png": pngOf(6000, 4000, 2) });
+    imageFor("big", 0.2);
+    await vi.waitFor(() => expect(imageFor("big", 0.2)).not.toBeNull());
+    // 放大到需要原图：先拿到 1/4 级，不闪占位
+    expect(imageFor("big", 1)?.scale).toBe(0.25);
+    await vi.waitFor(() => expect(imageFor("big", 1)?.scale).toBeUndefined());
+    const full = await ensureAssetDecoded("big");
+    expect(full).toMatchObject({ width: 6000, height: 4000 });
+    expect(full?.scale).toBeUndefined();
+  });
+
+  it("缓存里已有更清晰的级别时直接用，不再后台解更粗的一级", async () => {
+    loadAssets({ "assets/big.png": pngOf(6000, 4000, 7) });
+    await ensureAssetDecoded("big");
+    const calls = vi.mocked(createImageBitmap).mock.calls.length;
+    expect(imageFor("big", 0.1)?.scale).toBeUndefined();
+    await Promise.resolve();
+    expect(vi.mocked(createImageBitmap).mock.calls.length).toBe(calls);
+  });
+
+  it("淘汰按最近使用：刚画过的图不会因为别的图解码被挤掉", async () => {
+    // 每张原图解码后 6000×4000×4 = 96 MB；预算 256 MB 只放得下两张
+    loadAssets({ "assets/a.png": pngOf(6000, 4000, 3), "assets/b.png": pngOf(6000, 4000, 4), "assets/c.png": pngOf(6000, 4000, 5) });
+    await ensureAssetDecoded("a");
+    await ensureAssetDecoded("b");
+    expect(imageFor("a")).not.toBeNull(); // 使用 a：a 变成最近使用
+    await ensureAssetDecoded("c"); // 超预算：该淘汰的是 b
+    const calls = vi.mocked(createImageBitmap).mock.calls.length;
+    expect(imageFor("a")).not.toBeNull();
+    expect(vi.mocked(createImageBitmap).mock.calls.length).toBe(calls);
+    expect(imageFor("b")).toBeNull();
+  });
+
+  it("小图不分级：降采样后长边不足 256 像素时用原图", async () => {
+    loadAssets({ "assets/small.png": pngOf(400, 300, 6) });
+    imageFor("small", 0.1);
+    await vi.waitFor(() => expect(imageFor("small", 0.1)).not.toBeNull());
+    expect(bitmapOptions(0)?.resizeWidth).toBeUndefined();
   });
 });

@@ -19,7 +19,7 @@ import { logApp } from "../mcp/log";
 import { patchUpdatePreferences, updatePreferences } from "../recent-state";
 import { planForLatest, shouldCheck } from "./decisions";
 import { downloadVerified } from "./download";
-import { installPathsOf, resolveInstallSupport, spawnInstallerSync, type InstallSupport } from "./install";
+import { installPathsOf, resolveInstallSupport, signingTeamOf, spawnInstallerSync, type InstallSupport } from "./install";
 import { t } from "../i18n";
 import { reconcileOnStart } from "./reconcile";
 import { isTrustedUpdateUrl, parseLatest, UpdateManifestError } from "./protocol";
@@ -262,6 +262,8 @@ export function installOnQuit(): void {
         pid: process.pid,
         version: state.latestVersion,
         appName: basename(support.appPath ?? "Sqraft.app"),
+        // 替换前让脚本校验新包签名与 Team（ADR-0034）；旧版本未签名时为空串，脚本跳过
+        expectedTeam: support.appPath ? signingTeamOf(support.appPath) : "",
       });
       logApp("info", "update: installer spawned", { version: state.latestVersion });
     } catch (error) {

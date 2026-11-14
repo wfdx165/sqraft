@@ -14,7 +14,7 @@
 
 ### [⬇ 下载最新版](https://github.com/wfdx165/sqraft/releases/latest)
 
-- **macOS · Apple Silicon（M 系列）** · 约 120 MB · 未签名
+- **macOS · Apple Silicon（M 系列）** · 约 120 MB
 - **Windows · x64** · 约 100 MB · 未签名
 - 在 Releases 页面的 **Assets** 里选 `Sqraft-<版本>-arm64.dmg`（手动安装）或 `Sqraft-Setup-<版本>.exe`；`.zip` 是 macOS 自动更新下载的包
 - Windows 需要 Windows 10 22H2 或 Windows 11（x64）；Linux 暂不支持
@@ -25,18 +25,8 @@
 ### macOS
 
 1. 打开下载的 `.dmg`，把 **Sqraft** 拖进「应用程序」
-2. 首次打开会被 Gatekeeper 拦下（应用未签名），按提示分两种：
-   - 提示「无法验证开发者」：在应用上**右键 → 打开**，或到「系统设置 → 隐私与安全性」点「仍要打开」
-   - 提示「Sqraft 已损坏」：不是文件损坏，看下面的命令
+2. 应用已签名但尚未公证，首次打开 Gatekeeper 会拦一次：到 **系统设置 → 隐私与安全性**，在 Sqraft 旁边点 **仍要打开**
 3. 之后启动时会自动检查更新：有新版本会后台下载，工具栏出现「重启更新」，退出或点它即可完成升级
-
-如果遇到「已损坏」提示，把 App 拖进「应用程序」后打开终端执行：
-
-```bash
-xattr -dr com.apple.quarantine /Applications/Sqraft.app
-```
-
-再打开即可。后续更新由应用自己下载，不带隔离标记，不会再出现这个提示。
 
 不想自动更新也没关系：菜单 **帮助 → 检查更新…** 可以随时手动查。
 
@@ -127,7 +117,7 @@ pnpm install
 pnpm dev      # 开发模式，渲染层 HMR
 pnpm test     # 各包的 vitest
 pnpm build    # 类型检查 + 生产构建
-pnpm dist     # 按宿主平台出包：macOS 出未签名 arm64 dmg 与 zip，Windows 出 x64 安装器
+pnpm dist     # 按宿主平台出包：macOS 出 arm64 dmg 与 zip，Windows 出 x64 安装器
 ```
 
 项目结构与评审流程见 [CONTRIBUTING.md](CONTRIBUTING.md)。
@@ -136,7 +126,7 @@ pnpm dist     # 按宿主平台出包：macOS 出未签名 arm64 dmg 与 zip，W
 
 - **macOS Apple Silicon（M 系列）**；Intel Mac 不支持
 - **Windows 10 22H2 及以上或 Windows 11（x64）**；Windows ARM64 与 Linux 不支持
-- 两个平台的安装包都**未签名、未公证**：首次打开需要手动放行（见「安装」）
+- macOS 包**已签名但未公证**：首次打开需手动放行一次（见「安装」）；Windows 安装器**未签名**，首次运行会弹 SmartScreen
 - 自动更新只在 macOS 上提供；Windows 需要自己下载新版安装器覆盖安装
 - 中日韩文字使用各系统自带字体，同一文档在 macOS 与 Windows 上换行位置可能不同
 - 没有多人协作、没有账户体系、没有云端同步

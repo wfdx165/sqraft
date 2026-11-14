@@ -34,8 +34,9 @@ pnpm test     # vitest in @sqraft/core, @sqraft/ai-tools, @sqraft/desktop
 pnpm build    # type check (main / preload / renderer) + production bundle
 ```
 
-Packaging runs on the host platform and is unsigned: macOS produces the arm64
-dmg + zip, Windows produces the x64 NSIS installer. Cross-compiling is not
+Packaging runs on the host platform: macOS produces the arm64 dmg + zip
+(signed with a Developer ID certificate; notarization is currently off),
+Windows produces the x64 NSIS installer (unsigned). Cross-compiling is not
 supported (the Windows installer must be built and checked on Windows):
 
 ```bash

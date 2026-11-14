@@ -8,7 +8,7 @@
 import type { DocNode, Rect } from "@sqraft/core";
 import { worldToScreen, type Viewport } from "@sqraft/render";
 import { ICON_PATHS, ICON_STROKE, ICON_VIEWBOX } from "../icons";
-import { docStore } from "../store";
+import { docStore, ui } from "../store";
 import {
   LABEL_CHIP_ABOVE,
   LABEL_CHIP_HEIGHT,
@@ -21,6 +21,7 @@ import {
   LABEL_ICON_SIZE,
   labelChipWidth,
   labelFont,
+  ROOT_LABEL_MIN_ZOOM,
 } from "./label-metrics";
 import { LIBRARY_ACCENT } from "./selection-overlay";
 
@@ -51,6 +52,15 @@ export function labelOrigin(node: DocNode, opts: LabelOriginOptions): { x: numbe
     x: (rp ? rp.x : node.x) + (moving ? opts.drag!.offsetX : 0),
     y: (rp ? rp.y : node.y) + (moving ? opts.drag!.offsetY : 0),
   };
+}
+
+/**
+ * 缩放过小时隐藏标签，避免互相重叠、遮挡内容。
+ * 选中的节点保留标签：母版常被子节点铺满，标签是整块拖动它的唯一抓手。
+ * 绘制与命中必须共用这一判断，否则会出现「看不见却点得到」的标签。
+ */
+export function rootLabelHidden(node: DocNode, vp: Viewport, selection: readonly string[]): boolean {
+  return vp.zoom < ROOT_LABEL_MIN_ZOOM && !selection.includes(node.id);
 }
 
 /* ---------------- 文本宽度：按名称缓存 ---------------- */
@@ -175,6 +185,7 @@ function paintRootLabels(
     const node = docStore.doc.nodes[id];
     if (!node || node.type !== type || !node.visible) continue;
     if (opts.renameId === node.id) continue;
+    if (rootLabelHidden(node, vp, opts.selection)) continue;
     const origin = labelOrigin(node, opts);
     const screen = worldToScreen(vp, origin.x, origin.y);
     // 整块在视口上方：标签会浮在没有对象的地方（命中同样跳过）
@@ -218,13 +229,14 @@ function paintRootLabels(
 
 /**
  * 根节点名称标签的屏幕矩形。
- * 节点整块在视口上方时返回 null（没有可抓的标签）。
+ * 节点整块在视口上方、或缩放过小被隐藏时返回 null（没有可抓的标签）。
  */
 export function rootLabelRect(
   node: DocNode,
   vp: Viewport,
   ctx: CanvasRenderingContext2D | null,
 ): Rect | null {
+  if (rootLabelHidden(node, vp, ui.selection)) return null;
   const span = screenSpan(node, vp, { x: node.x, y: node.y });
   if (span.bottom < 0) return null;
   return chipRect(worldToScreen(vp, node.x, node.y), labelTextWidth(node.name, vp, ctx));
