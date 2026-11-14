@@ -163,7 +163,10 @@ export async function pasteNodesFromClipboard(deps: PasteDeps): Promise<boolean>
 
   const idMap: Record<NodeId, NodeId> = {};
   for (const node of safe.nodes) idMap[node.id] = newId();
-  const cloneById = new Map(safe.nodes.map((node) => [idMap[node.id], remapNode(node, idMap)]));
+  // 粘贴来自别的文档：指向原文档页面的链接在这里没有目标，直接丢弃
+  const cloneById = new Map(
+    safe.nodes.map((node) => [idMap[node.id], remapNode(node, idMap, { externalLinkTargets: "drop" })]),
+  );
 
   detachOrphans(cloneById);
 

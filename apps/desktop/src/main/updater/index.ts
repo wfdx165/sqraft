@@ -1,15 +1,17 @@
 /**
- * 更新器：半静默（ADR-0029）。
+ * 更新器：半静默（ADR-0029 / ADR-0033）。
  *
  * - 启动后延迟 5 秒检查一次，24 小时节流；失败静默，只写日志。
- * - 有新版本就后台下载 zip、校验 sha256，进入"已就绪"。
- * - 退出时由 detached 脚本替换 `Sqraft.app`；就绪满 7 天主动提醒一次，永不强制重启。
+ * - macOS arm64：有新版本就后台下载 zip、校验 sha256，进入"已就绪"；
+ *   退出时由 detached 脚本替换 `Sqraft.app`；就绪满 7 天提醒一次，永不强制重启。
+ * - Windows：只检查版本，状态置为 `available`，界面引导去下载页；不下载、不安装。
+ * - 开发态与其他平台：`mode: none`，连检查都不做。
  * - 不做 beta 通道、不做"跳过此版本"、不签名。
  *
  * 状态判定（该不该查、查到后做什么、启动时恢复成什么）都在 `decisions.ts` /
  * `reconcile.ts` 里，本文件只做 Electron / 网络 / 文件系统胶水。
  */
-import { app, BrowserWindow, dialog, ipcMain } from "electron";
+import { app, BrowserWindow, dialog, ipcMain, shell } from "electron";
 import { basename, join } from "node:path";
 import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { CHANNELS, type UpdateState } from "../../shared/ipc";
@@ -17,7 +19,7 @@ import { logApp } from "../mcp/log";
 import { patchUpdatePreferences, updatePreferences } from "../recent-state";
 import { planForLatest, shouldCheck } from "./decisions";
 import { downloadVerified } from "./download";
-import { installPathsOf, resolveInstallSupport, spawnInstallerSync, type InstallSupport } from "./install";
+import { installPathsOf, resolveInstallSupport, signingTeamOf, spawnInstallerSync, type InstallSupport } from "./install";
 import { t } from "../i18n";
 import { reconcileOnStart } from "./reconcile";
 import { isTrustedUpdateUrl, parseLatest, UpdateManifestError } from "./protocol";
@@ -28,6 +30,8 @@ import type { UpdateAsset } from "./protocol";
 export const UPDATE_REPO = updateConfig.repo;
 
 const LATEST_URL = `https://github.com/${UPDATE_REPO}/releases/latest/download/latest.json`;
+/** Windows 没有自替换：只把用户送到发布页手动下载 */
+const DOWNLOAD_PAGE_URL = `https://github.com/${UPDATE_REPO}/releases/latest`;
 /** 启动后延迟检查：不和窗口首帧、MCP 启动抢资源 */
 const CHECK_DELAY_MS = 5_000;
 /** 就绪多久后主动提醒一次 */
@@ -45,7 +49,7 @@ let state: UpdateState = {
   supported: false,
 };
 
-let support: InstallSupport = { ok: false, reason: "", appPath: null };
+let support: InstallSupport = { mode: "none", reason: "", appPath: null };
 let checkInFlight: Promise<UpdateState> | null = null;
 let initialized = false;
 
@@ -142,6 +146,7 @@ async function runCheck(manual: boolean): Promise<UpdateState> {
       manifest,
       failedVersion: updatePreferences().failedVersion ?? null,
       manual,
+      installable: support.mode === "install",
     });
 
     if (plan.kind === "up-to-date") {
@@ -161,6 +166,16 @@ async function runCheck(manual: boolean): Promise<UpdateState> {
     if (plan.kind === "skipped-failed") {
       logApp("warn", "update: skipped previously failed version", { version: plan.version });
       return publish({ phase: "idle", message: null });
+    }
+
+    if (plan.kind === "available") {
+      logApp("info", "update: available, manual download only", { version: plan.version, manual });
+      return publish({
+        phase: "available",
+        latestVersion: plan.version,
+        notes: plan.notes,
+        publishedAt: plan.publishedAt,
+      });
     }
 
     logApp("info", "update: new version", {
@@ -183,7 +198,7 @@ async function runCheck(manual: boolean): Promise<UpdateState> {
 
 /** 检查更新。`manual` 忽略 24 小时节流，并把失败原因留在状态里。 */
 export async function checkForUpdates(manual = false): Promise<UpdateState> {
-  if (!support.ok) return state;
+  if (support.mode === "none") return state;
   if (checkInFlight) return checkInFlight;
   if (!shouldCheck({ prefs: updatePreferences(), manual, phase: state.phase, now: Date.now() })) return state;
   checkInFlight = runCheck(manual).finally(() => {
@@ -240,13 +255,15 @@ function showRollbackNotice(message: string): void {
 /** 退出时安装。必须同步落盘：`will-quit` 之后进程就没了。 */
 export function installOnQuit(): void {
   app.on("will-quit", () => {
-    if (state.phase !== "ready" || !support.ok || !state.latestVersion) return;
+    if (state.phase !== "ready" || support.mode !== "install" || !state.latestVersion) return;
     try {
       spawnInstallerSync({
         ...paths(),
         pid: process.pid,
         version: state.latestVersion,
         appName: basename(support.appPath ?? "Sqraft.app"),
+        // 替换前让脚本校验新包签名与 Team（ADR-0034）；旧版本未签名时为空串，脚本跳过
+        expectedTeam: support.appPath ? signingTeamOf(support.appPath) : "",
       });
       logApp("info", "update: installer spawned", { version: state.latestVersion });
     } catch (error) {
@@ -265,7 +282,7 @@ export async function initUpdater(): Promise<void> {
     executable: process.execPath,
   });
   const currentVersion = app.getVersion();
-  if (!support.ok) {
+  if (support.mode === "none") {
     state = {
       ...state,
       currentVersion,
@@ -278,6 +295,13 @@ export async function initUpdater(): Promise<void> {
       reason: support.reason,
       version: currentVersion,
     });
+    return;
+  }
+
+  // Windows：只有检查与提示，没有下载、替换与回滚，所以不碰启动标记和 reconcile
+  if (support.mode === "notify") {
+    state = { ...state, currentVersion, supported: true };
+    logApp("info", "update: initialized (notify only)", { version: currentVersion });
     return;
   }
 
@@ -318,8 +342,20 @@ export async function initUpdater(): Promise<void> {
 
 /** 窗口显示后调用：延迟自动检查。 */
 export function scheduleAutoCheck(): void {
-  if (!support.ok) return;
+  if (support.mode === "none") return;
   setTimeout(() => void checkForUpdates(false), CHECK_DELAY_MS);
+}
+
+/** Windows：把用户送到发布页；不做下载与安装。打不开系统浏览器时返回 false，由界面提示。 */
+export async function openDownloadPage(): Promise<boolean> {
+  logApp("info", "update: open download page", { version: state.latestVersion ?? undefined });
+  try {
+    await shell.openExternal(DOWNLOAD_PAGE_URL);
+    return true;
+  } catch (error) {
+    logApp("warn", "update: open download page failed", { error: messageOf(error) });
+    return false;
+  }
 }
 
 export function registerUpdateChannels(): void {
@@ -328,6 +364,7 @@ export function registerUpdateChannels(): void {
   ipcMain.handle(CHANNELS.updateRestart, () => {
     restartToInstall();
   });
+  ipcMain.handle(CHANNELS.updateDownload, () => openDownloadPage());
 }
 
 function messageOf(error: unknown): string {

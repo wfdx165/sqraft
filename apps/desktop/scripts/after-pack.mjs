@@ -8,7 +8,9 @@
  * 3. 翻转 Electron fuse（ADR-0030）：关掉"以 Node 跑主进程"、"从环境变量注入 Node 参数"、
  *    "附带调试参数启动"，要求只能从 asar 加载应用代码。
  *
- * 只在 darwin 执行（Windows/Linux 没有这些键）；签名发生在 afterPack 之后，改完会被正常重签。
+ * 1 / 2 只在 darwin 执行（Windows/Linux 没有这些键）；**fuse 两个平台都要翻**——
+ * Windows 的 `Sqraft.exe` 同样要关掉 RunAsNode 与 NODE_OPTIONS 注入（ADR-0033）。
+ * 签名发生在 afterPack 之后，改完会被正常重签。
  * 不碰 `Electron Framework.framework` 的标识与 `NSPrincipalClass`——那两处是运行时正确性依赖。
  */
 import { execFileSync } from "node:child_process";
@@ -38,8 +40,8 @@ function runPlutil(args) {
  *   而不是默默继承默认值。
  * - `resetAdHocDarwinSignature`：翻 fuse 会改主二进制、破坏 adhoc 签名，arm64 上
  *   macOS 会拒绝启动未签名的主二进制；这里让 fuses 自己补一遍 adhoc。
- * - `EnableEmbeddedAsarIntegrityValidation` 保持关：哈希写在 `Info.plist` 里，
- *   未签名时改包的人顺手就能改，开了只增加一个构建失败点。
+ * - `EnableEmbeddedAsarIntegrityValidation` 保持关：哈希写在 `Info.plist` 里，签名之后才受保护
+ *   （ADR-0034）；开启仍需一次"改包必挂"的负向测试，另开票评估。
  * - `GrantFileProtocolExtraPrivileges` 保持开：生产环境用 `file://` 加载渲染层。
  */
 const FUSE_CONFIG = {
@@ -68,33 +70,42 @@ function removeKey(plist, key) {
 }
 
 export default async function afterPack(context) {
-  if (context.electronPlatformName !== "darwin") return;
-
   const product = context.packager.appInfo.productFilename;
-  const appPath = join(context.appOutDir, `${product}.app`);
-  const mainPlist = join(appPath, "Contents", "Info.plist");
+  const isMac = context.electronPlatformName === "darwin";
+  let binary;
 
-  const removed = UNUSED_PERMISSION_KEYS.filter((key) => removeKey(mainPlist, key));
+  if (isMac) {
+    const appPath = join(context.appOutDir, `${product}.app`);
+    const mainPlist = join(appPath, "Contents", "Info.plist");
 
-  const frameworks = join(appPath, "Contents", "Frameworks");
-  const renamed = [];
-  for (const entry of readdirSync(frameworks)) {
-    if (!entry.endsWith(".app")) continue;
-    const plist = join(frameworks, entry, "Contents", "Info.plist");
-    if (!existsSync(plist)) continue;
-    const name = entry.replace(/\.app$/, "");
-    try {
-      runPlutil(["-replace", "CFBundleName", "-string", name, plist]);
-      renamed.push(name);
-    } catch (error) {
-      console.warn(`[after-pack] CFBundleName 更新失败 ${entry}: ${String(error)}`);
+    const removed = UNUSED_PERMISSION_KEYS.filter((key) => removeKey(mainPlist, key));
+
+    const frameworks = join(appPath, "Contents", "Frameworks");
+    const renamed = [];
+    for (const entry of readdirSync(frameworks)) {
+      if (!entry.endsWith(".app")) continue;
+      const plist = join(frameworks, entry, "Contents", "Info.plist");
+      if (!existsSync(plist)) continue;
+      const name = entry.replace(/\.app$/, "");
+      try {
+        runPlutil(["-replace", "CFBundleName", "-string", name, plist]);
+        renamed.push(name);
+      } catch (error) {
+        console.warn(`[after-pack] CFBundleName 更新失败 ${entry}: ${String(error)}`);
+      }
     }
+
+    console.log(`[after-pack] 权限文案移除 ${removed.length} 条；helper 显示名 ${renamed.length} 个`);
+    binary = join(appPath, "Contents", "MacOS", product);
+  } else if (context.electronPlatformName === "win32") {
+    binary = join(context.appOutDir, `${product}.exe`);
+  } else {
+    return;
   }
 
-  console.log(`[after-pack] 权限文案移除 ${removed.length} 条；helper 显示名 ${renamed.length} 个`);
-
-  const binary = join(appPath, "Contents", "MacOS", product);
   if (!existsSync(binary)) throw new Error(`[after-pack] 找不到主二进制：${binary}`);
-  await flipFuses(binary, FUSE_CONFIG);
-  console.log("[after-pack] fuse 已翻转（RunAsNode / NODE_OPTIONS / 调试参数 关闭，仅从 asar 加载）");
+  // resetAdHocDarwinSignature 只对 macOS 的 adhoc 签名有意义，Windows 传了也无害但没必要
+  const fuseConfig = isMac ? FUSE_CONFIG : { ...FUSE_CONFIG, resetAdHocDarwinSignature: false };
+  await flipFuses(binary, fuseConfig);
+  console.log(`[after-pack] fuse 已翻转（${isMac ? "macOS" : "Windows"}）：RunAsNode / NODE_OPTIONS / 调试参数关闭，仅从 asar 加载`);
 }

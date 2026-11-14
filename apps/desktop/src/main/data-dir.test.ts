@@ -49,10 +49,11 @@ async function makeLegacy(root: string): Promise<string> {
 
 describe("数据目录（平台惯例 userData）", () => {
   it("userData 落在应用数据根下的 Sqraft，旧目录是 home 下的点目录", () => {
-    expect(userDataDirOf("/Users/someone/Library/Application Support")).toBe(
-      "/Users/someone/Library/Application Support/Sqraft",
-    );
-    expect(legacyDotDirOf("/Users/someone")).toBe(`/Users/someone/${LEGACY_DOT_DIRNAME}`);
+    // 期望值用 join 拼：win32 下分隔符是反斜杠，写死 POSIX 串只会在 macOS 上过
+    const home = join("/Users", "someone");
+    const appData = join(home, "Library", "Application Support");
+    expect(userDataDirOf(appData)).toBe(join(appData, USER_DATA_NAME));
+    expect(legacyDotDirOf(home)).toBe(join(home, LEGACY_DOT_DIRNAME));
     expect(USER_DATA_NAME).toBe("Sqraft");
   });
 

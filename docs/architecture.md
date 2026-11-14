@@ -152,10 +152,10 @@ interface RenderBackend {
 - 选中对象有 **8 个缩放手柄**（页面最小 200×200、其它节点最小 8×8）；`Shift` 等比（角手柄）；文本节点不给手柄（框随文字走，用「字号」控制）；多选只移动、不出手柄；
 - 缩放页面/画板时子节点保持原相对位置与尺寸（不缩放、不裁切）；
 - 拖动时显示**参考线**：目标为同父兄弟 + 父容器内容区（padding 内框）+ 父容器边界，边/中线对齐（6px 屏幕阈值，随缩放换算）+ 与最近对象的间距标注；拖动页面时父容器为空，候选是其它页面。绘制（只吸指针角）与缩放（只吸被拖动的边）同样参与，`⌥` 临时关闭吸附；参考线是纯 UI 覆盖层，不进文档、不进撤销；
-- **拖动换父级**：每帧按指针求落点（最深的画板/组件，否则页面根；页面外不换父级），合法落点画虚线框 + 标签，松手提交 `node.reparent`（可带几何修正，整批 = 一个撤销条目）。根节点（页面、主组件）不换父级、实例子树内部不换父级、组件子节点不出组件、外部节点不拖进组件；不合法时沉默拒绝。落进自动布局容器默认进流（投影索引 + 插入线，兄弟按求解结果让位、hug 容器同步变尺寸，120ms 缓动，不吸附），`⌘` 落成绝对定位（无让位、无插入线）。跨页拖动中不切活动页，松手才切。细节见 `docs/specs/canvas-drag-reparent.md` 与 `docs/specs/layout-insert-preview.md`；
+- **拖动换父级**：每帧按指针求落点（最深的画板/组件，否则页面根；页面外不换父级），合法落点画虚线框 + 标签，松手提交 `node.reparent`（可带几何修正，整批 = 一个撤销条目）。根节点（页面、主组件）不换父级、实例子树内部不换父级、组件子节点不出组件、外部节点不拖进组件；不合法时沉默拒绝。落进自动布局容器默认进流（投影索引 + 插入线，兄弟按求解结果让位、hug 容器同步变尺寸，120ms 缓动，不吸附），`⌘` 落成绝对定位（无让位、无插入线）。跨页拖动中不切活动页，松手才切。细节见内部规格「拖动换父级」与「布局插入预览」（`docs/specs/`，不随仓发布）；
 - **边缘自动滚屏**：移动拖拽中指针进入视口边缘 40px 起滚，速度按距离平方变速；每帧按同一屏幕坐标重算落点与参考线；
 - **库对象的悬停与选中**：实例与主组件用紫色 `#8b5cf6`——悬停画 1px 虚线 `[4,3]`（无手柄、无尺寸徽标），选中画 1.5px 实线 + 同色手柄与徽标；其它图层仍用 indigo `#4f46e5`。悬停框与命中结果一致：没进入实例时高亮整个实例，进入后高亮命中的子节点；`accentOf` 是唯一取色入口（`canvas/selection-overlay.ts`）。
-- **悬停子元素边界**：指针停在画板/组件/实例里时，描出其可见一级子元素的灰色虚线边界（容器开裁剪时裁到容器边界）；手势 / 编辑态进行中隐藏（与选中量距同一套 `busy` 门禁），不影响命中与选中（`docs/specs/child-outlines.md`）；
+- **悬停子元素边界**：指针停在画板/组件/实例里时，描出其可见一级子元素的灰色虚线边界（容器开裁剪时裁到容器边界）；手势 / 编辑态进行中隐藏（与选中量距同一套 `busy` 门禁），不影响命中与选中（细节见内部规格「悬停子元素边界」，`docs/specs/`，不随仓发布）；
 - **选中量距**：选中图层后，标出它与同父兄弟在上/下/左/右各最近一个之间的间距（`gap > 0` 才画，最多 4 条；端点屏幕距离 < 8px 不画，避免数字叠在一起）；只显示整数、不带单位，样式与拖动时的间距标注一致（`canvas/selection-spacing.ts`）。同父多选用选区包围盒参与计算、跨父级多选不画；受编辑模式 + `select` 工具约束，框选 / 拖参考线 / 拖动 / 钢笔 / 裁切 / 行内编辑期间都不画（`showSelectionSpacing` 统一收口），不受「显示参考线」开关影响；
 - 检查器顶部显示选中对象的名称与完整 ID（页面同样适用），ID 可一键复制。
 
@@ -353,12 +353,22 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 - **进程**：主进程（MCP 宿主、文件 IO、窗口/菜单/生命周期）＋ 渲染进程（文档真源、命令层、渲染器、AI 工具执行器）＋ preload（白名单桥）。主进程不持有 `DocState`。
 - **IPC**：通道名与请求/响应类型集中在 `shared/ipc`，preload 只暴露 `window.sqraft` 一个对象；渲染层拿不到 `require` 与任意 IPC。安全基线见 ADR-0019。
 - **文件**：主进程负责系统对话框、字节搬运、原子写与 mtime 比对；`.sqraft` 的序列化/解析/迁移只在渲染层。全手动保存，无自动写回、无崩溃恢复。
-- **窗口**：单窗口两态（欢迎页 / 一个文档）；**每次启动把窗口铺满它上次所在那块屏的工作区**（不是 macOS 全屏模式，菜单栏与 Dock 仍在）；`⌘W` 关闭文档回欢迎页，`⌘Q` 退出；单实例转发打开请求；窗口位置与最近列表存 `userData/preferences.json`。
+- **窗口**：单窗口两态（欢迎页 / 一个文档）；**每次启动把窗口铺满它上次所在那块屏的工作区**（不是 macOS 全屏模式，菜单栏与 Dock 仍在）；`⌘W` 关闭文档回欢迎页，`⌘Q` 退出；单实例转发打开请求；窗口位置与最近列表存 `userData/preferences.json`。macOS 用 `hiddenInset` 标题栏（左上红绿灯 + 58px 留白 + 拖拽条）；Windows 用系统默认标题栏、菜单栏常显，应用内不留那段留白（ADR-0033）。快捷键在 Windows 上显示为 `Ctrl+Shift+Z` 形式，内部存储仍是同一套规范串。
 - **欢迎页**：以 MCP 接入为主位——服务状态（监听中 / 在线会话数）、能力一行（工具数动态取自 `@sqraft/ai-tools`）、可复制的接入片段（Claude Code / OpenCode / Cursor / 通用），然后才是新建/打开与最近 4 条。三态（未启动 / 等待接入 / 已连接）只改状态行与主按钮，见 ADR-0021 与 ADR-0026。
 - **菜单与快捷键**：系统级动作走菜单 role；文档编辑类动作仍由渲染层注册表独占，菜单点击只发送同一个动作 id（ADR-0011 的桌面补充）。
 - **MCP**：主进程协议层 + 本机 Streamable HTTP（`127.0.0.1:<port>`），详见 ADR-0026 与 §12。
-- **更新**（ADR-0029）：主进程负责检查（`releases/latest/download/latest.json`，24 小时节流）、下载 zip 与 sha256 校验、退出时用 detached 脚本替换 `.app`；渲染层只显示状态、触发重启，不碰文件系统。备份 + 启动标记（60 秒）构成回滚：新版本没跑起来就换回旧包。未签名，因此不用 Squirrel.Mac，只承诺 macOS arm64；只读位置（dmg 挂载点）提前拒绝。
-- **打包**：electron-builder，`appId com.yjsoft.sqraft`；asar 打包，没有需要放到 asar 外的可执行文件；只构建 macOS arm64 的 dmg + zip（zip 供自动更新），Windows/Linux 的打包配置已移除。
-- **构建期硬化**（ADR-0030）：三个入口都 esbuild 压缩、不生成 sourcemap（控制体积，应用没有崩溃上报）；`dependencies` 必须为空（渲染层与主进程的依赖全在构建期 bundle 进去，成品不含 `node_modules`）；`afterPack` 翻转 Electron fuse（禁 `RunAsNode` / `NODE_OPTIONS` / 调试参数，只允许从 asar 加载）。`scripts/verify-pack.mjs` 在发版链路里断言以上全部成立，不成立就中止。`.sqraft` 仍是明文 zip。
+- **更新**（ADR-0029 / ADR-0033）：主进程负责检查（`releases/latest/download/latest.json`，24 小时节流）。macOS arm64 会下载 zip 并校验 sha256、退出时用 detached 脚本替换 `.app`；备份 + 启动标记（60 秒）构成回滚：新版本没跑起来就换回旧包。Windows **只提示**：版本更新时状态置为 `available`，界面给「前往下载」打开 Releases 页面，不下载、不安装。渲染层只显示状态、触发重启或打开下载页，不碰文件系统。只承诺 macOS arm64 的就地更新（macOS 包自 2026-11 起用 Developer ID 签名、暂未公证，见 ADR-0034；替换脚本落位前校验新包签名与 Team）；只读位置（dmg 挂载点）提前拒绝。
+- **打包**（ADR-0033）：electron-builder，`appId com.yjsoft.sqraft`；asar 打包，没有需要放到 asar 外的可执行文件。macOS 出 arm64 的 dmg + zip（zip 供自动更新）；Windows 出 x64 的 NSIS 安装器（`Sqraft-Setup-<version>.exe`，per-user、可改目录、四语安装器、关联 `.sqraft`、卸载保留用户数据）。Windows 包必须在 Windows 机器上构建（`pnpm dist` 按宿主平台出包，不交叉构建），`release/` 是上传前的唯一产物收件箱。`verify-pack` 同时支持 `.app` 与 `win-unpacked` 两种布局。
+- **构建期防护**（ADR-0030）：三个入口都 esbuild 压缩、不生成 sourcemap；`dependencies` 必须为空（渲染层与主进程的依赖全在构建期 bundle 进去，成品不含 `node_modules`）；`afterPack` 翻转 Electron fuse（禁 `RunAsNode` / `NODE_OPTIONS` / 调试参数，只允许从 asar 加载）。`scripts/verify-pack.mjs` 在发版链路里断言以上全部成立，不成立就中止。`.sqraft` 仍是明文 zip。
 - **版本与标识**：版本号唯一真源是 `apps/desktop/package.json`（手动修改；`pnpm release` 只读、不接受版本参数）；发版的硬门槛是 `docs/releases/vX.md` 存在且非空，脚本不检查本地分支、工作区或 tag，`latest.json` 也不记录 commit；`appId` 沿用 `com.yjsoft.sqraft`——0.0.2 起已对外使用，改名会让已装用户被 macOS 当成另一个应用，因此保持不变。
 - **界面语言**（ADR-0031）：`zh-CN` / `en-US` / `ja-JP` / `ko-KR`，`auto` 跟随系统（`zh*` / `ja*` / `ko*`，其余英文）+ 设置面板手动覆盖；主进程与渲染层共用 `src/shared/i18n` 的类型化字典，界面文案一律走 `t()`；界面与新建文本按语言切换 CJK 字体栈，日文换行带轻量禁则；日志、MCP 工具描述、README/docs 与更新说明不在本地化范围。核心对用户可触发的错误抛 `AppError`，界面按 code 翻译。
+
+## 17. 原型链接与演示模式
+
+- **数据**：`DocNode.interactions?: Interaction[]`（ADR-0032）。每条是 `{ id, trigger: "click", action: "navigate" | "back", targetId?, transition: { type: "instant" | "dissolve", durationMs } }`；`targetId` 只能是 `page` 节点。页面另有 `scrollDirection?: "none" | "vertical" | "horizontal"`，只影响演示模式。数组是**整组替换**语义（与 `patch.style` 同纪律）。
+- **校验**：`packages/core/src/interaction.ts` 的 `normalizeInteractions` 是唯一入口——条数、id 唯一性、目标类型、不能指向自己所在页面、转场白名单、时长夹紧。`DocStore.validateOne` 抛错、`applyOne` 归一化；GUI 与 MCP 共用。
+- **引用完整性**：`node.delete` 删除页面前先展开引用清理（同一事务）；`node.reparent` 离开页面子树时清掉子树链接；跨文档粘贴丢弃找不到目标的链接；实例物化不复制母版链接。
+- **编辑入口**：右栏「设计 / 原型」两个 tab（`ui.inspectorTab`）。原型 tab 编辑第一条交互（目标页 / 返回上一屏、转场、时长），第 2 条起只读；选中页面时改为「滚动」下拉。画布上选中或悬停热区时画正交连线（目标页不可见则退化为胶囊），悬停会向上冒泡到热区祖先。
+- **演示模式**（`ui.presenter = { pageId, scroll, stack }`，纯 UI 状态）：`Presenter.vue` 覆盖整个窗口，用 `drawDocument(..., { onlyPageIds })` + `pageFitViewport` 画单页，裁到页面矩形后应用滚动位移；命中从页面子树向下找、再向上冒泡；`←` 退栈、`H` 高亮热区、`Esc` 退出。不写文档、不改选区与视口，退出即卸载。
+- **让位规则**：`ui.presenter` 非空时，快捷键分发器与画布的 `onKey` 都直接 return——两道显式闸门，不依赖事件捕获顺序。
+- **AI**：`set_interaction` / `remove_interaction` / `list_interactions`；`read_document` 的节点摘要带 `links`。一次工具调用 = 一个撤销步。

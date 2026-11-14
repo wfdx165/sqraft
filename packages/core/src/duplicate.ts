@@ -6,7 +6,7 @@
  * 展开阶段只做纯计算，绝不调用 `newId()`。
  */
 import type { Effect } from "./effects";
-import { walkSubtree, type DocNode, type DocState, type NodeId, type NodeStyle } from "./model";
+import { walkSubtree, type DocNode, type DocState, type Interaction, type NodeId, type NodeStyle } from "./model";
 import type { Command } from "./store";
 
 export interface DuplicateParams {
@@ -144,7 +144,11 @@ function cloneNode(doc: DocState, id: NodeId, idMap: Record<NodeId, NodeId>): Do
  * 深拷贝一个节点并重映射所有"指向其他节点"的字段（导出给剪贴板用：
  * 粘贴的节点来自别的文档，不能从当前文档里查源节点）。
  */
-export function remapNode(src: DocNode, idMap: Record<NodeId, NodeId>): DocNode {
+export function remapNode(
+  src: DocNode,
+  idMap: Record<NodeId, NodeId>,
+  options: { externalLinkTargets?: "keep" | "drop" } = {},
+): DocNode {
   const remap = (ref: NodeId | null | undefined): NodeId | null => {
     if (!ref) return null;
     return idMap[ref] ?? ref;
@@ -183,6 +187,17 @@ export function remapNode(src: DocNode, idMap: Record<NodeId, NodeId>): DocNode 
     clone.overrides = overrides;
   }
   if (src.image) clone.image = { ...src.image, ...(src.image.crop ? { crop: { ...src.image.crop } } : {}) };
+  if (src.interactions?.length) {
+    // 目标页可能不在复制范围内：同文档复制保留原目标，跨文档粘贴丢弃（"drop"）
+    const kept: Interaction[] = [];
+    for (const link of src.interactions) {
+      const mapped = link.targetId ? idMap[link.targetId] : undefined;
+      const targetId = mapped ?? (options.externalLinkTargets === "drop" ? undefined : link.targetId);
+      if (link.action === "navigate" && !targetId) continue;
+      kept.push({ ...link, targetId, transition: { ...link.transition } });
+    }
+    clone.interactions = kept.length ? kept : undefined;
+  }
   if (src.vector) {
     clone.vector = { closed: src.vector.closed, anchors: src.vector.anchors.map((a) => ({ ...a })) };
   }

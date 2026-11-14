@@ -9,14 +9,16 @@ change gets merged.
 - For a bug, open an issue with the reproduction steps first.
 - For a feature or a refactor, open an issue and describe the approach
   before writing code. Sqraft is a small project with a deliberately
-  narrow scope (`docs/roadmap.md` is not public; ask in the issue), and
-  a large pull request that does not fit it will be hard to merge.
+  narrow scope (`docs/roadmap.md` and `docs/specs/` are not public; ask in
+  the issue), and a large pull request that does not fit it will be hard to
+  merge.
 
 ## Prerequisites
 
 | Tool | Version | Notes |
 |---|---|---|
 | macOS | Apple Silicon | Intel Macs are not supported |
+| Windows | 10 22H2+ / 11, x64 | ARM64 Windows is not supported |
 | Node.js | 22.12.0 | see `.nvmrc` |
 | pnpm | 10.33.4 | `packageManager` in `package.json` |
 
@@ -32,10 +34,13 @@ pnpm test     # vitest in @sqraft/core, @sqraft/ai-tools, @sqraft/desktop
 pnpm build    # type check (main / preload / renderer) + production bundle
 ```
 
-Packaging is macOS arm64 only and unsigned:
+Packaging runs on the host platform: macOS produces the arm64 dmg + zip
+(signed with a Developer ID certificate; notarization is currently off),
+Windows produces the x64 NSIS installer (unsigned). Cross-compiling is not
+supported (the Windows installer must be built and checked on Windows):
 
 ```bash
-CSC_IDENTITY_AUTO_DISCOVERY=false pnpm dist
+pnpm dist     # macOS: arm64 dmg + zip; Windows: Sqraft-Setup-<version>.exe
 ```
 
 ## Project layout

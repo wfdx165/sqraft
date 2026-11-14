@@ -41,6 +41,9 @@ export function installUpdates(): void {
 /** 就绪：可以重启安装 */
 export const updateReady = computed(() => updateUi.phase === "ready");
 
+/** 有新版本但本平台只能手动下载（Windows） */
+export const updateAvailable = computed(() => updateUi.phase === "available");
+
 /** 手动检查：失败原因用 toast 说一次，状态本身留在关于面板里 */
 export async function checkForUpdates(manual = true): Promise<void> {
   try {
@@ -61,6 +64,16 @@ export function restartToUpdate(): void {
   void window.sqraft.update.restart();
 }
 
+/** Windows：打开下载页手动更新（本版没有静默安装） */
+export async function downloadUpdate(): Promise<void> {
+  try {
+    const opened = await window.sqraft.update.download();
+    if (!opened) showToast(t("update.openPageFailed"), "error");
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : String(error), "error");
+  }
+}
+
 /** 关于面板的一句话状态 */
 export function updateStatusText(): string {
   switch (updateUi.phase) {
@@ -74,6 +87,8 @@ export function updateStatusText(): string {
       return t("update.downloading", { percent: Math.round(updateUi.progress * 100) });
     case "ready":
       return t("update.ready", { version: updateUi.latestVersion ?? "" });
+    case "available":
+      return t("update.available", { version: updateUi.latestVersion ?? "" });
     case "up-to-date":
       return t("update.upToDate");
     case "error":

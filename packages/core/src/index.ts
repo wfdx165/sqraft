@@ -8,6 +8,7 @@ export * from "./text";
 export { migrateDoc, CURRENT_FORMAT_VERSION } from "./migrate";
 export * from "./vector";
 export * from "./polygon";
+export * from "./interaction";
 export * from "./component";
 export * from "./duplicate";
 export * from "./arrange";

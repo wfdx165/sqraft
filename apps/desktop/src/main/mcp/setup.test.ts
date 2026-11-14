@@ -1,8 +1,8 @@
 import { mkdir, mkdtemp, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { collectSetupInfo, inspectEntry, legacyCliPath, removeStaleCliLink } from "./setup";
+import { collectSetupInfo, inspectEntry, LEGACY_CLI_NAME, legacyCliPath, removeStaleCliLink } from "./setup";
 
 const dirs: string[] = [];
 
@@ -68,16 +68,19 @@ describe("MCP 接入片段", () => {
 });
 
 describe("旧 CLI 软链迁移", () => {
+  // 期望值用 join 拼：win32 下分隔符是反斜杠，写死 POSIX 串只会在 macOS 上过
+  const resourcesPath = join("/App", "Resources");
+  const appPath = join("/repo", "apps", "desktop");
   const options = {
     packaged: true,
-    resourcesPath: "/App/Resources",
-    appPath: "/repo/apps/desktop",
+    resourcesPath,
+    appPath,
   };
 
   it("打包后指 resources/bin，开发态指应用目录", () => {
-    expect(legacyCliPath(options)).toBe("/App/Resources/bin/sqraft-mcp");
+    expect(legacyCliPath(options)).toBe(join(resourcesPath, "bin", LEGACY_CLI_NAME));
     expect(legacyCliPath({ ...options, packaged: false })).toBe(
-      "/repo/apps/desktop/resources/bin/sqraft-mcp",
+      resolve(appPath, "resources", "bin", LEGACY_CLI_NAME),
     );
   });
 
