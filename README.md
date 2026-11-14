@@ -47,7 +47,7 @@ If you would rather not auto-update, **Help → Check for Updates…** checks ma
 - **Editing**: multi-select, marquee, align and distribute, drag to reparent, grouping, guides, snapping
 - **Effects**: drop shadow, inner shadow, layer blur, background blur
 - **Images**: drag in, paste, crop, mask, linked images (cached locally)
-- **AI editing**: agents create nodes, change styles and screenshot the result over MCP; they can also wire prototype links, so a generated design is clickable; one tool call = one undo step
+- **AI editing**: agents search and read only the page or subtree they need (even in 100k-layer files), create nodes and change styles over MCP, and get warnings on every write (zero-size, clipped text, missing tokens) so they fix themselves; models without vision can read a text summary of the screen. They can also wire prototype links, so a generated design is clickable; one tool call = one undo step
 - **Export**: PNG (with scale)
 - **Interface languages**: 中文 / English / 日本語 / 한국어, with optional automatic system-language detection
 
