@@ -5,6 +5,7 @@ export * from "./store";
 export * from "./layout";
 export * from "./layout-pass";
 export * from "./text";
+export * from "./diagnostics";
 export { migrateDoc, CURRENT_FORMAT_VERSION } from "./migrate";
 export * from "./vector";
 export * from "./polygon";

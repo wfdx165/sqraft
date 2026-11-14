@@ -20,7 +20,7 @@ import {
 import { docStore, hooks, ui } from "./store";
 import { newDocument, openDocument } from "./file-session";
 import { appInfo } from "./app-meta";
-import { textSizeOf } from "./text-metrics";
+import { measureText, textSizeOf } from "./text-metrics";
 import { putAsset } from "./assets";
 import { putFont } from "./fonts";
 import { t } from "./i18n";
@@ -253,6 +253,8 @@ export function installMcpHost(): void {
     () => [...ui.selection],
     // agent 建的页面/组件默认名也跟随界面语言
     (kind) => t(kind === "page" ? "node.page" : "node.component"),
+    // 诊断用的逐行字体宽度（core 不碰 canvas，度量一律注入）
+    { measureLine: measureText },
   );
 
   const offCall = bridge.mcp.onCall(async ({ id, name, args, clientLabel }) => {

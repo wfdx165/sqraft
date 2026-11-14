@@ -1,18 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { createDocWithPage, createEmptyDoc, createNode, DocStore, firstPageId } from "@sqraft/core";
-import { makeExecutor, type ToolExecutor } from "../src/index";
-
-/** 每个用例一份干净文档 + 执行器（getActivePageId 固定为第一页）。 */
-function setup(): { store: DocStore; run: ToolExecutor; pageId: string } {
-  const store = new DocStore(createDocWithPage());
-  const pageId = firstPageId(store.doc)!;
-  const run = makeExecutor(store, async () => "", () => pageId);
-  return { store, run, pageId };
-}
-
-async function call(run: ToolExecutor, name: string, args: Record<string, unknown> = {}) {
-  return JSON.parse(await run(name, args)) as Record<string, unknown>;
-}
+import { createDocWithPage, createEmptyDoc, createNode, DocStore, firstPageId, makeExecutor } from "./helpers";
+import { call, setup } from "./helpers";
 
 describe("AI 工具：路径", () => {
   it("create_node 用父容器坐标建路径，节点框由包围盒推导", async () => {
@@ -113,11 +101,11 @@ describe("AI 工具：路径", () => {
       ],
     });
     const doc = await call(run, "read_document");
-    const pages = doc.pages as Array<{ subtree: string }>;
-    const flat = JSON.parse(pages[0].subtree) as Array<{ id: string; vector?: { anchors: unknown[] } }>;
+    const flat = doc.nodes as Array<{ id: string; vector?: { anchors: unknown[] } }>;
     expect(flat.find((n) => n.id === created.nodeId)?.vector?.anchors).toHaveLength(2);
   });
 });
+
 
 describe("AI 工具：多边形", () => {
   it("sides 缺省为 3，按边数命名", async () => {
@@ -150,11 +138,11 @@ describe("AI 工具：多边形", () => {
     const { run } = setup();
     const created = await call(run, "create_node", { kind: "polygon", sides: 6 });
     const doc = await call(run, "read_document");
-    const pages = doc.pages as Array<{ subtree: string }>;
-    const flat = JSON.parse(pages[0].subtree) as Array<{ id: string; sides?: number }>;
+    const flat = doc.nodes as Array<{ id: string; sides?: number }>;
     expect(flat.find((n) => n.id === created.nodeId)?.sides).toBe(6);
   });
 });
+
 
 describe("AI 工具：样式纪律", () => {
   it("画板缺省填充白色字面量（与 GUI 一致）", async () => {
@@ -211,6 +199,7 @@ describe("AI 工具：样式纪律", () => {
   });
 });
 
+
 describe("AI 工具：主组件在文档根节点", () => {
   it("create_node 省略坐标时把母版排到组件区", async () => {
     const { store, run } = setup();
@@ -249,19 +238,25 @@ describe("AI 工具：主组件在文档根节点", () => {
     expect(store.doc.nodes[res.nodeId as string]).toMatchObject({ x: 900, y: 1200, parentId: null });
   });
 
-  it("read_document 默认给摘要，按需附母版子树", async () => {
+  it("read_document 默认给页面作用域，母版内部用 scope=subtree 读", async () => {
     const { run } = setup();
     const comp = await call(run, "create_node", { kind: "component" });
     await call(run, "create_node", { kind: "rect", parentId: comp.nodeId as string });
 
-    const lean = await call(run, "read_document");
+    const lean = await call(run, "read_document", { scope: "document" });
     const summary = (lean.components as Array<Record<string, unknown>>)[0];
     expect(summary.componentId).toBe(comp.nodeId);
     expect(summary.subtree).toBeUndefined();
+    expect(summary.nodeCount).toBe(2);
 
-    const full = await call(run, "read_document", { includeComponentTrees: true });
-    const withTree = (full.components as Array<{ subtree: string }>)[0];
-    expect(JSON.parse(withTree.subtree)).toHaveLength(2);
+    const full = await call(run, "read_document", { scope: "subtree", subtreeId: comp.nodeId });
+    expect(full.pageId).toBeNull();
+    expect(full.nodes).toHaveLength(2);
+
+    // 旧参数不再展开母版，只给弃用提示
+    const deprecated = await call(run, "read_document", { includeComponentTrees: true });
+    expect(deprecated.components).toBeUndefined();
+    expect(String(deprecated.hint)).toMatch(/deprecated/);
   });
 
   it("move_node 是一次撤销（父级与 layoutAbsolute 一起回退）", async () => {
@@ -303,6 +298,7 @@ describe("AI 工具：主组件在文档根节点", () => {
   });
 });
 
+
 describe("AI 工具：组件 / 插槽 / 实例", () => {
   it("create_node 支持 component/slot，create_instance 物化整棵子树", async () => {
     const { store, run, pageId } = setup();
@@ -324,14 +320,12 @@ describe("AI 工具：组件 / 插槽 / 实例", () => {
     expect(instNode.componentId).toBe(compId);
     expect(instNode.children).toHaveLength(2);
 
-    const doc = await call(run, "read_document", { includeComponentTrees: true });
-    // 母版是文档根节点：不在页面树里，走 components 摘要 + 可选子树
-    const components = doc.components as Array<{ componentId: string; subtree?: string }>;
-    const master = components.find((c) => c.componentId === compId)!;
-    const masterTree = JSON.parse(master.subtree!) as Array<Record<string, unknown>>;
+    const doc = await call(run, "read_document", { scope: "subtree", subtreeId: compId });
+    // 母版是文档根节点：不在页面树里，用 scope=subtree 读它自己
+    const masterTree = doc.nodes as Array<Record<string, unknown>>;
     expect(masterTree.find((n) => n.id === compId)?.type).toBe("component");
     expect(masterTree.find((n) => n.id === slotId)?.type).toBe("slot");
-    const flat = JSON.parse((doc.pages as Array<{ subtree: string }>)[0].subtree) as Array<Record<string, unknown>>;
+    const flat = (await call(run, "read_document")).nodes as Array<Record<string, unknown>>;
     expect(flat.find((n) => n.id === compId)).toBeUndefined();
     expect(flat.find((n) => n.id === instId)?.componentId).toBe(compId);
     expect(flat.find((n) => n.id === instId)?.children).toHaveLength(2);
@@ -363,12 +357,12 @@ describe("AI 工具：组件 / 插槽 / 实例", () => {
     store.apply({ type: "node.create", params: { nodes: [user], parentId: pageId } });
     store.apply({ type: "slot.fill", params: { slotId: slotClone, nodeIds: [user.id] } });
 
-    const doc = await call(run, "read_document");
+    const doc = await call(run, "read_document", { scope: "document" });
     const compNode = (doc.components as Array<{ componentId: string; propertyDefs?: Array<{ id: string }> }>).find(
       (c) => c.componentId === compId,
     )!;
     expect(compNode.propertyDefs![0].id).toBe("p1");
-    const flat = JSON.parse((doc.pages as Array<{ subtree: string }>)[0].subtree) as Array<Record<string, unknown>>;
+    const flat = (await call(run, "read_document", { depth: 8 })).nodes as Array<Record<string, unknown>>;
     const instance = flat.find((n) => n.id === instId)!;
     expect(instance.propValues).toMatchObject({ p1: "AI 标题" });
     expect(instance.overrides).toBeTruthy();
@@ -415,9 +409,10 @@ describe("AI 工具：组件 / 插槽 / 实例", () => {
   });
 });
 
+
 describe("AI 工具：属性 / 插槽 / 替换 / 脱离", () => {
   function flatOf(doc: Record<string, unknown>): Array<Record<string, unknown>> {
-    return JSON.parse((doc.pages as Array<{ subtree: string }>)[0].subtree) as Array<Record<string, unknown>>;
+    return (doc.nodes ?? []) as Array<Record<string, unknown>>;
   }
 
   it("define_property + set_instance_prop 读写文本属性", async () => {
@@ -438,13 +433,13 @@ describe("AI 工具：属性 / 插槽 / 替换 / 脱离", () => {
     expect(prop.name).toBe("标题文案");
 
     await call(run, "set_instance_prop", { instanceId: instId, propertyId: prop.propertyId, value: "AI 标题" });
-    let flat = flatOf(await call(run, "read_document"));
+    let flat = flatOf(await call(run, "read_document", { depth: 8 }));
     const cloneId = store.doc.nodes[instId].children.find((id) => store.doc.nodes[id].mainId === textId)!;
     expect(flat.find((n) => n.id === cloneId)?.text).toBe("AI 标题");
     expect(flat.find((n) => n.id === instId)?.propValues).toMatchObject({ [prop.propertyId as string]: "AI 标题" });
 
     await call(run, "set_instance_prop", { instanceId: instId, propertyId: prop.propertyId, value: null });
-    flat = flatOf(await call(run, "read_document"));
+    flat = flatOf(await call(run, "read_document", { depth: 8 }));
     expect(flat.find((n) => n.id === cloneId)?.text).toBe("标题");
 
     await expect(
@@ -464,7 +459,7 @@ describe("AI 工具：属性 / 插槽 / 替换 / 脱离", () => {
 
     const user = await call(run, "create_node", { kind: "rect", parentId: pageId, name: "内容" });
     await call(run, "fill_slot", { instanceId: instId, slotName: "body", nodeIds: [user.nodeId] });
-    const flat = flatOf(await call(run, "read_document"));
+    const flat = flatOf(await call(run, "read_document", { depth: 8 }));
     expect(flat.find((n) => n.id === slotClone)?.slotFilled).toBe(true);
     expect(flat.find((n) => n.id === user.nodeId)?.parentId).toBe(slotClone);
 
@@ -504,14 +499,15 @@ describe("AI 工具：属性 / 插槽 / 替换 / 脱离", () => {
     const cloneId = store.doc.nodes[instId].children.find((id) => store.doc.nodes[id].mainId === textId)!;
 
     await call(run, "update_node", { nodeId: cloneId, text: "AI 覆盖" });
-    let flat = flatOf(await call(run, "read_document"));
+    let flat = flatOf(await call(run, "read_document", { depth: 8 }));
     expect(flat.find((n) => n.id === instId)?.overrides).toBeTruthy();
 
     await call(run, "update_node", { nodeId: textId, text: "母版新文案" });
-    flat = flatOf(await call(run, "read_document"));
+    flat = flatOf(await call(run, "read_document", { depth: 8 }));
     expect(flat.find((n) => n.id === cloneId)?.text).toBe("AI 覆盖");
   });
 });
+
 
 describe("AI 工具：自动布局与排版", () => {
   it("create_node 的 layout 会立即参与求解", async () => {
@@ -584,6 +580,7 @@ describe("AI 工具：自动布局与排版", () => {
   });
 });
 
+
 describe("AI 工具：节点效果", () => {
   it("create_node 写入投影与模糊，读文档能看到", async () => {
     const { store, run } = setup();
@@ -646,93 +643,6 @@ describe("AI 工具：节点效果", () => {
   });
 });
 
-describe("AI 工具：文档级操作与截图区域", () => {
-  it("document.new 交给宿主执行", async () => {
-    const store = new DocStore(createDocWithPage());
-    const calls: string[] = [];
-    const run = makeExecutor(store, async () => "", undefined, undefined, {
-      newDocument: async () => {
-        calls.push("new");
-        return true;
-      },
-      openDocument: async () => true,
-    });
-    expect(await call(run, "document.new")).toEqual({ ok: true });
-    expect(calls).toEqual(["new"]);
-  });
-
-  it("document.new 把用户取消如实回报", async () => {
-    const store = new DocStore(createDocWithPage());
-    const run = makeExecutor(store, async () => "", undefined, undefined, {
-      newDocument: async () => false,
-      openDocument: async () => true,
-    });
-    expect(await call(run, "document.new")).toEqual({ ok: false, canceled: true });
-  });
-
-  it("document.open 把用户取消如实回报", async () => {
-    const store = new DocStore(createDocWithPage());
-    let opened = 0;
-    const run = makeExecutor(store, async () => "", undefined, undefined, {
-      newDocument: async () => true,
-      openDocument: async () => {
-        opened += 1;
-        return false;
-      },
-    });
-    expect(await call(run, "document.open")).toEqual({ ok: false, canceled: true });
-    expect(opened).toBe(1);
-  });
-
-  it("document.open 拒绝路径参数（文件必须由用户选择）", async () => {
-    const store = new DocStore(createDocWithPage());
-    const run = makeExecutor(store, async () => "", undefined, undefined, {
-      newDocument: async () => true,
-      openDocument: async () => true,
-    });
-    await expect(run("document.open", { path: "/etc/passwd" })).rejects.toThrow(/不接受路径参数/);
-  });
-
-  it("没有宿主时文档类工具给出可读错误", async () => {
-    const store = new DocStore(createDocWithPage());
-    const run = makeExecutor(store, async () => "");
-    await expect(run("document.new", {})).rejects.toThrow(/不支持新建文档/);
-  });
-
-  it("app_info 返回宿主版本与当前格式版本", async () => {
-    const store = new DocStore(createDocWithPage());
-    const run = makeExecutor(store, async () => "", undefined, undefined, {
-      newDocument: async () => true,
-      openDocument: async () => true,
-      appInfo: async () => ({ name: "Sqraft", version: "0.1.0", platform: "darwin" }),
-    });
-    const info = await call(run, "app_info");
-    expect(info).toMatchObject({ name: "Sqraft", version: "0.1.0", platform: "darwin" });
-    expect(typeof info.formatVersion).toBe("number");
-  });
-
-  it("app_info 在没有宿主元信息时明确报错", async () => {
-    const store = new DocStore(createDocWithPage());
-    const run = makeExecutor(store, async () => "", undefined, undefined, {
-      newDocument: async () => true,
-      openDocument: async () => true,
-    });
-    await expect(run("app_info", {})).rejects.toThrow(/不支持 app_info/);
-  });
-
-  it("screenshot 把区域交给宿主，并校验参数", async () => {
-    const store = new DocStore(createDocWithPage());
-    const regions: unknown[] = [];
-    const run = makeExecutor(store, async (region) => {
-      regions.push(region);
-      return "data:image/png;base64,AA";
-    });
-    const res = await call(run, "screenshot", { region: { x: 10, y: 20, width: 100, height: 50 } });
-    expect(res.image).toBe("data:image/png;base64,AA");
-    expect(regions[0]).toEqual({ x: 10, y: 20, width: 100, height: 50 });
-    await expect(run("screenshot", { region: { x: 0, y: 0, width: 0, height: 10 } })).rejects.toThrow(/宽高为正数/);
-  });
-});
 
 describe("AI 工具：撤销粒度", () => {
   it("一次调用只产生一条撤销记录，撤销把整次调用撤干净", async () => {
@@ -763,6 +673,7 @@ describe("AI 工具：撤销粒度", () => {
     expect(store.doc.nodes[instance.nodeId as string]).toBeUndefined();
   });
 });
+
 
 describe("图片工具", () => {
   const PNG_BASE64 = "iVBORw0KGgo=";
@@ -884,6 +795,7 @@ describe("图片工具", () => {
   });
 });
 
+
 describe("AI 工具：分组 / 排列 / 复制", () => {
   async function threeRects() {
     const { store, run, pageId } = setup();
@@ -936,6 +848,7 @@ describe("AI 工具：分组 / 排列 / 复制", () => {
   });
 });
 
+
 describe("AI 工具：空文档自动建页", () => {
   it("没有页面时 create_node 自动建页，且只占一条撤销", async () => {
     const store = new DocStore(createEmptyDoc());
@@ -958,6 +871,7 @@ describe("AI 工具：空文档自动建页", () => {
     await expect(run("create_node", { kind: "rect", parentId: "missing" })).rejects.toThrow(/parentId/);
   });
 });
+
 
 describe("AI 工具：页面", () => {
   it("create_page 在空文档里默认叫页面 1、放在原点", async () => {
@@ -1036,54 +950,6 @@ describe("AI 工具：页面", () => {
   });
 });
 
-describe("AI 工具：导出与布局检查", () => {
-  it("export_png 校验倍率并交给宿主渲染", async () => {
-    const store = new DocStore(createDocWithPage());
-    const pageId = firstPageId(store.doc)!;
-    const run = makeExecutor(store, async () => "", () => pageId, undefined, {
-      newDocument: async () => true,
-      openDocument: async () => true,
-      exportPng: (request) => `data:image/png;base64,${request.scale}`,
-    });
-
-    const ok = await call(run, "export_png", { scale: 3 });
-    expect(ok.image).toBe("data:image/png;base64,3");
-    await expect(run("export_png", { scale: 9 })).rejects.toThrow(/scale/);
-    await expect(run("export_png", { pageId: "missing" })).rejects.toThrow(/pageId/);
-  });
-
-  it("inspect_layout 返回世界坐标与布局参数", async () => {
-    const { store, run, pageId } = setup();
-    const frame = createNode("frame", { parentId: pageId, x: 100, y: 50, width: 200, height: 100 });
-    const child = createNode("rect", { parentId: frame.id, x: 10, y: 20, width: 30, height: 40, layoutAbsolute: true });
-    frame.children = [child.id];
-    store.apply({ type: "node.create", params: { nodes: [frame, child], parentId: pageId } });
-
-    const res = JSON.parse((await run("inspect_layout", { pageId })) as string) as {
-      nodes: Array<Record<string, unknown>>;
-    };
-    const row = res.nodes.find((n) => n.id === child.id)!;
-    expect(row).toMatchObject({ x: 110, y: 70, width: 30, height: 40, absolute: true });
-  });
-
-  it("inspect_layout 的 nodeIds 含整棵子树，重复的后代只输出一次", async () => {
-    const { store, run, pageId } = setup();
-    const frame = createNode("frame", { parentId: pageId, x: 0, y: 0, width: 100, height: 100 });
-    const child = createNode("rect", { parentId: frame.id, x: 5, y: 5, width: 10, height: 10 });
-    frame.children = [child.id];
-    store.apply({ type: "node.create", params: { nodes: [frame, child], parentId: pageId } });
-
-    const rows = async (nodeIds: string[]) => {
-      const res = JSON.parse(await run("inspect_layout", { pageId, nodeIds })) as {
-        nodes: Array<{ id: string; depth: number }>;
-      };
-      return res.nodes.map((n) => `${n.id}:${n.depth}`);
-    };
-    expect(await rows([frame.id])).toEqual([`${frame.id}:0`, `${child.id}:1`]);
-    // 同时请求父与子：子作为后代只出现一次，depth 以根为准
-    expect(await rows([frame.id, child.id])).toEqual([`${frame.id}:0`, `${child.id}:1`]);
-  });
-});
 
 describe("AI 工具：设计 Token", () => {
   it("define_token 新增颜色/数字，同类型可覆盖", async () => {
@@ -1198,6 +1064,7 @@ describe("AI 工具：设计 Token", () => {
   });
 });
 
+
 describe("AI 工具：选区", () => {
   /** 页面 → 卡片(100,120) → 按钮(10,20)：按钮的世界坐标应是 110,140。 */
   function withSelection() {
@@ -1265,6 +1132,7 @@ describe("AI 工具：选区", () => {
     expect(res.hint).toBeTruthy();
   });
 });
+
 
 describe("AI 工具：数值 Token", () => {
   it("create_node 写入字号 / 逐角圆角 / 间距 / 逐边内边距引用", async () => {
@@ -1355,11 +1223,11 @@ describe("AI 工具：数值 Token", () => {
     await call(run, "define_token", { path: "size/body", type: "number", value: 18 });
     const created = await call(run, "create_node", { kind: "text", text: "Hi", fontSizeToken: "size/body" });
     const doc = await call(run, "read_document");
-    const pages = doc.pages as Array<{ subtree: string }>;
-    const flat = JSON.parse(pages[0].subtree) as Array<{ id: string; style?: { fontSizeToken?: string } }>;
+    const flat = doc.nodes as Array<{ id: string; style?: { fontSizeToken?: string } }>;
     expect(flat.find((n) => n.id === created.nodeId)?.style?.fontSizeToken).toBe("size/body");
   });
 });
+
 
 describe("AI 工具：数值 Token 的字面量解绑", () => {
   it("update_node 只传字面量时自动解绑对应 Token", async () => {
@@ -1386,6 +1254,7 @@ describe("AI 工具：数值 Token 的字面量解绑", () => {
   });
 });
 
+
 describe("AI 工具：inspect_layout 的数值 Token", () => {
   it("存在 Token 时输出解析后的 gap / padding", async () => {
     const { run } = setup();
@@ -1401,6 +1270,7 @@ describe("AI 工具：inspect_layout 的数值 Token", () => {
     expect(row.resolved?.padding.top).toBe(20);
   });
 });
+
 
 describe("AI 工具：原型链接", () => {
   it("set_interaction 建跳转，list_interactions 与 read_document 都能看到，一次撤销撤回", async () => {
@@ -1441,7 +1311,7 @@ describe("AI 工具：原型链接", () => {
     });
 
     const doc = await call(run, "read_document");
-    const subtree = JSON.parse((doc.pages as Array<{ subtree: string }>)[0].subtree) as Array<Record<string, unknown>>;
+    const subtree = doc.nodes as Array<Record<string, unknown>>;
     const serialized = subtree.find((node) => node.id === rect.nodeId)!;
     expect((serialized.links as Array<Record<string, unknown>>)[0]).toMatchObject({
       action: "navigate",
@@ -1477,3 +1347,4 @@ describe("AI 工具：原型链接", () => {
     await expect(run("update_node", { nodeId: rect.nodeId, scrollDirection: "vertical" })).rejects.toThrow(/页面/);
   });
 });
+
