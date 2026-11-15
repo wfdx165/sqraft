@@ -1,6 +1,5 @@
 // 工具名直接分派；每个分支保持原实现，ctx 提供 store 与宿主能力。
 import type { AlignEdge, Command, DistributeAxis, DocNode, NodeId, NodeStyle, ReorderAction, TextAutoResize } from "../shared";
-<<<<<<< HEAD
 import { CREATABLE_KINDS, applyNodeArgs, applyStyleArgs, assertEffectTokens, assertImageUrl, assertNoLiteralColors, assertNumericTokenArgs, assertToken, clampSides, createNode, defaultLayoutFor, effectsFrom, ensurePage, firstPageId, newId, nextComponentName, nextComponentPosition, planDuplicate, readPoints, resolveNumericStyle, validateVector, walkSubtree, worldRect, type CreatableKind } from "../shared";
 import type { Handler, ToolContext } from "../types";
 
@@ -203,146 +202,10 @@ export const handleCreateNode: Handler = async (ctx, args) => {
     }
     const parentId = resolveParentId(ctx, args, kind === "component");
     const node = await buildNodeFromArgs(ctx, args, parentId, "");
-=======
-import { applyNodeArgs, applyStyleArgs, assertEffectTokens, assertImageUrl, assertNumericTokenArgs, assertToken, clampSides, createNode, defaultLayoutFor, effectsFrom, ensurePage, firstPageId, newId, nextComponentName, nextComponentPosition, planDuplicate, readPoints, resolveNumericStyle, validateVector, walkSubtree, worldRect } from "../shared";
-import type { Handler } from "../types";
-
-/** `create_node` */
-export const handleCreateNode: Handler = async (ctx, args) => {
-    const kind = String(args.kind) as
-      | "frame" | "rect" | "ellipse" | "polygon" | "line" | "path" | "text" | "image"
-      | "component" | "slot";
-    const isImage = kind === "image";
-    const isPath = kind === "path";
-    const isPolygon = kind === "polygon";
-    const isComponent = kind === "component";
-    const isSlot = kind === "slot";
-    assertToken(ctx.store, args.fillToken as string | undefined, "fillToken");
-    assertToken(ctx.store, args.strokeToken as string | undefined, "strokeToken");
-    if (Array.isArray(args.effects)) assertEffectTokens(ctx.store, effectsFrom(args.effects));
-    // 主组件是文档根节点（ADR-0025）：挂在哪个页面下都是错的，直接拒绝
-    if (isComponent && args.parentId !== undefined && args.parentId !== null) {
-      throw new Error("主组件是文档根节点，不接受 parentId");
-    }
-    // 空文档没有页面：先建一页再画（与人工"新建页面"同一套命令，仍是一次撤销）
-    let parentId: NodeId | null = isComponent
-      ? null
-      : ((args.parentId as NodeId | undefined) ?? ctx.getActivePageId?.() ?? firstPageId(ctx.store.doc));
-    if (!isComponent) {
-      if (!parentId && args.parentId === undefined) parentId = ensurePage(ctx.store, ctx.defaultName?.("page") ?? "页面");
-      if (!parentId || !ctx.store.doc.nodes[parentId]) throw new Error("parentId 不存在");
-    }
-
-    let name = args.name as string | undefined;
-    if (isComponent) name = name ?? nextComponentName(ctx.store.doc, ctx.defaultName?.("component") ?? "组件");
-    // 省略坐标时：主组件排到组件区末尾，其余落在父容器左上角
-    const defaultPosition = isComponent ? nextComponentPosition(ctx.store.doc) : { x: 0, y: 0 };
-    if (isSlot) {
-      const trimmed = String(name ?? "").trim();
-      if (!trimmed) throw new Error("kind=slot 必须提供唯一的 name");
-      name = trimmed;
-      let componentId: NodeId | null = null;
-      let cur: DocNode | undefined = parentId ? ctx.store.doc.nodes[parentId] : undefined;
-      while (cur) {
-        if (cur.type === "instance" || cur.type === "slot") break;
-        if (cur.type === "component") {
-          componentId = cur.id;
-          break;
-        }
-        cur = cur.parentId ? ctx.store.doc.nodes[cur.parentId] : undefined;
-      }
-      if (!componentId) throw new Error("插槽必须位于主组件内");
-      let used = false;
-      walkSubtree(ctx.store.doc, componentId, (n) => {
-        if (n.type === "slot" && n.name === trimmed) used = true;
-      });
-      if (used) throw new Error(`插槽名 "${trimmed}" 已存在`);
-    }
-
-    const points = readPoints(args.points);
-    const closed = Boolean(args.closed);
-    if (args.sides !== undefined && !isPolygon) throw new Error("sides 仅适用于 kind=polygon");
-    if (isPath) {
-      if (!points) throw new Error("kind=path 必须提供 points");
-      if (points.length < 2) throw new Error("路径至少需要 2 个锚点");
-      if (closed && points.length < 3) throw new Error("闭合路径至少需要 3 个锚点");
-      validateVector({ closed, anchors: points });
-    }
-
-    if (args.layout !== undefined && kind !== "frame" && kind !== "component") {
-      throw new Error("layout 仅适用于 frame / component");
-    }
-    assertNumericTokenArgs(ctx.store, args);
-    const style = applyStyleArgs({}, args);
-    if (isPath) {
-      // 与 GUI 一致：未显式给颜色时，闭合默认填充、开放默认描边
-      if (!style.fill && !style.stroke) {
-        if (closed) style.fill = { value: "#3366ff" };
-        else style.stroke = { value: "#1a1a1a" };
-      }
-      if (style.stroke && style.strokeWidth === undefined) style.strokeWidth = 2;
-    }
-    if (isPolygon && !style.fill && !style.stroke) style.fill = { value: "#3366ff" };
-    // 画板与 GUI 工具一致：默认白底
-    if (kind === "frame" && !style.fill && !style.stroke) style.fill = { value: "#ffffff" };
-
-    let imageRef: DocNode["image"];
-    if (isImage) {
-      const spec = args.image as { data?: unknown; mimeType?: unknown; url?: unknown } | undefined;
-      const url = typeof spec?.url === "string" ? spec.url.trim() : "";
-      const data = typeof spec?.data === "string" ? spec.data : "";
-      if (url && data) throw new Error("image 的 data 与 url 只能给一个");
-      if (!url && !data) {
-        throw new Error("kind=image 需要 image.data（base64）或 image.url（http/https 链接）");
-      }
-      if (url) {
-        assertImageUrl(url);
-        // 链接图懒加载：尺寸未知，抓到时由渲染层用实际尺寸补齐
-        imageRef = { sourceUrl: url, naturalWidth: 0, naturalHeight: 0 };
-      } else {
-        if (!ctx.host?.addImage) throw new Error("当前宿主不支持插入图片");
-        // base64 长度换算出字节数：5MB 上限，避免把一条 JSON-RPC 撑爆
-        if (Math.ceil((data.length * 3) / 4) > 5 * 1024 * 1024) {
-          throw new Error("图片超过 5MB 上限（GUI 拖入可到 20MB）");
-        }
-        const asset = await ctx.host.addImage(data, String(spec?.mimeType ?? "image/png"));
-        imageRef = {
-          assetId: asset.assetId,
-          naturalWidth: asset.width,
-          naturalHeight: asset.height,
-          crop: { x: 0, y: 0, width: asset.width, height: asset.height },
-        };
-      }
-    }
-
-    const node = createNode(kind, {
-      name: name ?? (isPolygon ? (clampSides(args.sides as number) === 3 ? "三角形" : "多边形") : kind),
-      // 路径的 points 是父容器坐标：先放在 0,0，由 ctx.store 归一化并推导节点框
-      x: isPath ? 0 : ((args.x as number) ?? defaultPosition.x),
-      y: isPath ? 0 : ((args.y as number) ?? defaultPosition.y),
-      width: isPath ? 1 : ((args.width as number) ?? (imageRef?.naturalWidth || 100)),
-      height: isPath ? 1 : ((args.height as number) ?? (imageRef?.naturalHeight || 100)),
-      text: args.text as string | undefined,
-      vector: isPath ? { closed, anchors: points! } : undefined,
-      sides: isPolygon ? clampSides(args.sides as number) : undefined,
-      image: imageRef,
-      style,
-      ...applyNodeArgs(args),
-    });
-    // 与 GUI 一致：新建画板 / 组件默认开启自动布局（AI 显式给了 layout 则以其为准）
-    if ((kind === "frame" || kind === "component") && !node.layout) node.layout = defaultLayoutFor(kind);
-    // 文本：自动尺寸由宿主注入的测量函数决定
-    if (kind === "text" && ctx.measureText && (node.textAutoResize ?? "auto-width") !== "fixed") {
-      const size = ctx.measureText(node, resolveNumericStyle(ctx.store.doc, node.style), node.text ?? "");
-      node.width = size.width;
-      node.height = size.height;
-    }
->>>>>>> main
     ctx.store.apply({ type: "node.create", params: { nodes: [node], parentId } }, "ai:create");
     return JSON.stringify({ ok: true, nodeId: node.id });
 };
 
-<<<<<<< HEAD
 /** 嵌套入参 → 前序扁平条目（父先于子），顺带带出路径与父条目 id。 */
 interface SpecEntry {
   spec: Record<string, unknown>;
@@ -451,8 +314,6 @@ export const handleCreateNodes: Handler = async (ctx, args) => {
     return JSON.stringify({ ok: true, created: built.map((n) => n.id), count: built.length });
 };
 
-=======
->>>>>>> main
 /** `update_node` */
 export const handleUpdateNode: Handler = async (ctx, args) => {
     const nodeId = args.nodeId as NodeId;
@@ -461,10 +322,7 @@ export const handleUpdateNode: Handler = async (ctx, args) => {
     assertToken(ctx.store, args.fillToken as string | undefined, "fillToken");
     assertToken(ctx.store, args.strokeToken as string | undefined, "strokeToken");
     assertNumericTokenArgs(ctx.store, args);
-<<<<<<< HEAD
     assertNoLiteralColors(ctx.store, args);
-=======
->>>>>>> main
     if (Array.isArray(args.effects)) assertEffectTokens(ctx.store, effectsFrom(args.effects));
 
     if (args.layout !== undefined && node.type !== "frame" && node.type !== "component" && node.type !== "instance") {

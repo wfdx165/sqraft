@@ -1,11 +1,7 @@
 /** 工具参数 → 命令参数的解析与校验（与 schema 分离：schema 只给客户端看，校验在这里真的执行）。 */
 
 import type { CornerRadius, DocNode, DocState, DocStore, Effect, LayoutSpec, NodeId, NodeStyle, Padding, VectorAnchor } from "@sqraft/core";
-<<<<<<< HEAD
 import { CORNER_RADIUS_KEYS, DEFAULT_PAGE_HEIGHT, DEFAULT_PAGE_WIDTH, NUMERIC_TOKEN_FIELDS, NUMERIC_TOKEN_OF_LITERAL, PADDING_SIDE_KEYS, colorDistance, createLayoutSpec, createNode, firstPageId, makeAnchor, nextPageName, walkSubtree } from "@sqraft/core";
-=======
-import { CORNER_RADIUS_KEYS, DEFAULT_PAGE_HEIGHT, DEFAULT_PAGE_WIDTH, NUMERIC_TOKEN_FIELDS, NUMERIC_TOKEN_OF_LITERAL, PADDING_SIDE_KEYS, createLayoutSpec, createNode, firstPageId, makeAnchor, nextPageName, walkSubtree } from "@sqraft/core";
->>>>>>> main
 
 export function readPoints(value: unknown): VectorAnchor[] | null {
   if (value === undefined) return null;
@@ -45,7 +41,6 @@ export function assertToken(store: DocStore, token: string | undefined, field: s
   }
 }
 
-<<<<<<< HEAD
 /**
  * Token 严格模式（ADR-0035）：文档级开关开启时，agent 写字面量颜色直接拒绝，
  * 并给出按色距最近的 3 个 Token；关闭时什么都不做（ADR-0024 的宽松行为不变）。
@@ -83,8 +78,6 @@ function nearestColorTokensMessage(store: DocStore, field: string, literal: unkn
   }. nearest tokens: ${ranked.join(", ")}`;
 }
 
-=======
->>>>>>> main
 /** 数值 Token：必须存在且 type=number（颜色 Token 不能塞进 fontSizeToken 之类的字段）。 */
 export function assertNumberToken(store: DocStore, token: string | null | undefined, field: string): void {
   if (token === undefined || token === null || token === "") return;
