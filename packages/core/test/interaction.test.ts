@@ -248,12 +248,14 @@ describe("原型链接：复制与粘贴", () => {
 });
 
 describe("文件格式", () => {
-  it("7 → 8 迁移只提升版本号", () => {
+  it("7 → 当前版本迁移只提升版本号并补 strictTokens", () => {
     const doc = createDocWithPage("A");
     doc.formatVersion = 7;
     migrateDoc(doc, 7);
     expect(doc.formatVersion).toBe(CURRENT_FORMAT_VERSION);
-    expect(CURRENT_FORMAT_VERSION).toBe(8);
+    // 每次升 formatVersion 都要在这里加一票：迁移必须真的跑过，不是只改常量
+    expect(CURRENT_FORMAT_VERSION).toBe(9);
+    expect(doc.strictTokens).toBe(false);
   });
 });
 

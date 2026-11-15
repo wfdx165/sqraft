@@ -3344,3 +3344,42 @@ describe("主组件是文档根节点（ADR-0025）", () => {
     expect(worldRect(store.doc, inner.id)).toEqual(before);
   });
 });
+
+describe("Token 严格模式（ADR-0035）", () => {
+  it("doc.setStrictTokens 是文档级命令，可撤销", () => {
+    const store = new DocStore(createDocWithPage());
+    expect(store.doc.strictTokens).toBe(false);
+
+    store.apply({ type: "doc.setStrictTokens", params: { value: true } }, "strict");
+    expect(store.doc.strictTokens).toBe(true);
+
+    store.undo();
+    expect(store.doc.strictTokens).toBe(false);
+  });
+
+  it("迁移 8 → 9：老文件补 strictTokens=false", () => {
+    const old = {
+      version: 1,
+      formatVersion: 8,
+      rootIds: [],
+      nodes: {},
+      tokens: {},
+    } as unknown as DocState;
+    const migrated = migrateDoc(old, 8);
+    expect(migrated.formatVersion).toBe(CURRENT_FORMAT_VERSION);
+    expect(migrated.strictTokens).toBe(false);
+  });
+
+  it("迁移不覆盖文档里已经打开的严格模式", () => {
+    const state = {
+      version: 1,
+      formatVersion: 8,
+      rootIds: [],
+      nodes: {},
+      tokens: {},
+      strictTokens: true,
+    } as unknown as DocState;
+    migrateDoc(state, 8);
+    expect(state.strictTokens).toBe(true);
+  });
+});

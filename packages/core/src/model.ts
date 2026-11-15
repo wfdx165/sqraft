@@ -10,7 +10,7 @@ import { effectPadding } from "./effects";
 export type NodeId = string;
 
 /** 当前文件格式版本：新增字段时 +1，并在 migrate 里补一段迁移。 */
-export const CURRENT_FORMAT_VERSION = 8;
+export const CURRENT_FORMAT_VERSION = 9;
 
 /** 节点类型的运行时真源（类型与搜索白名单都从这里取，避免两处手抄）。 */
 export const NODE_TYPES = [
@@ -299,6 +299,11 @@ export interface DocState {
   tokens: Record<string, TokenEntry>;
   /** 字体表：导入并嵌入文档的字体（缺省为空） */
   fonts?: FontEntry[];
+  /**
+   * Token 严格模式（ADR-0035）：开启后 agent 写字面量颜色被拒，只给建议不自动改。
+   * 缺省 false = 保持 ADR-0024 的宽松行为；只约束 MCP 写入，不拦 UI 手选色。
+   */
+  strictTokens?: boolean;
 }
 
 let idCounter = 0;
@@ -353,6 +358,7 @@ export function createEmptyDoc(): DocState {
     rootIds: [],
     nodes: {},
     tokens: {},
+    strictTokens: false,
   };
 }
 

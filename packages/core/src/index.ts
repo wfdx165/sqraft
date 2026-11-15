@@ -20,4 +20,5 @@ export * from "./token-validation";
 export * from "./token-refs";
 export * from "./token-resolve";
 export * from "./token-fields";
+export * from "./color";
 export { NUMERIC_TOKEN_CHANGED } from "./token-commands";

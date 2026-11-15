@@ -1,7 +1,7 @@
 /** 工具参数 → 命令参数的解析与校验（与 schema 分离：schema 只给客户端看，校验在这里真的执行）。 */
 
 import type { CornerRadius, DocNode, DocState, DocStore, Effect, LayoutSpec, NodeId, NodeStyle, Padding, VectorAnchor } from "@sqraft/core";
-import { CORNER_RADIUS_KEYS, DEFAULT_PAGE_HEIGHT, DEFAULT_PAGE_WIDTH, NUMERIC_TOKEN_FIELDS, NUMERIC_TOKEN_OF_LITERAL, PADDING_SIDE_KEYS, createLayoutSpec, createNode, firstPageId, makeAnchor, nextPageName, walkSubtree } from "@sqraft/core";
+import { CORNER_RADIUS_KEYS, DEFAULT_PAGE_HEIGHT, DEFAULT_PAGE_WIDTH, NUMERIC_TOKEN_FIELDS, NUMERIC_TOKEN_OF_LITERAL, PADDING_SIDE_KEYS, colorDistance, createLayoutSpec, createNode, firstPageId, makeAnchor, nextPageName, walkSubtree } from "@sqraft/core";
 
 export function readPoints(value: unknown): VectorAnchor[] | null {
   if (value === undefined) return null;
@@ -39,6 +39,43 @@ export function assertToken(store: DocStore, token: string | undefined, field: s
       `${field} 引用了不存在的 Token "${token}"；先调用 define_token 建这个 Token，或改用 fill / stroke 传字面量色值。`,
     );
   }
+}
+
+/**
+ * Token 严格模式（ADR-0035）：文档级开关开启时，agent 写字面量颜色直接拒绝，
+ * 并给出按色距最近的 3 个 Token；关闭时什么都不做（ADR-0024 的宽松行为不变）。
+ * 只拦 MCP 写入，不拦 UI 手选色——人手动选色是明确意图，拦它只会逼用户关掉这个开关。
+ * 与 `assertToken` 分工：那个查"引用了不存在的 Token"，这个查"该用 Token 却给了字面量"。
+ */
+export function assertNoLiteralColors(store: DocStore, args: Record<string, unknown>): void {
+  if (store.doc.strictTokens !== true) return;
+  for (const field of ["fill", "stroke"] as const) {
+    if (args[field] === undefined) continue;
+    // 与字面量同时给 Token：ADR-0024 的"Token 优先"，不算越界
+    if (args[field === "fill" ? "fillToken" : "strokeToken"] !== undefined) continue;
+    throw new Error(nearestColorTokensMessage(store, field, args[field]));
+  }
+}
+
+/** 面向 agent 的拒绝文案：码在最前，便于客户端分支；Token 名是数据，原样带出。 */
+function nearestColorTokensMessage(store: DocStore, field: string, literal: unknown): string {
+  const colors = Object.entries(store.doc.tokens).filter(([, entry]) => entry.type === "color");
+  if (colors.length === 0) {
+    return `TOKEN_REQUIRED: ${field} must reference a token, but this document has no color tokens. call define_token first.`;
+  }
+  const value = String(literal ?? "");
+  const ranked = colors
+    .map(([name, entry]) => ({ name, value: String(entry.value), d: colorDistance(value, entry.value) }))
+    // 色距算不出来的排最后，并且明说"没算过"，别假装给出过距离
+    .sort((x, y) => (x.d ?? Number.POSITIVE_INFINITY) - (y.d ?? Number.POSITIVE_INFINITY))
+    .slice(0, 3)
+    // OKLab 的 ΔE 是 0–1 量级（#3366ff 与 #4477ff 只差 0.045），直接 toFixed(1) 会全压成 0.0；
+    // 按惯例 ×100 展示，既保住分辨率，排序也不变
+    .map((c) => (c.d === null ? `${c.name} ${c.value}` : `${c.name} ${c.value} (ΔE ${(c.d * 100).toFixed(1)})`));
+  const anyDistance = colors.some((c) => colorDistance(value, c[1].value) !== null);
+  return `TOKEN_REQUIRED: ${field} must reference a token${
+    anyDistance ? "" : ` (value "${value}" is not a parseable color)`
+  }. nearest tokens: ${ranked.join(", ")}`;
 }
 
 /** 数值 Token：必须存在且 type=number（颜色 Token 不能塞进 fontSizeToken 之类的字段）。 */

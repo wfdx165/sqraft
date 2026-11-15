@@ -181,6 +181,22 @@ export const enUS: Record<keyof typeof zhCN, string> = {
   "conn.hours": "{n}h",
   "conn.secondsAgo": "{n}s ago",
   "conn.minutesAgo": "{n}m ago",
+  "conn.changesTitle": "{count} node(s) changed",
+  "conn.diagnosticsTitle": "{count} diagnostic(s)",
+  "conn.changesMore": "{count} more not listed",
+  "conn.locate": "Click to locate",
+  "conn.lastChange": "Last change",
+  "conn.action.create": "created",
+  "conn.action.update": "updated",
+  "conn.action.delete": "deleted",
+  "conn.action.move": "moved",
+  "conn.action.instance": "instance",
+  "conn.action.doc": "document",
+  "diag.ZERO_SIZE": "Zero size, nothing to see",
+  "diag.TEXT_NO_FILL": "Text has no fill color",
+  "diag.TEXT_OVERFLOW": "Text overflows its box",
+  "diag.TOKEN_MISSING": "Referenced token is missing",
+  "diag.OUTSIDE_PARENT": "Outside its parent",
 
   // MCP setup panel
   "mcp.title": "Configure MCP",
@@ -343,6 +359,8 @@ export const enUS: Record<keyof typeof zhCN, string> = {
   "tokens.deleteConfirm": "Nodes using this token: {count}. Deleting it will freeze them to {value}.",
   "tokens.typeColor": "Color",
   "tokens.typeNumber": "Number",
+  "tokens.strictLabel": "Strict mode",
+  "tokens.strictHint": "When on, agents writing literal colors are rejected and shown the nearest tokens; hand-picked colors are unaffected",
 
   // Inspector
   "inspector.title": "Inspector",

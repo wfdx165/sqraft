@@ -181,6 +181,22 @@ export const koKR: Record<keyof typeof zhCN, string> = {
   "conn.hours": "{n}시간",
   "conn.secondsAgo": "{n}초 전",
   "conn.minutesAgo": "{n}분 전",
+  "conn.changesTitle": "노드 {count}개 변경",
+  "conn.diagnosticsTitle": "진단 {count}건",
+  "conn.changesMore": "외 {count}개 생략",
+  "conn.locate": "클릭해서 이동",
+  "conn.lastChange": "마지막 변경",
+  "conn.action.create": "생성",
+  "conn.action.update": "수정",
+  "conn.action.delete": "삭제",
+  "conn.action.move": "이동",
+  "conn.action.instance": "인스턴스",
+  "conn.action.doc": "문서",
+  "diag.ZERO_SIZE": "크기가 0이라 보이지 않음",
+  "diag.TEXT_NO_FILL": "텍스트 채움색이 없음",
+  "diag.TEXT_OVERFLOW": "텍스트가 박스를 넘침",
+  "diag.TOKEN_MISSING": "참조한 토큰이 없음",
+  "diag.OUTSIDE_PARENT": "부모 밖으로 벗어남",
 
   // MCP 설정 패널
   "mcp.title": "MCP 설정",
@@ -343,6 +359,8 @@ export const koKR: Record<keyof typeof zhCN, string> = {
   "tokens.deleteConfirm": "노드 {count}개가 사용 중입니다. 삭제하면 {value}(으)로 고정됩니다.",
   "tokens.typeColor": "색상",
   "tokens.typeNumber": "숫자",
+  "tokens.strictLabel": "엄격 모드",
+  "tokens.strictHint": "켜면 에이지언트가 색을 직접 쓰면 거부되고 가장 가까운 토큰이 제시됩니다. 직접 고른 색에는 영향을 주지 않습니다",
 
   // 인스펙터
   "inspector.title": "인스펙터",

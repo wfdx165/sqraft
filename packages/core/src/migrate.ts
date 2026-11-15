@@ -118,6 +118,12 @@ export function migrateDoc(state: DocState, fromVersion = state.formatVersion ??
   // 8：节点新增可选的 `interactions`（原型链接）与页面 `scrollDirection`。
   //    缺省即「没有链接 / 不滚动」，不需要改数据。
   if (version < 8) version = 8;
+  // 9：文档新增 `strictTokens`（Token 严格模式，ADR-0035）。
+  //    缺省 false = 宽松，老文件打开即 v0.0.6 的行为；这里顺手归一成布尔，读的时候不用再兜。
+  if (version < 9) {
+    state.strictTokens = state.strictTokens === true;
+    version = 9;
+  }
   state.formatVersion = CURRENT_FORMAT_VERSION;
   return state;
 }
