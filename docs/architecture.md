@@ -52,7 +52,13 @@ packages/render/src/
 └── renderer.ts   文档树遍历与绘制序（命中检测在 apps/desktop/src/renderer/canvas/hit.ts）
 
 packages/ai-tools/src/
-└── tools.ts      工具定义（JSON Schema + 执行器类型）
+├── index.ts      执行器装配：按工具名分派、写工具事务 + 诊断接线
+├── tools.ts      工具清单（JSON Schema + 描述，唯一真源）
+├── args.ts       参数解析与校验
+├── serialize.ts  read_document / search_nodes 的序列化与作用域工具
+├── diagnostics.ts 写工具诊断接线
+├── shared.ts     统一 re-export（handlers 用）
+└── handlers/     按域拆分：read / view / nodes / components / tokens / pages / document
 ```
 
 ## 3. 文档模型
@@ -293,7 +299,8 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 
 | 工具 | 读/写 | 说明 |
 |---|---|---|
-| `read_document` | 读 | 返回页面/节点树的紧凑摘要；根级主组件放在 `components`（与会话树分开），`includeComponentTrees=true` 才附母版子树 |
+| `read_document` | 读 | 作用域读取：`scope=page`（默认，当前页）/ `subtree` / `document`，配 `depth`（默认 1）与 `limit`（默认 200 / 上限 1000）；`nodes` 是先序扁平数组（每条带相对 `depth`），被截断时 `truncated` + hint。组件母版是文档根：`document` 只给摘要，看内部用 `scope=subtree`（`includeComponentTrees` 已弃用） |
+| `search_nodes` | 读 | 按 `name` / `text` / `type` / `fillToken` / `strokeToken` / `componentId` 过滤（AND，至少一个），返回轻量命中行（id + 名称链 + 命中摘要），不返回子树与坐标 |
 | `get_selection` | 读 | 画布当前选区：`activePageId`（当前活动页，不代表选区所属页面）+ 每个选中节点的 id / 名字 / 类型 / 世界坐标 / 尺寸；空选区给 hint。改还是走显式 `nodeId` |
 | `get_tokens` | 读 | Token 集合与取值；没有 Token 时返回空表 |
 | `define_token` | 写 | 新增/覆盖 Token（颜色接受 #hex 3/6/8 位、rgb/rgba；不能改类型） |
@@ -308,15 +315,17 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 | `create_instance` / `swap_instance` / `detach_instance` | 写 | 组件实例的建立、替换与解绑 |
 | `define_property` / `set_instance_prop` / `fill_slot` | 写 | 组件属性定义、实例属性覆盖、插槽填充 |
 | `import_font` | 写 | 导入字体文件（base64，≤5MB），返回字族/字重/风格 |
-| `inspect_layout` | 读 | 世界坐标、绝对定位、自动布局与 hug/fill 数据 |
+| `inspect_layout` | 读 | 世界坐标、绝对定位、自动布局与 hug/fill 数据；同响应附 `diagnostics`（与写工具同一套规则） |
 | `export_png` | 读 | 页面或选区按倍率渲染 PNG（透明底选区）；页面导出只画该页，不含根级母版 |
-| `screenshot` | 读 | 离屏重绘文档为 PNG（不含编辑器叠加层）；可选 `region` 只截文档坐标下的某块 |
+| `screenshot` | 读 | 离屏重绘文档为 PNG（不含编辑器叠加层）；可选 `region` 只截文档坐标下的某块。`format="text"` 给纯文本替代视图：区域内节点的世界坐标、解析后的填充/描边颜色、文字与诊断（最多 200 个） |
 | `document.new` | 写 | 新建未命名空稿并切换过去 |
 | `document.open` | 写 | 只能触发系统文件对话框；不接受路径参数（agent 不能读任意磁盘文件） |
 
 **画布反馈**：写工具执行期间，画布在 UI 叠加层给这次调用的改动画青色虚线框——只取最外层节点（建一棵子树只描根框），页面本身不描（整页虚线没有信息量），`delete_node` 改描父容器（父容器是页面时同样跳过）；调用结束 480ms 淡出。顶部胶囊同时显示「客户端 · 工具名」，跨页或改动在视口外时多一个跳转按钮（切页 + 飞行定位到改动包围盒；跨页切页按 `activatePage` 既有规则清空选区，不额外选中改动节点；一次调用跨多页时只指向第一处改动），调用结束后残留 5 秒再回落到连接数。只读工具与失败的写调用都不碰画布，后者不留下"刚改了…"的字样。状态住在非响应式的 `renderer/canvas/agent-activity.ts`，因此不进 `RenderBackend`、不进导出，也不进 `screenshot`。
 
 **撤销粒度**：一次工具调用里的多条命令通过 `DocStore.transact` 合并成单条撤销记录；事务失败时回滚，文档不会停在半成品状态。
+
+**写入诊断**：事务提交后对这次 `changed` 里的节点（`shallow`：只查节点自身；`changed` 已含每个被动到的节点，新建子树与布局回写都会逐个加进去）跑 `@sqraft/core` 的纯函数 `diagnose()`（`ZERO_SIZE` / `TEXT_NO_FILL` / `TEXT_OVERFLOW` / `TOKEN_MISSING` / `OUTSIDE_PARENT`），非空时并进同一响应（每调用最多扫 2000 节点、报 20 条）。只警告、不回滚、不新建撤销步；文本度量由渲染层注入。`initialize` 的 `instructions` 承载跨工具的工作规则（先搜索再读取、处理诊断、无视觉用文本视图）。
 
 **截图自检闭环**：agent 生成 → `screenshot` → 模型看图 → 修正命令。这是"AI 全流程"质量的下限保障。
 

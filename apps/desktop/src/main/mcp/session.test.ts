@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { handleRpc, type McpToolHost } from "./session";
 import { setMcpLogSink } from "./log";
+import { AGENT_INSTRUCTIONS } from "../../shared/agent-text";
 
 beforeEach(() => setMcpLogSink(() => {}));
 afterEach(() => setMcpLogSink(null));
@@ -33,6 +34,15 @@ describe("MCP 协议处理", () => {
   it("initialize 不带版本时给最新版", async () => {
     const response = await handleRpc({ jsonrpc: "2.0", id: 1, method: "initialize" }, host, options);
     expect(response).toMatchObject({ result: { protocolVersion: "2025-11-25" } });
+  });
+
+  it("initialize 带上给 agent 的工作规则", async () => {
+    const response = await handleRpc({ jsonrpc: "2.0", id: 1, method: "initialize" }, host, options);
+    const instructions = (response as { result: { instructions?: string } }).result.instructions;
+    expect(instructions).toBe(AGENT_INSTRUCTIONS);
+    expect(instructions).toMatch(/search_nodes/);
+    expect(instructions).toMatch(/diagnostics/);
+    expect(instructions).toMatch(/format:"text"/);
   });
 
   it("不支持的协议版本回落到最新受支持版本，而不是报错", async () => {

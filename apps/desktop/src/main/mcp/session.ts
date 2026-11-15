@@ -3,6 +3,7 @@
  * 传输层与工具宿主都是注入的，因此可以在 Node 里直接测协议行为。
  */
 import { logError, logInfo, logWarn } from "./log";
+import { AGENT_INSTRUCTIONS } from "../../shared/agent-text";
 
 export interface McpToolInfo {
   name: string;
@@ -114,6 +115,8 @@ export async function handleRpc(
           protocolVersion: version,
           capabilities: { tools: { listChanged: false } },
           serverInfo: { name: "sqraft", version: options.version },
+          // 大多数客户端会把它当系统提示注入：跨工具的流程规则写在这里
+          instructions: AGENT_INSTRUCTIONS,
         },
       };
     }

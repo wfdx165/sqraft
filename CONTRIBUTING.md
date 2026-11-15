@@ -9,7 +9,7 @@ change gets merged.
 - For a bug, open an issue with the reproduction steps first.
 - For a feature or a refactor, open an issue and describe the approach
   before writing code. Sqraft is a small project with a deliberately
-  narrow scope (`docs/roadmap.md` and `docs/specs/` are not public; ask in
+  narrow scope (`docs/roadmap-competitive.md` and `docs/specs/` are not public; ask in
   the issue), and a large pull request that does not fit it will be hard to
   merge.
 
