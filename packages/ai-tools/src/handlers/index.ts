@@ -14,7 +14,10 @@ export const MUTATING_TOOLS: ReadonlySet<string> = new Set([
   "delete_token",
   "create_page",
   "create_node",
+<<<<<<< HEAD
   "create_nodes",
+=======
+>>>>>>> main
   "create_instance",
   "define_property",
   "set_instance_prop",
@@ -47,7 +50,10 @@ export const handlers: Record<string, Handler> = {
   "delete_token": tokens.handleDeleteToken,
   "create_page": pages.handleCreatePage,
   "create_node": nodes.handleCreateNode,
+<<<<<<< HEAD
   "create_nodes": nodes.handleCreateNodes,
+=======
+>>>>>>> main
   "create_instance": components.handleCreateInstance,
   "define_property": components.handleDefineProperty,
   "set_instance_prop": components.handleSetInstanceProp,

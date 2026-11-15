@@ -160,6 +160,7 @@ const NODE_SCHEMA: Record<string, unknown> = {
   },
 };
 
+<<<<<<< HEAD
 /**
  * `create_node` 能建的类型（唯一真源：schema 的 enum 与运行期白名单都从这里取）。
  * 与 core 的 `NODE_TYPES` 不同：这里**不含** page / group / star / instance——
@@ -224,6 +225,8 @@ const NODE_ARGS: Record<string, unknown> = {
   ...STYLE_SCHEMA,
 };
 
+=======
+>>>>>>> main
 export interface ToolDefinition {
   name: string;
   description: string;
@@ -420,6 +423,7 @@ export const tools: ToolDefinition[] = [
       type: "object",
       properties: {
         parentId: { type: "string", description: "父节点 id；省略则建到当前页面" },
+<<<<<<< HEAD
         ...NODE_ARGS,
       },
       required: ["kind"],
@@ -457,6 +461,46 @@ export const tools: ToolDefinition[] = [
         },
       },
       required: ["nodes"],
+=======
+        kind: { type: "string", enum: ["frame", "rect", "ellipse", "polygon", "line", "path", "text", "image", "component", "slot"] },
+        name: { type: "string", description: "slot 必填且组件内唯一" },
+        sides: { type: "number", description: "kind=polygon 的边数，3–12，默认 3" },
+        text: { type: "string", description: "kind=text 时的文案" },
+        image: {
+          type: "object",
+          description:
+            "kind=image 时二选一：data（base64，不含 data: 前缀）+ mimeType（上限 5MB），或 url（http/https 链接，字节不进文件，按需抓取并缓存在本机）",
+          properties: {
+            data: { type: "string" },
+            mimeType: { type: "string" },
+            url: { type: "string", description: "http/https 图片地址；懒加载，断网时用本地缓存" },
+          },
+          additionalProperties: false,
+        },
+        closed: { type: "boolean", description: "kind=path 时是否闭合，默认 false" },
+        points: {
+          type: "array",
+          minItems: 2,
+          description: "kind=path 的锚点，父容器坐标；x/y 必填，inX/inY/outX/outY 为相对锚点的手柄偏移",
+          items: {
+            type: "object",
+            properties: {
+              x: { type: "number" },
+              y: { type: "number" },
+              inX: { type: "number" },
+              inY: { type: "number" },
+              outX: { type: "number" },
+              outY: { type: "number" },
+            },
+            required: ["x", "y"],
+            additionalProperties: false,
+          },
+        },
+        ...NODE_SCHEMA,
+        ...STYLE_SCHEMA,
+      },
+      required: ["kind"],
+>>>>>>> main
       additionalProperties: false,
     },
   },
