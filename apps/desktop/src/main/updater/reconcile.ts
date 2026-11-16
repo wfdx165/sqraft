@@ -49,6 +49,8 @@ function idle(currentVersion: string): UpdateState {
     message: null,
     readyAt: null,
     supported: true,
+    // 只是占位：initUpdater 会用偏好里的实际值覆盖（reconcile 不参与偏好决策）
+    autoDownload: true,
   };
 }
 

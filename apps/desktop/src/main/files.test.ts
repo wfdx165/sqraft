@@ -50,7 +50,7 @@ describe("原子写", () => {
     expect((await readdir(dir)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
   });
 
-  it("同一路径并发写不会互相踩临时文件", async () => {
+  it("同一路径并发写按调用顺序落地（最后调用者赢）", async () => {
     const dir = await tempDir();
     const path = join(dir, "preferences.json");
     await Promise.all([
@@ -58,8 +58,19 @@ describe("原子写", () => {
       writeFileAtomic(path, new TextEncoder().encode("b")),
       writeFileAtomic(path, new TextEncoder().encode("c")),
     ]);
-    expect(["a", "b", "c"]).toContain(await readFile(path, "utf8"));
+    expect(await readFile(path, "utf8")).toBe("c");
     expect((await readdir(dir)).filter((name) => name.endsWith(".tmp"))).toEqual([]);
+  });
+
+  it("前一次失败后同路径仍能继续写", async () => {
+    const dir = await tempDir();
+    const path = join(dir, "target");
+    // 目标是非空目录：rename 必然失败
+    await writeFileAtomic(join(path, "keep.txt"), new Uint8Array([1]));
+    await expect(writeFileAtomic(path, new Uint8Array([2]))).rejects.toBeTruthy();
+    await rm(path, { recursive: true, force: true });
+    await writeFileAtomic(path, new Uint8Array([9]));
+    expect(new Uint8Array(await readFile(path))).toEqual(new Uint8Array([9]));
   });
 });
 

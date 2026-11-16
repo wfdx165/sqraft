@@ -44,10 +44,34 @@ export function mtimeChanged(expected: number | null, current: number | null): b
  * rename 在同一文件系统内是原子的，因此不会出现"写了一半"的目标文件。
  * 临时文件名带自增序号：同一路径并发保存（例如窗口拖动防抖 + 关闭时补一次）时，
  * 两个调用不能共用一个临时文件，否则先完成的 rename 会让后一个 ENOENT。
+ *
+ * 同一路径的写入按调用顺序串行：目标文件只保留最后一次调用的内容，
+ * 不会出现"先发起的写更慢、后发起的写被它覆盖"。不同路径仍互不阻塞。
  */
 let tempSeq = 0;
 
+/** 每个目标路径当前排队的队尾（只用于排序，不携带结果） */
+const writeQueues = new Map<string, Promise<void>>();
+
 export async function writeFileAtomic(path: string, bytes: Uint8Array): Promise<number> {
+  const previous = writeQueues.get(path) ?? Promise.resolve();
+  // 前一次失败也要继续写：失败由各自的调用方处理，不能卡死后面的保存
+  const run = previous.then(
+    () => writeAtomicOnce(path, bytes),
+    () => writeAtomicOnce(path, bytes),
+  );
+  const tail = run.then(
+    () => undefined,
+    () => undefined,
+  );
+  writeQueues.set(path, tail);
+  void tail.then(() => {
+    if (writeQueues.get(path) === tail) writeQueues.delete(path);
+  });
+  return run;
+}
+
+async function writeAtomicOnce(path: string, bytes: Uint8Array): Promise<number> {
   const directory = dirname(path);
   await mkdir(directory, { recursive: true });
   const temp = join(directory, `.${basename(path)}.${process.pid}.${++tempSeq}.tmp`);

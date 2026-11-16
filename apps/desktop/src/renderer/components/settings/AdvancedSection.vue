@@ -1,15 +1,17 @@
 <script setup lang="ts">
 /**
- * 「高级」分类：数据目录与两个排障动作。
+ * 「高级」分类：数据目录、自动下载开关与两个排障动作。
  * 日志与缓存没有渲染层 IPC，直接走已有的 runCommand 白名单；
  * 缓存结果对话框由主进程负责，与菜单入口是同一条路径。
  */
 import { onBeforeUnmount, onMounted, ref } from "vue";
 import type { AppInfo } from "../../../shared/ipc";
 import { t } from "../../i18n";
+import { setAutoDownload, updateUi } from "../../update";
 
 const info = ref<AppInfo | null>(null);
 const copied = ref(false);
+const switching = ref(false);
 let copiedTimer = 0;
 
 onMounted(async () => {
@@ -26,6 +28,16 @@ function copyPath(): void {
   copiedTimer = window.setTimeout(() => (copied.value = false), 1400);
 }
 
+async function toggleAutoDownload(): Promise<void> {
+  if (switching.value) return;
+  switching.value = true;
+  try {
+    await setAutoDownload(!updateUi.autoDownload);
+  } finally {
+    switching.value = false;
+  }
+}
+
 function run(id: "app.openLogsDir" | "app.clearImageCache"): void {
   void window.sqraft.app.runCommand(id);
 }
@@ -34,6 +46,16 @@ function run(id: "app.openLogsDir" | "app.clearImageCache"): void {
 <template>
   <div class="advanced">
     <p class="hint">{{ t("settings.advanced.hint") }}</p>
+
+    <section>
+      <div class="label">
+        <span>{{ t("settings.autoDownload") }}</span>
+        <button class="action" :disabled="switching" @click="toggleAutoDownload">
+          {{ updateUi.autoDownload ? t("settings.autoDownloadOn") : t("settings.autoDownloadOff") }}
+        </button>
+      </div>
+      <p class="hint">{{ t("settings.autoDownloadHint") }}</p>
+    </section>
 
     <section>
       <div class="label">
@@ -90,6 +112,11 @@ section + section {
 .action:hover {
   color: var(--text);
   border-color: var(--hairline-strong);
+}
+
+.action:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .action.wide {

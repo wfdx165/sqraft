@@ -204,7 +204,8 @@ export interface CloseRequest {
 
 /**
  * 更新器阶段：`dev` / `unsupported` 都不发请求。
- * `available` = 平台不支持自动安装（Windows），只提示新版本并引导去下载页。
+ * `available` = 只提示新版本、引导去下载页（Windows，或关闭了自动下载）。
+ * `waiting` = 已发现新版本，等窗口失焦后再开始自动下载。
  */
 export type UpdatePhase =
   | "dev"
@@ -213,6 +214,7 @@ export type UpdatePhase =
   | "checking"
   | "up-to-date"
   | "available"
+  | "waiting"
   | "downloading"
   | "ready"
   | "error";
@@ -231,6 +233,8 @@ export interface UpdateState {
   readyAt: number | null;
   /** 当前平台是否支持检查更新（Windows 只提示，不自动安装） */
   supported: boolean;
+  /** 自动下载开关（设置 → 高级）；关闭后只提示新版本 */
+  autoDownload: boolean;
 }
 
 export interface SqraftApi {
@@ -280,12 +284,14 @@ export interface SqraftApi {
   update: {
     /** 当前状态（渲染层挂载时取一次） */
     state(): Promise<UpdateState>;
-    /** 检查更新；`manual` 不受 24 小时节流，失败信息会留在状态里 */
+    /** 检查更新；`manual` 不受最小检查间隔限制，失败信息会留在状态里 */
     check(manual?: boolean): Promise<UpdateState>;
     /** 重启以安装已就绪的版本：走关闭守卫（未保存时有保存/不保存/取消） */
     restart(): Promise<void>;
     /** 打开发布页下载新版（Windows 没有自动安装，只能走这里）；被系统拦下时返回 false */
     download(): Promise<boolean>;
+    /** 自动下载开关：`false` 时只提示新版本（下次检查生效） */
+    setAutoDownload(enabled: boolean): Promise<UpdateState>;
     /** 主进程推送的状态变化 */
     onState(handler: (state: UpdateState) => void): () => void;
   };
@@ -386,6 +392,7 @@ export const CHANNELS = {
   updateCheck: "update:check",
   updateRestart: "update:restart",
   updateDownload: "update:download",
+  updateSetAutoDownload: "update:set-auto-download",
   updateChanged: "update:changed",
   menuCommand: "menu:command",
   menuSetBindings: "menu:set-bindings",

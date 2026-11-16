@@ -7,7 +7,7 @@ import { t } from "../i18n";
 const emit = defineEmits<{ close: [] }>();
 const info = ref<AppInfo | null>(null);
 
-const busy = computed(() => updateUi.phase === "checking" || updateUi.phase === "downloading");
+const busy = computed(() => updateUi.phase === "checking" || updateUi.phase === "waiting" || updateUi.phase === "downloading");
 
 /** 已就绪时这个按钮变成"重启更新"：用户在这里点也不必去找工具栏胶囊。 */
 function onUpdateAction(): void {
@@ -58,7 +58,9 @@ function openLicenses(): void {
                 : updateAvailable
                   ? t("update.download")
                   : busy
-                    ? t("about.checking")
+                    ? updateUi.phase === "waiting"
+                      ? t("about.waiting")
+                      : t("about.checking")
                     : t("about.check")
             }}
           </button>
