@@ -3,7 +3,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref } from "vue";
 import { docStore, redo, switchMode, ui, undo, type ToolKind } from "../store";
 import { closeDocument, fileState, openDocument, saveDocument, saveDocumentAs } from "../file-session";
 import { openContextMenu, type ContextMenuItem } from "../context-menu";
-import { keyLabel, PANEL_BINDING, registerShortcuts, shortcutUi, type ActionId } from "../shortcuts";
+import { keyLabel, PANEL_BINDING, registerShortcuts, type ActionId } from "../shortcuts";
+import { settingsUi, toggleSettings } from "../settings";
 import { vTip } from "../tooltip";
 import { downloadUpdate, restartToUpdate, updateAvailable, updateReady, updateUi } from "../update";
 import { t } from "../i18n";
@@ -71,6 +72,8 @@ function openOverflowMenu(e: MouseEvent): void {
       run: () => {},
     });
     items.push({ label: t("toolbar.backToWelcome"), hint: keyLabel("file.closeDoc"), run: () => void onClose() });
+    // 演示按钮跟文档胶囊同组收起：窄窗下不能因此失去入口
+    items.push({ label: t("toolbar.present"), hint: keyLabel("view.present"), disabled: !hasPage.value, run: present });
   }
   if (hiddenGroups.value.has("file")) {
     items.push({ label: t("menu.open"), hint: keyLabel("file.open"), separator: items.length > 0, run: () => void onOpen() });
@@ -123,9 +126,7 @@ const docTip = computed(() => {
 });
 
 function toggleShortcuts() {
-  shortcutUi.open = !shortcutUi.open;
-  shortcutUi.recording = null;
-  shortcutUi.error = "";
+  toggleSettings("shortcuts");
 }
 
 let unregister = () => {};
@@ -263,7 +264,7 @@ onBeforeUnmount(() => {
     <button
       v-show="!hiddenGroups.has('shortcuts')"
       class="icon-btn"
-      :class="{ active: shortcutUi.open }"
+      :class="{ active: settingsUi.open && settingsUi.section === 'shortcuts' }"
       data-shortcuts-toggle
       v-tip="{ label: t('shortcuts.title'), shortcut: PANEL_BINDING }"
       @click="toggleShortcuts"

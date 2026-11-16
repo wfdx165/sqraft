@@ -1,39 +1,14 @@
 /**
- * 欢迎页的 MCP 区块：状态推导与客户端片段（纯函数，便于单测）。
+ * 欢迎页的 MCP 区块：状态推导与状态行（纯函数，便于单测）。
  *
- * 传输换成 HTTP 之后没有"装命令行工具"这一步了（ADR-0026）：
+ * 传输换成 HTTP 之后没有「装命令行工具」这一步了（ADR-0026）：
  * 状态只剩三种——服务没起来 / 起来了但没人连 / 有 agent 在线。
- * 片段按客户端外壳不同，内容都是同一个 URL。
+ * 客户端列表与接入动作在 `mcp-clients.ts`，本文件不再生成片段。
  */
 import type { McpSetupInfo } from "../shared/ipc";
 import { t } from "./i18n";
 
 export type McpWelcomeState = "offline" | "idle" | "connected";
-
-/** 欢迎页上可切换的客户端预设：外壳不同，指向的是同一个端点 */
-export type McpClient = "claude" | "opencode" | "cursor" | "generic";
-
-export const MCP_CLIENTS: ReadonlyArray<{ id: McpClient; label: string }> = [
-  { id: "claude", label: "Claude Code" },
-  { id: "opencode", label: "OpenCode" },
-  { id: "cursor", label: "Cursor" },
-  { id: "generic", label: "Generic" },
-];
-
-/** 某个客户端的接入片段；配置还没读到时返回空串（按钮据此禁用） */
-export function clientSnippet(info: McpSetupInfo | null, client: McpClient): string {
-  if (!info) return "";
-  switch (client) {
-    case "claude":
-      return info.commandLine;
-    case "opencode":
-      return info.opencodeJson;
-    case "cursor":
-      return info.cursorJson;
-    case "generic":
-      return info.url;
-  }
-}
 
 /** 有会话就压过服务状态：agent 已经在用了，不必再提怎么接 */
 export function welcomeMcpState(info: McpSetupInfo | null, clients: readonly unknown[]): McpWelcomeState {
@@ -49,15 +24,4 @@ export function statusLine(status: { listening: boolean; clients: readonly unkno
   }
   if (status.clients.length > 0) return t("mcp.status.connected", { count: status.clients.length });
   return t("mcp.status.listening");
-}
-
-export function actionText(state: McpWelcomeState): string {
-  switch (state) {
-    case "offline":
-      return t("mcp.action.offline");
-    case "idle":
-      return t("mcp.action.idle");
-    case "connected":
-      return t("mcp.action.connected");
-  }
 }

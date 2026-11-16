@@ -293,6 +293,12 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 - **一次工具调用只执行一次**：渲染层的监听宿主登记在 `globalThis` 上，重复安装先摘掉旧监听，并按主进程分配的调用号去重（同号的重复投递静默丢弃）。dev 热更新会重新执行渲染层模块，少了这一层，旧实例的监听会和新实例一起处理同一条调用——`create_node` 会落两个节点（返回 id 之外多一个没有子节点的副本）；
 - 工具清单与执行器都在渲染进程（`@sqraft/ai-tools` 的唯一真源），主进程只转发；截图只取文档层画布，不含编辑器叠加层。
 
+**客户端配置写入**（ADR-0036）：配置面板可以勾选六个客户端，把名为 `sqraft` 的条目写进它们的用户级配置。每个客户端只有一条写路径：Claude Code / Codex 走官方非交互命令（显式 user scope），Cursor / VS Code / Zed / OpenCode 走文件 adapter（JSONC 用 `jsonc-parser` 做范围编辑，保留注释）。写前备份到 `userData/mcp-backups/`，同目录临时文件 + rename，写后回读校验、失败还原；只增删 `sqraft` 这一条，不碰其它服务器与注释。所有权清单 `userData/mcp-clients.json` 记录写过谁，端口漂移时只同步清单内条目。渲染层只传 client id，路径与命令由主进程按白名单解析。四态（已连接 / 已写入 / 未接入 / 未检测到）由会话 label、回读结果与 App/配置目录检测共同推导。OpenCode 的 CLI 没有 `remove`，因此整体走文件 adapter。
+
+**命令注册表与 ⌘K**：`shared/commands.ts` 是菜单、快捷键与命令面板共用的唯一 id 清单（渲染层动作 + 主进程命令）。面板五类结果——命令、页面、图层、Token、最近文件——由 `palette-search` / `palette-sources` 打分合并；图层 2 个字只扫活动页，3 个字起扩到全文并防抖；Token 结果跳到设计系统面板高亮。主进程命令经 `app:run-command` 校验 owner 后执行或转回渲染层。
+
+**设置聚合**（ADR-0037）：应用内模态 `SettingsHost.vue` 把语言、MCP、快捷键、高级（数据目录 / 日志 / 图片缓存）收进四个分类，左侧导航 + 右侧内容；四类用 `v-show` 常驻，切分类不重新挂载，MCP 检测每个会话只跑一次。旧入口（菜单「配置 MCP…」、欢迎页按钮、工具栏键位图标、固定 `⌘/`）都变成跳分类的深层链接，`shortcutUi.open` 因此删除、开合只有 `settingsUi` 一个真源。只聚合 UI：键位仍存渲染层 `localStorage`，语言与 MCP 端口仍在 `preferences.json`，没有新增偏好 IPC；高级里的日志与缓存动作复用 `app:run-command`。「关于」保持独立，数据目录从中移到「高级」。`file` 组那 7 条有默认键位但原先没显示的命令也补进键位表，`app` 组仍不显示。
+
 **操作日志**：会话创建、`tools/list`、每次 `tools/call` 的耗时与错误都以 `[mcp]` 单行写终端（info/warn → stdout，error → stderr）并追加到 `app.getPath("logs")/sqraft.log`（macOS `~/Library/Logs/Sqraft/`），不经 `console`。同一份日志还有两种来源：主进程事件标 `[app]`（生命周期、文件类 IPC、对话框），渲染层上报标 `[renderer]`（快捷键分发、保存链路、未捕获错误）——渲染层拿不到文件系统，只经 `app:log` 白名单通道发"事件 + 字段"。参数只记摘要——长字符串截断、`data:image` 折叠成类型与体积，规则单点在 `src/main/mcp/log.ts`；落盘与轮转（10MB × 10 个文件）在 `src/main/log-file.ts`，写失败静默降级为仅终端。身份来自客户端 `initialize` 的 `clientInfo`（如 `c1 claude-code/2.1`）。排障用的端口与进程信息写在 `userData/mcp.json`（0600），那不是客户端发现机制。帮助菜单的「打开日志目录」直接定位到日志。
 
 工具清单（v1）：

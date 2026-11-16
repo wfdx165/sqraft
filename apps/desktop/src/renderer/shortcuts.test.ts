@@ -32,7 +32,7 @@ vi.stubGlobal("window", {
   },
 });
 
-const { installShortcuts, keyLabel, registerShortcuts } = await import("./shortcuts");
+const { ACTIONS, GROUP_ORDER, installShortcuts, keyLabel, registerShortcuts } = await import("./shortcuts");
 
 /** 造一个带 ⌘ 的字母键事件（只带分发路径会读到的字段）。 */
 function metaKey(letter: string, repeat = false): KeyboardEvent {
@@ -53,6 +53,14 @@ function metaKey(letter: string, repeat = false): KeyboardEvent {
 describe("键位显示", () => {
   it("面板文案走平台格式化；node 环境回退为 macOS", () => {
     expect(keyLabel("file.save")).toBe("⌘S");
+  });
+
+  it("快捷键表从注册表派生，分组顺序不变", () => {
+    expect(ACTIONS.length).toBeGreaterThan(40);
+    expect(ACTIONS.map((action) => action.id)).toContain("file.save");
+    expect(ACTIONS.every((action) => action.default.length > 0)).toBe(true);
+    expect(GROUP_ORDER).toEqual(["file", "mode", "tool", "edit", "component", "view", "other"]);
+    expect(GROUP_ORDER).not.toContain("app");
   });
 });
 

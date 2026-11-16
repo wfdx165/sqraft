@@ -4,7 +4,7 @@
  * 所有写入都走命令（`token.define` / `token.rename` / `token.delete`，文档变更唯一入口，可撤销）；
  * 删除仍被引用的 Token 会先把引用冻结成字面量，并与删除包成同一条撤销。
  */
-import { computed, nextTick, ref } from "vue";
+import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import {
   planTokenDelete,
   tokenColorOf,
@@ -17,6 +17,7 @@ import {
 import { dispatch, docStore, ui } from "../store";
 import { t } from "../i18n";
 import { localizeError } from "../errors";
+import { tokenFocus } from "../token-focus";
 import Icon from "./Icon.vue";
 
 interface Row {
@@ -26,6 +27,33 @@ interface Row {
 
 const filter = ref("");
 const collapsed = ref<Record<string, boolean>>({});
+const flashPath = ref<string | null>(null);
+let flashTimer: ReturnType<typeof setTimeout> | undefined;
+
+// 从 ⌘K 跳过来：清过滤、展开分组、滚到该行并短暂高亮
+watch(
+  () => tokenFocus.rev,
+  () => {
+    const path = tokenFocus.path;
+    if (!path) return;
+    filter.value = "";
+    collapsed.value[prefixOf(path)] = false;
+    flashPath.value = path;
+    void nextTick(() => {
+      const row = document.querySelector(`[data-token-path="${CSS.escape(path)}"]`);
+      row?.scrollIntoView({ block: "center" });
+    });
+    clearTimeout(flashTimer);
+    flashTimer = setTimeout(() => {
+      if (flashPath.value === path) flashPath.value = null;
+    }, 1200);
+  },
+);
+
+onBeforeUnmount(() => {
+  clearTimeout(flashTimer);
+  window.clearTimeout(invalidTimer);
+});
 
 function prefixOf(path: string): string {
   const i = path.indexOf("/");
@@ -284,7 +312,8 @@ function runPlan(path: string, plan: Extract<TokenDeletePlan, { status: "ready" 
           <template v-for="row in g.rows" :key="row.path">
             <div
               class="row"
-              :class="{ invalid: invalidPath === row.path }"
+              :class="{ invalid: invalidPath === row.path, flash: flashPath === row.path }"
+              :data-token-path="row.path"
               @dblclick="startRename(row.path)"
             >
               <label v-if="row.entry.type === 'color'" class="swatch" :style="{ background: String(row.entry.value) }">
@@ -494,6 +523,11 @@ function runPlan(path: string, plan: Extract<TokenDeletePlan, { status: "ready" 
 .row.invalid {
   background: rgba(220, 38, 38, 0.07);
   box-shadow: inset 0 0 0 1px rgba(220, 38, 38, 0.35);
+}
+
+.row.flash {
+  background: var(--tint-6, var(--glass-strong));
+  box-shadow: inset 0 0 0 1px var(--accent, #6366f1);
 }
 
 .swatch {

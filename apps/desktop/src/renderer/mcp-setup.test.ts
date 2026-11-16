@@ -12,6 +12,9 @@ function makeInfo(overrides: Partial<McpSetupInfo> = {}): McpSetupInfo {
     commandLine: "claude mcp add --transport http sqraft http://127.0.0.1:7331/mcp",
     opencodeJson: "{}",
     cursorJson: "{}",
+    vscodeJson: "{}",
+    zedJson: "{}",
+    codexToml: "",
     ...overrides,
   };
 }

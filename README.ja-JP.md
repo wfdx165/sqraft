@@ -61,6 +61,8 @@ http://127.0.0.1:7331/mcp
 
 アプリは起動したままにしてください（コマンドラインはなく、クライアントから起動することもできません）。ポートが使用中の場合は次の空きポートに移り、実際のアドレスはウェルカム画面と **Sqraft → MCP を設定…**（Windows ではファイルメニュー）に表示されます。
 
+**Sqraft → MCP を設定…** を開き、使っているクライアントにチェックを入れてください。Sqraft は自分自身の `sqraft` エントリだけを書き込み、事前にバックアップし、ポート変更時はアドレスを同期します。書き込み後はクライアントを再起動してください。クライアントが見つからない、CLI がない、設定が書き込めない場合は下のスニペットを使ってください。Windows のワンクリック設定は実装済みですが実機検証は未実施です。スニペットは常に使えます。
+
 <details>
 <summary>Claude Code</summary>
 
@@ -92,6 +94,43 @@ claude mcp add --transport http sqraft http://127.0.0.1:7331/mcp
 ```jsonc
 {
   "mcpServers": {
+    "sqraft": { "url": "http://127.0.0.1:7331/mcp" }
+  }
+}
+```
+
+</details>
+
+
+<details>
+<summary>Codex</summary>
+
+```toml
+[mcp_servers.sqraft]
+url = "http://127.0.0.1:7331/mcp"
+```
+
+</details>
+
+<details>
+<summary>VS Code</summary>
+
+```jsonc
+{
+  "mcpServers": {
+    "sqraft": { "type": "http", "url": "http://127.0.0.1:7331/mcp" }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary>Zed</summary>
+
+```jsonc
+{
+  "context_servers": {
     "sqraft": { "url": "http://127.0.0.1:7331/mcp" }
   }
 }

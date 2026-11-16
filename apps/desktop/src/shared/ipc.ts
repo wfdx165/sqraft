@@ -2,7 +2,9 @@
  * 主进程与渲染层之间的唯一契约：通道名 + 请求/响应形状。
  * preload 按这里的类型实现 `window.sqraft`，渲染层只依赖 `SqraftApi`。
  */
-import type { LanguagePreference, Locale } from "./i18n";
+import type { LanguagePreference, Locale, MessageKey } from "./i18n";
+import type { McpClientChannel, McpClientId, McpClientIssueCode } from "./mcp-clients";
+import type { CommandId } from "./commands";
 
 export interface OpenedFile {
   path: string;
@@ -79,8 +81,59 @@ export interface McpSetupInfo {
   commandLine: string;
   /** OpenCode V2 形状（`mcp.servers`，type = remote） */
   opencodeJson: string;
-  /** Cursor / 通用 `mcpServers` 形状 */
+  /** Cursor `mcpServers` 形状（`url`，不需要 `type`） */
   cursorJson: string;
+  /** VS Code Copilot 原生形状（`mcpServers` + `type:http`） */
+  vscodeJson: string;
+  /** Zed `context_servers` 形状 */
+  zedJson: string;
+  /** Codex `config.toml` 片段 */
+  codexToml: string;
+}
+
+/** 一条接入问题：message 已本地化，detail/existing 给排障与冲突展示。 */
+export interface McpClientIssueInfo {
+  code: McpClientIssueCode;
+  message: string;
+  detail: string | null;
+  /** 冲突时用户现有条目的截断 JSON；其它情况为 null */
+  existing: string | null;
+}
+
+/** 单个客户端的四态快照。 */
+export interface McpClientState {
+  id: McpClientId;
+  detected: boolean;
+  state: "connected" | "written" | "absent" | "undetected";
+  channel: McpClientChannel | null;
+  /** 配置里/清单里记录的地址 */
+  url: string | null;
+  /** 文件 adapter 的目标路径；CLI 客户端为 null */
+  target: string | null;
+  /** 本次运行内匹配到的活跃会话数 */
+  sessions: number;
+  issue: McpClientIssueInfo | null;
+  /** 成功写入后的重启提示（i18n key）；无需提示时为 null */
+  restartHint: MessageKey | null;
+}
+
+export interface McpClientsSyncEvent {
+  updated: number;
+  failed: number;
+}
+
+export interface McpClientsSnapshot {
+  listening: boolean;
+  /** 当前端点（服务没起来时是按偏好算出来的地址） */
+  url: string;
+  clients: McpClientState[];
+}
+
+export interface McpAttachResult {
+  ok: boolean;
+  snapshot: McpClientsSnapshot;
+  restartHint: MessageKey | null;
+  issue: McpClientIssueInfo | null;
 }
 
 /** 一条 agent 会话：只读展示用（身份、连接时间、最近一次工具调用）。 */
@@ -210,6 +263,16 @@ export interface SqraftApi {
     setup(): Promise<McpSetupInfo>;
     /** 改端口：null = 自动（7331 起、被占顺延）；数字 = 严格使用，占用即报错 */
     setPort(port: number | null): Promise<McpSetupInfo>;
+    /** 六个客户端的四态快照 */
+    clients(): Promise<McpClientsSnapshot>;
+    /** 一键接入；渲染层只传 id */
+    attachClient(id: McpClientId): Promise<McpAttachResult>;
+    /** 断开：只删我们那条 entry */
+    detachClient(id: McpClientId): Promise<McpAttachResult>;
+    /** 显式替换冲突条目（用户确认后调用） */
+    replaceClient(id: McpClientId): Promise<McpAttachResult>;
+    /** 端口漂移后主进程同步清单内条目；渲染层只用于 toast */
+    onClientsSynced(handler: (event: McpClientsSyncEvent) => void): () => void;
   };
   recent: {
     list(): Promise<{ path: string; name: string }[]>;
@@ -234,6 +297,8 @@ export interface SqraftApi {
   };
   app: {
     info(): Promise<AppInfo>;
+    /** 执行主进程专属命令（设置 / MCP 面板 / 清缓存 / 日志目录 / 关于 / 检查更新） */
+    runCommand(id: CommandId): Promise<boolean>;
     /** 改界面语言（auto / zh-CN / en-US / ja-JP / ko-KR），主进程持久化并广播解析结果 */
     setLanguage(preference: LanguagePreference): Promise<LanguageState>;
     /** 语言切换后的广播（已解析的 locale） */
@@ -297,7 +362,13 @@ export const CHANNELS = {
   mcpStatusQuery: "mcp:status:query",
   mcpSetup: "mcp:setup",
   mcpSetPort: "mcp:set-port",
+  mcpClients: "mcp:clients",
+  mcpClientsAttach: "mcp:clients:attach",
+  mcpClientsDetach: "mcp:clients:detach",
+  mcpClientsReplace: "mcp:clients:replace",
+  mcpClientsSynced: "mcp:clients:synced",
   appCopyText: "app:copy-text",
+  appRunCommand: "app:run-command",
   appFetchImage: "app:fetch-image",
   appClearImageCache: "app:clear-image-cache",
   appClipboardImage: "app:clipboard-image",

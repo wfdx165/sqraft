@@ -3,7 +3,7 @@
  * 磁盘上的文件只在 `saveDocument` 时变化——没有自动保存，也没有恢复快照。
  */
 import { reactive } from "vue";
-import { createEmptyDoc, firstPageId } from "@sqraft/core";
+import { createEmptyDoc, firstPageId, type DocState } from "@sqraft/core";
 import { docStore, replaceDocument, ui } from "./store";
 import { parseDoc, serializeDoc } from "./fileio";
 import { appInfo } from "./app-meta";
@@ -140,6 +140,30 @@ export async function newDocument(): Promise<boolean> {
   ui.selection = [];
   ui.instanceContext = [];
   logInfo("document: new");
+  syncTitle();
+  return true;
+}
+
+/**
+ * 打开内置示例：没有文件路径，`⌘S` 时才另存。
+ * 与新建一样先走未保存确认；载入路径也与新建保持一致（换文档必须清演示模式与上下文）。
+ */
+export async function openGeneratedDocument(title: string, state: DocState): Promise<boolean> {
+  if (!(await confirmReplaceCurrent())) return false;
+  resetAssets();
+  resetLinkedImages();
+  resetFonts();
+  replaceDocument(state);
+  fileState.path = null;
+  fileState.name = title;
+  fileState.mtimeMs = 0;
+  ui.docOpen = true;
+  ui.presenter = null;
+  ui.activePageId = firstPageId(docStore.doc);
+  ui.expandedPageId = ui.activePageId;
+  ui.selection = [];
+  ui.instanceContext = [];
+  logInfo("document: example", { title });
   syncTitle();
   return true;
 }

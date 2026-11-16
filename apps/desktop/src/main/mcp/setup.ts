@@ -112,7 +112,11 @@ export function collectSetupInfo(options: {
       null,
       2,
     ),
-    // Cursor 与 Claude Desktop 的 mcpServers 形状一致，分开两栏只是给用户指路径
+    // Cursor 的入口不需要 type；Claude Code 的 entry 必须有 type，别把这段当通用片段
     cursorJson: JSON.stringify({ mcpServers: { sqraft: { url } } }, null, 2),
+    // VS Code 只写 Copilot 原生形状（旧 servers 路径 2027-02 移除）
+    vscodeJson: JSON.stringify({ mcpServers: { sqraft: { type: "http", url } } }, null, 2),
+    zedJson: JSON.stringify({ context_servers: { sqraft: { url } } }, null, 2),
+    codexToml: `[mcp_servers.sqraft]\nurl = "${url}"\n`,
   };
 }

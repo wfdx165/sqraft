@@ -11,55 +11,14 @@ import { logInfo, logWarn } from "./log";
 import { t } from "./i18n";
 import { ui } from "./store";
 import { formatBinding as sharedFormatBinding } from "../shared/binding";
+import { COMMANDS, type CommandGroup, type CommandId } from "../shared/commands";
+import { paletteUi, togglePalette } from "./palette";
+import { settingsUi, toggleSettings } from "./settings";
 import type { MessageKey } from "../shared/i18n";
 
-export type ActionId =
-  | "mode.pan"
-  | "mode.edit"
-  | "tool.frame"
-  | "tool.rect"
-  | "tool.ellipse"
-  | "tool.triangle"
-  | "tool.line"
-  | "tool.path"
-  | "tool.text"
-  | "edit.undo"
-  | "edit.redo"
-  | "edit.copy"
-  | "edit.cut"
-  | "edit.copyImage"
-  | "edit.selectAll"
-  | "edit.rename"
-  | "edit.group"
-  | "edit.ungroup"
-  | "edit.delete"
-  | "edit.duplicate"
-  | "edit.moveForward"
-  | "edit.moveBackward"
-  | "edit.moveToFront"
-  | "edit.moveToBack"
-  | "edit.paste"
-  | "component.create"
-  | "component.detach"
-  | "view.zoomIn"
-  | "view.zoomOut"
-  | "view.zoomReset"
-  | "view.fit"
-  | "view.fitAll"
-  | "view.toggleGrid"
-  | "view.toggleSnap"
-  | "view.toggleGuides"
-  | "view.present"
-  | "focus.pageSearch"
-  | "file.new"
-  | "file.open"
-  | "file.insertImage"
-  | "file.save"
-  | "file.saveAs"
-  | "file.exportPng"
-  | "file.closeDoc";
+export type ActionId = CommandId;
 
-export type ActionGroup = "mode" | "tool" | "edit" | "component" | "view" | "other";
+export type ActionGroup = CommandGroup;
 
 export interface ShortcutAction {
   id: ActionId;
@@ -69,57 +28,17 @@ export interface ShortcutAction {
   default: string;
 }
 
-export const GROUP_ORDER: ActionGroup[] = ["mode", "tool", "edit", "component", "view", "other"];
+/** 快捷键面板的分组顺序：app 组没有默认键位也不由渲染层改，仍然不显示。 */
+export const GROUP_ORDER: ActionGroup[] = ["file", "mode", "tool", "edit", "component", "view", "other"];
 
 /**
- * `V` 同时是"编辑模式"与"选择工具"：合并成一个动作，避免两条同键记录。
+ * 只取注册表里有默认键位的命令；菜单与面板共用 id，快捷键只是命令的可选绑定。
  */
-export const ACTIONS: ShortcutAction[] = [
-  { id: "mode.pan", group: "mode", labelKey: "shortcut.modePan", default: "H" },
-  { id: "mode.edit", group: "mode", labelKey: "shortcut.modeEdit", default: "V" },
-  { id: "tool.frame", group: "tool", labelKey: "node.frame", default: "F" },
-  { id: "tool.rect", group: "tool", labelKey: "node.rect", default: "R" },
-  { id: "tool.ellipse", group: "tool", labelKey: "node.ellipse", default: "O" },
-  { id: "tool.triangle", group: "tool", labelKey: "node.triangle", default: "G" },
-  { id: "tool.line", group: "tool", labelKey: "node.line", default: "L" },
-  { id: "tool.path", group: "tool", labelKey: "toolbar.pen", default: "P" },
-  { id: "tool.text", group: "tool", labelKey: "node.text", default: "T" },
-  { id: "edit.copy", group: "edit", labelKey: "menu.copy", default: "⌘C" },
-  { id: "edit.copyImage", group: "edit", labelKey: "shortcut.copyImage", default: "⌘⇧C" },
-  { id: "edit.selectAll", group: "edit", labelKey: "shortcut.selectAllPage", default: "⌘A" },
-  { id: "edit.rename", group: "edit", labelKey: "shortcut.renameLayer", default: "F2" },
-  { id: "edit.group", group: "edit", labelKey: "shortcut.group", default: "⌘G" },
-  { id: "edit.ungroup", group: "edit", labelKey: "shortcut.ungroup", default: "⌘⇧G" },
-  { id: "edit.cut", group: "edit", labelKey: "menu.cut", default: "⌘X" },
-  { id: "edit.undo", group: "edit", labelKey: "menu.undo", default: "⌘Z" },
-  { id: "edit.redo", group: "edit", labelKey: "menu.redo", default: "⌘⇧Z" },
-  { id: "edit.delete", group: "edit", labelKey: "shortcut.deleteSelection", default: "Delete" },
-  { id: "edit.duplicate", group: "edit", labelKey: "shortcut.duplicate", default: "⌘D" },
-  { id: "edit.moveForward", group: "edit", labelKey: "shortcut.moveForward", default: "⌘]" },
-  { id: "edit.moveBackward", group: "edit", labelKey: "shortcut.moveBackward", default: "⌘[" },
-  { id: "edit.moveToFront", group: "edit", labelKey: "shortcut.moveToFront", default: "⌘⌥]" },
-  { id: "edit.moveToBack", group: "edit", labelKey: "shortcut.moveToBack", default: "⌘⌥[" },
-  { id: "edit.paste", group: "edit", labelKey: "menu.paste", default: "⌘V" },
-  { id: "component.create", group: "component", labelKey: "shortcut.createComponent", default: "⌘⌥K" },
-  { id: "component.detach", group: "component", labelKey: "shortcut.detachInstance", default: "⌘⌥B" },
-  { id: "view.zoomIn", group: "view", labelKey: "menu.zoomIn", default: "⌘+" },
-  { id: "view.zoomOut", group: "view", labelKey: "menu.zoomOut", default: "⌘−" },
-  { id: "view.zoomReset", group: "view", labelKey: "shortcut.zoomReset", default: "⌘0" },
-  { id: "view.fit", group: "view", labelKey: "menu.fit", default: "⇧1" },
-  { id: "view.fitAll", group: "view", labelKey: "menu.fitAll", default: "⇧2" },
-  { id: "view.toggleGrid", group: "view", labelKey: "menu.showGrid", default: "⌘'" },
-  { id: "view.toggleSnap", group: "view", labelKey: "menu.enableSnap", default: "⌘⌥'" },
-  { id: "view.toggleGuides", group: "view", labelKey: "menu.showGuides", default: "⌘;" },
-  { id: "view.present", group: "view", labelKey: "menu.present", default: "⌥⌘Enter" },
-  { id: "focus.pageSearch", group: "other", labelKey: "shortcut.focusPageSearch", default: "⌘F" },
-  { id: "file.new", group: "other", labelKey: "shortcut.newDoc", default: "⌘N" },
-  { id: "file.open", group: "other", labelKey: "shortcut.openFile", default: "⌘O" },
-  { id: "file.insertImage", group: "other", labelKey: "shortcut.insertImage", default: "⇧⌘I" },
-  { id: "file.save", group: "other", labelKey: "shortcut.saveFile", default: "⌘S" },
-  { id: "file.saveAs", group: "other", labelKey: "shortcut.saveAs", default: "⇧⌘S" },
-  { id: "file.exportPng", group: "other", labelKey: "shortcut.exportPng", default: "⌘⇧E" },
-  { id: "file.closeDoc", group: "other", labelKey: "shortcut.closeDoc", default: "⌘W" },
-];
+export const ACTIONS: ShortcutAction[] = COMMANDS.flatMap((command) =>
+  command.default
+    ? [{ id: command.id, group: command.group, labelKey: command.labelKey, default: command.default }]
+    : [],
+);
 
 /** 固定键位：不可修改，面板底部作为只读参考展示。 */
 export const PANEL_BINDING = "⌘/";
@@ -142,6 +61,7 @@ const GLOBAL_ACTIONS = new Set<ActionId>([
   "file.saveAs",
   "file.closeDoc",
   "focus.pageSearch",
+  "palette.open",
 ]);
 
 const STORAGE_KEY = "sqraft.shortcuts.v1";
@@ -149,9 +69,8 @@ const STORAGE_KEY = "sqraft.shortcuts.v1";
 /** 键位版本号：菜单靠它感知"用户改了键位"，从而刷新菜单里的提示。 */
 export const bindingRev = ref(0);
 
-/** 面板与录制状态（纯 UI）。 */
+/** 录制状态（纯 UI）；面板开合在 `settings.ts`，这里只管正在录哪一条。 */
 export const shortcutUi = reactive({
-  open: false,
   recording: null as ActionId | null,
   error: "",
 });
@@ -315,6 +234,11 @@ function isTypingTarget(target: EventTarget | null): boolean {
 
 const executors = new Map<ActionId, () => void>();
 
+/** 面板用它判断命令是否有执行器；没有就不显示，避免"点了没反应"。 */
+export function hasExecutor(id: ActionId): boolean {
+  return executors.has(id);
+}
+
 /** 组件挂载时登记自己能执行的命令；返回注销函数。 */
 export function registerShortcuts(map: Partial<Record<ActionId, () => void>>): () => void {
   const ids = Object.keys(map) as ActionId[];
@@ -357,17 +281,26 @@ export function installShortcuts(): () => void {
     // 演示模式：除"演示"入口本身（用于退出）外全部让位
     if (ui.presenter && binding !== keyOf("view.present")) return;
 
-    // ⌘/ 是固定入口：面板开着时也要能关（先于"面板打开即让位"判断）
+    // ⌘/ 是固定入口：设置停在「快捷键」时再按一次关闭，否则跳到该分类
     if (binding === PANEL_BINDING) {
       e.preventDefault();
-      shortcutUi.open = !shortcutUi.open;
+      toggleSettings("shortcuts");
       shortcutUi.recording = null;
       shortcutUi.error = "";
       return;
     }
 
-    // 面板打开时其余快捷键让位（面板自己处理录制）
-    if (shortcutUi.open) return;
+    // 设置面板打开时其余快捷键让位（面板自己处理录制）
+    if (settingsUi.open) return;
+
+    // ⌘K 面板打开时只认它自己的开关；方向键 / Enter / Esc 由面板处理
+    if (paletteUi.open) {
+      if (binding === keyOf("palette.open")) {
+        e.preventDefault();
+        togglePalette(false);
+      }
+      return;
+    }
 
     const action = ACTIONS.find((a) => keyOf(a.id) === binding);
     if (!action) return;

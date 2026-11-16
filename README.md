@@ -61,6 +61,8 @@ http://127.0.0.1:7331/mcp
 
 The app must stay running (there is no CLI, and clients cannot launch it). If the port is taken the app moves to the next free one; the actual address is shown on the welcome page and under **Sqraft → Configure MCP…** (in the File menu on Windows).
 
+Open **Sqraft → Configure MCP…** and tick the clients you use. Sqraft writes only its own `sqraft` entry, backs up the config first, and keeps the address in sync when the port changes; restart the client afterwards. If a client is not detected, its CLI is missing, or the config is not writable, copy a snippet instead. On Windows the one-click setup is implemented but not yet verified on a real machine — the snippets below always work.
+
 <details>
 <summary>Claude Code</summary>
 
@@ -92,6 +94,43 @@ claude mcp add --transport http sqraft http://127.0.0.1:7331/mcp
 ```jsonc
 {
   "mcpServers": {
+    "sqraft": { "url": "http://127.0.0.1:7331/mcp" }
+  }
+}
+```
+
+</details>
+
+
+<details>
+<summary>Codex</summary>
+
+```toml
+[mcp_servers.sqraft]
+url = "http://127.0.0.1:7331/mcp"
+```
+
+</details>
+
+<details>
+<summary>VS Code</summary>
+
+```jsonc
+{
+  "mcpServers": {
+    "sqraft": { "type": "http", "url": "http://127.0.0.1:7331/mcp" }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary>Zed</summary>
+
+```jsonc
+{
+  "context_servers": {
     "sqraft": { "url": "http://127.0.0.1:7331/mcp" }
   }
 }

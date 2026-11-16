@@ -6,7 +6,6 @@ import { t } from "../i18n";
 
 const emit = defineEmits<{ close: [] }>();
 const info = ref<AppInfo | null>(null);
-const copied = ref(false);
 
 const busy = computed(() => updateUi.phase === "checking" || updateUi.phase === "downloading");
 
@@ -25,13 +24,6 @@ onBeforeUnmount(() => window.removeEventListener("keydown", onKey));
 
 function onKey(event: KeyboardEvent): void {
   if (event.key === "Escape") emit("close");
-}
-
-function copyPath(): void {
-  if (!info.value) return;
-  window.sqraft.app.copyText(info.value.dataPath);
-  copied.value = true;
-  window.setTimeout(() => (copied.value = false), 1400);
 }
 
 /** 许可文本随包分发在 Resources/licenses/，这里只负责把目录打开给用户。 */
@@ -73,14 +65,6 @@ function openLicenses(): void {
         </div>
         <p class="foot">{{ updateStatusText() }}</p>
         <p v-if="(updateReady || updateAvailable) && updateUi.notes" class="notes">{{ updateUi.notes }}</p>
-      </section>
-
-      <section>
-        <div class="label">
-          <span>{{ t("about.dataDir") }}</span>
-          <button class="copy" @click="copyPath">{{ copied ? t("common.copied") : t("about.copyPath") }}</button>
-        </div>
-        <p class="path">{{ info?.dataPath ?? "—" }}</p>
       </section>
 
       <section>
@@ -219,18 +203,6 @@ h2 {
   white-space: pre-wrap;
   max-height: 120px;
   overflow: auto;
-}
-
-.path {
-  margin: 0;
-  padding: 8px 10px;
-  border-radius: var(--radius-sm);
-  background: var(--tint-4);
-  border: 1px solid var(--hairline);
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--text);
-  word-break: break-all;
 }
 
 .foot {
