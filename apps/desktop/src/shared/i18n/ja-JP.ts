@@ -181,6 +181,22 @@ export const jaJP: Record<keyof typeof zhCN, string> = {
   "conn.hours": "{n} 時間",
   "conn.secondsAgo": "{n} 秒前",
   "conn.minutesAgo": "{n} 分前",
+  "conn.changesTitle": "{count} 個のノードを変更",
+  "conn.diagnosticsTitle": "診断 {count} 件",
+  "conn.changesMore": "他 {count} 件は省略",
+  "conn.locate": "クリックで移動",
+  "conn.lastChange": "直前の変更",
+  "conn.action.create": "作成",
+  "conn.action.update": "更新",
+  "conn.action.delete": "削除",
+  "conn.action.move": "移動",
+  "conn.action.instance": "インスタンス",
+  "conn.action.doc": "ドキュメント",
+  "diag.ZERO_SIZE": "サイズが 0 で見えません",
+  "diag.TEXT_NO_FILL": "テキストの塗りがありません",
+  "diag.TEXT_OVERFLOW": "テキストがはみ出しています",
+  "diag.TOKEN_MISSING": "参照したトークンがありません",
+  "diag.OUTSIDE_PARENT": "親の外にはみ出しています",
 
   // MCP 設定パネル
   "mcp.title": "MCP を設定",
@@ -343,6 +359,8 @@ export const jaJP: Record<keyof typeof zhCN, string> = {
   "tokens.deleteConfirm": "{count} 個のノードが使用中です。削除すると {value} に固定されます。",
   "tokens.typeColor": "色",
   "tokens.typeNumber": "数値",
+  "tokens.strictLabel": "厳格モード",
+  "tokens.strictHint": "オンの場合、エージェントが色を直接書くと拒否され、最も近いトークンが提示されます。手で選んだ色には影響しません",
 
   // インスペクター
   "inspector.title": "インスペクター",

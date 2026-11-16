@@ -36,6 +36,8 @@ import { allowsLinksAt, assertNodeCreateLinks, assertNodeUpdateLinks, linkCleanu
 
 export type Command =
   | { type: "node.create"; params: { nodes: DocNode[]; parentId: NodeId | null; index?: number } }
+  /** 文档级开关：Token 严格模式（ADR-0035）。文档属性必须走命令，才能进撤销栈与保存。 */
+  | { type: "doc.setStrictTokens"; params: { value: boolean } }
   | { type: "node.delete"; params: { nodeId: NodeId } }
   | { type: "node.update"; params: { nodeId: NodeId; patch: Partial<DocNode> } }
   /** 复制子树：新 id 由 `planDuplicate` 在命令创建前分配，展开成 node.create */
@@ -1514,6 +1516,13 @@ export class DocStore {
       case "token.delete":
       case "token.rename":
         return applyTokenCommand(this.state, cmd, changed);
+      case "doc.setStrictTokens": {
+        const prev = this.state.strictTokens === true;
+        this.state.strictTokens = cmd.params.value;
+        // 与 token.* 同一口径：文档级改动标 __doc__，UI 才知道要重绘
+        changed.add("__doc__" as NodeId);
+        return { cmd: { type: "doc.setStrictTokens", params: { value: prev } } };
+      }
     }
   }
 

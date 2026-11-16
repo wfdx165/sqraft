@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref } from "vue";
+import { agentReport, type AgentAction } from "../agent-report";
 import { isCrossPage } from "../canvas/agent-activity";
 import { visibleClients } from "../connection-status";
 import { mcpUi, refreshMcpStatus } from "../mcp-host";
@@ -13,6 +14,32 @@ let timer: ReturnType<typeof setInterval> | null = null;
 const count = computed(() => mcpUi.clients.length);
 /** 浮层最多列 5 行，其余只报数量 */
 const visible = computed(() => visibleClients(mcpUi.clients));
+/** 变更清单 / 诊断：上次调用留下的，保留到下一次调用或撤销 */
+const hasReport = computed(() => agentReport.changes.length > 0 || agentReport.diagnostics.length > 0);
+
+/** 动作词与诊断文案都按当前语言取；`t` 读响应式的 locale，切换语言会自动重算 */
+const actionLabels = computed<Record<AgentAction, string>>(() => ({
+  create: t("conn.action.create"),
+  update: t("conn.action.update"),
+  delete: t("conn.action.delete"),
+  move: t("conn.action.move"),
+  instance: t("conn.action.instance"),
+  doc: t("conn.action.doc"),
+}));
+
+const diagLabels = computed<Record<string, string>>(() => ({
+  ZERO_SIZE: t("diag.ZERO_SIZE"),
+  TEXT_NO_FILL: t("diag.TEXT_NO_FILL"),
+  TEXT_OVERFLOW: t("diag.TEXT_OVERFLOW"),
+  TOKEN_MISSING: t("diag.TOKEN_MISSING"),
+  OUTSIDE_PARENT: t("diag.OUTSIDE_PARENT"),
+}));
+
+/** 清单条目：选中 + 定位 + 脉冲标记（与图层面板"定位"同一条路径） */
+function locate(nodeId: string): void {
+  open.value = false;
+  hooks.focusNode(nodeId);
+}
 
 /**
  * 胶囊文案优先级：正在写的工具 > 正在读 > 刚改完的残留 > 连接数。
@@ -29,9 +56,10 @@ const summary = computed(() => {
       ? t("conn.changedOtherPage", { label: activity.label, page: activity.pageName ?? t("conn.otherPage") })
       : t("conn.changedThisPage", { label: activity.label });
   }
+  // agent 断开后清单还在：胶囊不能跟着消失，否则上次改动就再也点不开了
+  if (count.value === 0 && hasReport.value) return t("conn.lastChange");
   return t("conn.connectedCount", { count: count.value });
 });
-
 /** 改动看不见时给一个跳转入口：跨页报页面名，同页视口外只说"在视口外" */
 const jumpLabel = computed(() => {
   const activity = mcpUi.activity;
@@ -85,7 +113,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div v-if="count > 0 || mcpUi.activity" class="conn-wrap">
+  <div v-if="count > 0 || mcpUi.activity || hasReport" class="conn-wrap">
     <div class="conn-top">
       <button class="conn-status glass" :class="{ open }" role="status" @click="toggle">
         <span class="dot" :class="{ busy: mcpUi.busy }" />
@@ -104,6 +132,43 @@ onBeforeUnmount(() => {
         <span class="conn-tool">{{ toolLabel(client) }}</span>
       </div>
       <div v-if="visible.more > 0" class="conn-more">{{ t("conn.more", { count: visible.more }) }}</div>
+
+      <!-- 变更清单 + 诊断：两段并列，都是"事后追认"的信息，所以跟连接详情共用一个浮层。
+           调用进行中先不显示——那会儿清单还是上一次的内容，标题写"本次改动"会误导。 -->
+      <template v-if="hasReport && !mcpUi.activity?.running">
+        <div v-if="agentReport.changes.length > 0" class="conn-section">
+          <span>{{ t("conn.changesTitle", { count: agentReport.total }) }}</span>
+          <span class="conn-section-hint">{{ t("conn.locate") }}</span>
+        </div>
+        <button
+          v-for="change in agentReport.changes"
+          :key="change.nodeId"
+          type="button"
+          class="conn-item"
+          @click="locate(change.nodeId)"
+        >
+          <span class="conn-item-name">{{ change.nodeName }}</span>
+          <span class="conn-item-action">{{ actionLabels[change.action] }}</span>
+        </button>
+        <div v-if="agentReport.total > agentReport.changes.length" class="conn-more">
+          {{ t("conn.changesMore", { count: agentReport.total - agentReport.changes.length }) }}
+        </div>
+
+        <div v-if="agentReport.diagnostics.length > 0" class="conn-section">
+          <span>{{ t("conn.diagnosticsTitle", { count: agentReport.diagnostics.length }) }}</span>
+          <span class="conn-section-hint">{{ t("conn.locate") }}</span>
+        </div>
+        <button
+          v-for="(item, index) in agentReport.diagnostics"
+          :key="`${item.nodeId}-${index}`"
+          type="button"
+          class="conn-item"
+          @click="locate(item.nodeId)"
+        >
+          <span class="conn-item-name">{{ item.nodeName }}</span>
+          <span class="conn-item-action">{{ diagLabels[item.code] ?? item.code }}</span>
+        </button>
+      </template>
     </div>
   </div>
 </template>
@@ -228,6 +293,61 @@ onBeforeUnmount(() => {
   border-top: 1px solid var(--hairline);
   color: var(--text-faint);
   font-size: 10.5px;
+}
+
+/* 变更清单与诊断的分段标题（两段都可点条目定位） */
+.conn-section {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 6px;
+  padding: 5px 8px 2px;
+  border-top: 1px solid var(--hairline);
+  color: var(--text-faint);
+  font-size: 10px;
+}
+
+.conn-section:first-child {
+  margin-top: 0;
+  border-top: none;
+}
+
+.conn-section-hint {
+  opacity: 0.7;
+}
+
+.conn-item {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 10px;
+  width: 100%;
+  padding: 5px 8px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font: inherit;
+  font-size: 11px;
+  text-align: left;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+
+.conn-item:hover {
+  background: var(--tint-4);
+}
+
+.conn-item-name {
+  color: var(--text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.conn-item-action {
+  color: var(--text-faint);
+  text-align: right;
+  white-space: nowrap;
 }
 
 @keyframes pulse {

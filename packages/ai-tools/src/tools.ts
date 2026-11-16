@@ -160,6 +160,70 @@ const NODE_SCHEMA: Record<string, unknown> = {
   },
 };
 
+/**
+ * `create_node` 能建的类型（唯一真源：schema 的 enum 与运行期白名单都从这里取）。
+ * 与 core 的 `NODE_TYPES` 不同：这里**不含** page / group / star / instance——
+ * 那些由别的工具或画布手势负责，`create_node` 建不出来。
+ */
+export const CREATABLE_KINDS = [
+  "frame",
+  "rect",
+  "ellipse",
+  "polygon",
+  "line",
+  "path",
+  "text",
+  "image",
+  "component",
+  "slot",
+] as const;
+
+export type CreatableKind = (typeof CREATABLE_KINDS)[number];
+
+/**
+ * `create_node` / `create_nodes` 共用的节点入参：不含父子关系
+ * （`create_node` 用工具级 `parentId`，`create_nodes` 用嵌套 `children`）。
+ * 两处必须同源——批量工具的入参一旦与单建分叉，agent 就得记两套规则。
+ */
+const NODE_ARGS: Record<string, unknown> = {
+  kind: { type: "string", enum: [...CREATABLE_KINDS] },
+  name: { type: "string", description: "slot 必填且组件内唯一" },
+  sides: { type: "number", description: "kind=polygon 的边数，3–12，默认 3" },
+  text: { type: "string", description: "kind=text 时的文案" },
+  image: {
+    type: "object",
+    description:
+      "kind=image 时二选一：data（base64，不含 data: 前缀）+ mimeType（上限 5MB），或 url（http/https 链接，字节不进文件，按需抓取并缓存在本机）",
+    properties: {
+      data: { type: "string" },
+      mimeType: { type: "string" },
+      url: { type: "string", description: "http/https 图片地址；懒加载，断网时用本地缓存" },
+    },
+    additionalProperties: false,
+  },
+  closed: { type: "boolean", description: "kind=path 时是否闭合，默认 false" },
+  points: {
+    type: "array",
+    minItems: 2,
+    description: "kind=path 的锚点，父容器坐标；x/y 必填，inX/inY/outX/outY 为相对锚点的手柄偏移",
+    items: {
+      type: "object",
+      properties: {
+        x: { type: "number" },
+        y: { type: "number" },
+        inX: { type: "number" },
+        inY: { type: "number" },
+        outX: { type: "number" },
+        outY: { type: "number" },
+      },
+      required: ["x", "y"],
+      additionalProperties: false,
+    },
+  },
+  ...NODE_SCHEMA,
+  ...STYLE_SCHEMA,
+};
+
 export interface ToolDefinition {
   name: string;
   description: string;
@@ -356,44 +420,43 @@ export const tools: ToolDefinition[] = [
       type: "object",
       properties: {
         parentId: { type: "string", description: "父节点 id；省略则建到当前页面" },
-        kind: { type: "string", enum: ["frame", "rect", "ellipse", "polygon", "line", "path", "text", "image", "component", "slot"] },
-        name: { type: "string", description: "slot 必填且组件内唯一" },
-        sides: { type: "number", description: "kind=polygon 的边数，3–12，默认 3" },
-        text: { type: "string", description: "kind=text 时的文案" },
-        image: {
-          type: "object",
-          description:
-            "kind=image 时二选一：data（base64，不含 data: 前缀）+ mimeType（上限 5MB），或 url（http/https 链接，字节不进文件，按需抓取并缓存在本机）",
-          properties: {
-            data: { type: "string" },
-            mimeType: { type: "string" },
-            url: { type: "string", description: "http/https 图片地址；懒加载，断网时用本地缓存" },
-          },
-          additionalProperties: false,
-        },
-        closed: { type: "boolean", description: "kind=path 时是否闭合，默认 false" },
-        points: {
-          type: "array",
-          minItems: 2,
-          description: "kind=path 的锚点，父容器坐标；x/y 必填，inX/inY/outX/outY 为相对锚点的手柄偏移",
-          items: {
-            type: "object",
-            properties: {
-              x: { type: "number" },
-              y: { type: "number" },
-              inX: { type: "number" },
-              inY: { type: "number" },
-              outX: { type: "number" },
-              outY: { type: "number" },
-            },
-            required: ["x", "y"],
-            additionalProperties: false,
-          },
-        },
-        ...NODE_SCHEMA,
-        ...STYLE_SCHEMA,
+        ...NODE_ARGS,
       },
       required: ["kind"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "create_nodes",
+    description:
+      "一次建一整棵子树（嵌套节点树）：适合生成卡片列表、表单、导航这类重复结构，比连续调 create_node 少几十次往返。nodes 每一项的字段与 create_node 完全一致，只多两处——id 必须由调用方生成且全文档唯一，children 表达层级（父子关系由嵌套位置决定，不要再给 parentId）。整棵树是一个事务：任一节点非法则全部回滚、不会留下半截；单次含子孙总数上限 500，超了就分批。children 里不能放 component / slot（主组件是文档根节点、插槽必须在主组件内，这两种仍用 create_node），组件实例仍用 create_instance。顶层可以放 component（等价于 create_node 不给 parentId）。撤销一次即可整树回退。",
+    input_schema: {
+      type: "object",
+      // 递归结构必须自引用：定义放 $defs，引用写 #/$defs/Node。
+      // 悬空的 "#/Node" 不是合法 JSON Schema，按 schema 校验/代码生成的客户端会直接报错。
+      $defs: {
+        Node: {
+          type: "object",
+          properties: {
+            id: { type: "string", description: "节点 id：调用方生成，全文档唯一（含调用内重复）" },
+            ...NODE_ARGS,
+            children: { type: "array", items: { "$ref": "#/$defs/Node" } },
+          },
+          required: ["id", "kind"],
+          additionalProperties: false,
+        },
+      },
+      properties: {
+        parentId: { type: "string", description: "父节点 id；省略则建到当前页面" },
+        nodes: {
+          type: "array",
+          minItems: 1,
+          maxItems: 500,
+          description: "顶层节点数组；每项可带 children 继续往下嵌套（含子孙总数上限 500）",
+          items: { "$ref": "#/$defs/Node" },
+        },
+      },
+      required: ["nodes"],
       additionalProperties: false,
     },
   },

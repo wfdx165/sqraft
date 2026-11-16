@@ -4,7 +4,7 @@
  */
 import { reactive } from "vue";
 import { createEmptyDoc, firstPageId } from "@sqraft/core";
-import { docStore, ui } from "./store";
+import { docStore, replaceDocument, ui } from "./store";
 import { parseDoc, serializeDoc } from "./fileio";
 import { appInfo } from "./app-meta";
 import { allAssets, assetEntryName, loadAssets, resetAssets } from "./assets";
@@ -128,7 +128,7 @@ export async function newDocument(): Promise<boolean> {
   resetAssets();
   resetLinkedImages();
   resetFonts();
-  docStore.replace(createEmptyDoc());
+  replaceDocument(createEmptyDoc());
   fileState.path = null;
   fileState.name = "";
   fileState.mtimeMs = 0;
@@ -153,7 +153,7 @@ export async function closeDocument(): Promise<void> {
   resetAssets();
   resetLinkedImages();
   resetFonts();
-  docStore.replace(createEmptyDoc());
+  replaceDocument(createEmptyDoc());
   fileState.path = null;
   fileState.name = "";
   fileState.mtimeMs = 0;
@@ -214,7 +214,7 @@ async function adoptFile(file: OpenedFile): Promise<boolean> {
     resetFonts();
     loadAssets(files);
     loadFonts(files);
-    docStore.replace(state);
+    replaceDocument(state);
     // 必须在 replace 之后：registerDocFonts 要遍历新文档的字体表，否则注册的是旧文档
     void registerDocFonts(state);
     ui.docOpen = true;

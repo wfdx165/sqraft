@@ -53,6 +53,17 @@ const total = computed(() => {
   return Object.keys(docStore.doc.tokens).length;
 });
 
+/** Token 严格模式（ADR-0035）：文档级开关，只拦 agent 写入的字面量颜色。 */
+const strict = computed(() => {
+  void ui.version;
+  return docStore.doc.strictTokens === true;
+});
+
+function onStrictChange(event: Event): void {
+  const value = (event.target as HTMLInputElement).checked;
+  dispatch({ type: "doc.setStrictTokens", params: { value } }, "strict-tokens");
+}
+
 function toggle(prefix: string) {
   collapsed.value[prefix] = !collapsed.value[prefix];
 }
@@ -256,6 +267,11 @@ function runPlan(path: string, plan: Extract<TokenDeletePlan, { status: "ready" 
       <span class="count">{{ total }}</span>
     </header>
 
+    <label class="strict" :title="t('tokens.strictHint')">
+      <input type="checkbox" :checked="strict" @change="onStrictChange" />
+      <span>{{ t("tokens.strictLabel") }}</span>
+    </label>
+
     <div class="list">
       <section v-for="g in groups" :key="g.prefix" class="group">
         <button class="group-head" @click="toggle(g.prefix)">
@@ -393,6 +409,27 @@ function runPlan(path: string, plan: Extract<TokenDeletePlan, { status: "ready" 
   color: var(--text-faint);
   font-family: var(--mono);
   font-size: 10px;
+}
+
+/* Token 严格模式（ADR-0035）：文档级开关，放在筛选栏正下方 */
+.strict {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 5px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--tint-3);
+  color: var(--text-dim);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.strict input {
+  margin: 0;
+  accent-color: var(--accent);
 }
 
 .list {

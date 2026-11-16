@@ -3,7 +3,8 @@
  * 纪律：画布热路径不进 Vue 响应式；store 变更通过订阅推增量。
  */
 import { reactive } from "vue";
-import { DocStore, createEmptyDoc, firstPageId, NUMERIC_TOKEN_CHANGED, type Command, type DocNode, type NodeId } from "@sqraft/core";
+import { DocStore, createEmptyDoc, firstPageId, NUMERIC_TOKEN_CHANGED, type Command, type DocNode, type DocState, type NodeId } from "@sqraft/core";
+import { clearAgentReport } from "./agent-report";
 import { textSizeOf } from "./text-metrics";
 
 export type ToolKind = "select" | "frame" | "rect" | "ellipse" | "triangle" | "line" | "path" | "text";
@@ -116,12 +117,24 @@ export function dispatch(cmd: Command | Command[], label?: string): void {
   docStore.apply(cmd, label);
 }
 
+/**
+ * 载入 / 新建 / 关闭文档的唯一入口。
+ * 文档换了，上一份稿子的改动清单必须一起作废——否则清单指向已经不存在的节点，
+ * "点击定位"会静默无反应（与撤销清空是同一类问题）。
+ */
+export function replaceDocument(state: DocState): void {
+  docStore.replace(state);
+  clearAgentReport();
+}
+
 export function undo(): void {
-  docStore.undo();
+  // 撤销是全局的：清单留着就会指向已经回退掉的节点，"点击定位"会跳到不存在的东西上。
+  // 空栈时什么都没撤销，清单不动（不然按一下 ⌘Z 就把有效清单清掉了）。
+  if (docStore.undo()) clearAgentReport();
 }
 
 export function redo(): void {
-  docStore.redo();
+  if (docStore.redo()) clearAgentReport();
 }
 
 export function select(ids: NodeId[]): void {

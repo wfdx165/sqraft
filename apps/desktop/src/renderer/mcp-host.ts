@@ -18,6 +18,13 @@ import {
   setAgentTargets,
 } from "./canvas/agent-activity";
 import { docStore, hooks, ui } from "./store";
+import {
+  buildAgentChanges,
+  captureAgentPreNames,
+  clearAgentReport,
+  parseAgentDiagnostics,
+  setAgentReport,
+} from "./agent-report";
 import { newDocument, openDocument } from "./file-session";
 import { appInfo } from "./app-meta";
 import { measureText, textSizeOf } from "./text-metrics";
@@ -85,6 +92,8 @@ export const ACTIVITY_RESIDUE_MS = 5000;
 let collecting: Set<NodeId> | null = null;
 /** `delete_node` 删掉的那个节点的父容器：删完就查不到归属了，只能在调用前记下来 */
 let deleteParent: NodeId | null = null;
+/** 调用前记下的节点名：删除后文档里查不到，变更清单只能靠它显示名字 */
+let preNames = new Map<NodeId, string>();
 let activityTimer: ReturnType<typeof setTimeout> | null = null;
 
 /** `c1 claude-code/2.1` → `claude-code/2.1`：胶囊里只留身份，不留会话序号 */
@@ -141,6 +150,9 @@ function beginAgentCall(tool: string, clientLabel: string | undefined, args: Rec
   clearActivityTimer();
   collecting = new Set<NodeId>();
   deleteParent = null;
+  preNames = captureAgentPreNames(docStore.doc, tool, args);
+  // 不清清单：失败的调用没改文档，上一次成功的清单仍然准确；
+  // 成功时由 finishAgentCall 覆盖（spec：保留到下一次调用覆盖）。
   const nodeId = args.nodeId;
   if (tool === "delete_node" && typeof nodeId === "string") {
     deleteParent = docStore.doc.nodes[nodeId]?.parentId ?? null;
@@ -150,11 +162,13 @@ function beginAgentCall(tool: string, clientLabel: string | undefined, args: Rec
   hooks.requestRepaint();
 }
 
-function finishAgentCall(ok: boolean): void {
-  // 失败的调用已经回滚：不描边、不留"刚改了…"的假信息
+function finishAgentCall(ok: boolean, value?: string): void {
+  // 失败的调用已经回滚：不描边、不留"刚改了…"的假信息。
+  // 但**不清变更清单**——它记的是上一次成功调用的改动，仍然准确。
   if (!ok) {
     collecting = null;
     deleteParent = null;
+    preNames.clear();
     clearActivityTimer();
     mcpUi.activity = null;
     resetAgentActivity();
@@ -164,8 +178,17 @@ function finishAgentCall(ok: boolean): void {
   const activity = mcpUi.activity;
   // 先按最终改动刷一次（此刻 collecting 还在），再清窗口
   if (activity) publishAgentTargets(activity.tool, activity.label, false);
+  // 趁 collecting 还在，把"这次改了什么"落成清单；之后它只活在 agentReport 里，
+  // 保留到下一次调用覆盖或撤销清空（不再跟随 5 秒胶囊回落）
+  if (activity) {
+    setAgentReport(
+      buildAgentChanges(docStore.doc, collecting ?? [], preNames, activity.tool),
+      parseAgentDiagnostics(value),
+    );
+  }
   collecting = null;
   deleteParent = null;
+  preNames.clear();
   endAgentActivity();
   hooks.requestRepaint();
   clearActivityTimer();
@@ -272,17 +295,18 @@ export function installMcpHost(): void {
       // 只有会改文档的工具才在画布上留痕迹：只读工具没有视觉落点
       const mutates = MUTATING_TOOLS.has(name);
       let ok = false;
+      let value: string | undefined;
       try {
         if (!ui.docOpen) await newDocument();
         if (mutates) beginAgentCall(name, clientLabel, args);
-        const value = await executor(name, args);
+        value = await executor(name, args);
         ok = true;
         bridge.mcp.respond({ id, ok: true, value });
       } catch (error) {
         bridge.mcp.respond({ id, ok: false, error: agentErrorText(error) });
       } finally {
         mcpUi.busy = false;
-        if (mutates) finishAgentCall(ok);
+        if (mutates) finishAgentCall(ok, value);
       }
     } finally {
       inFlight.delete(id);
@@ -296,6 +320,8 @@ export function installMcpHost(): void {
       offDoc();
       collecting = null;
       deleteParent = null;
+      preNames.clear();
+      clearAgentReport();
       clearActivityTimer();
       resetAgentActivity();
       if (hostGlobal.__sqraftMcpHost === handle) hostGlobal.__sqraftMcpHost = undefined;

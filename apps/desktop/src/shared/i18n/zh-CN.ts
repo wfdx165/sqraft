@@ -181,6 +181,22 @@ export const zhCN = {
   "conn.hours": "{n} 小时",
   "conn.secondsAgo": "{n} 秒前",
   "conn.minutesAgo": "{n} 分钟前",
+  "conn.changesTitle": "本次改动 {count} 个节点",
+  "conn.diagnosticsTitle": "诊断 {count} 条",
+  "conn.changesMore": "还有 {count} 个未列出",
+  "conn.locate": "点击定位",
+  "conn.lastChange": "上次改动",
+  "conn.action.create": "新建",
+  "conn.action.update": "修改",
+  "conn.action.delete": "删除",
+  "conn.action.move": "移动",
+  "conn.action.instance": "实例",
+  "conn.action.doc": "文档",
+  "diag.ZERO_SIZE": "尺寸为 0，看不见",
+  "diag.TEXT_NO_FILL": "文本没有填充色",
+  "diag.TEXT_OVERFLOW": "文本超出了节点",
+  "diag.TOKEN_MISSING": "引用的 Token 不存在",
+  "diag.OUTSIDE_PARENT": "跑到父容器外面了",
 
   // MCP 配置面板
   "mcp.title": "配置 MCP",
@@ -343,6 +359,8 @@ export const zhCN = {
   "tokens.deleteConfirm": "{count} 个节点在用，删除会把它们冻结为 {value}",
   "tokens.typeColor": "颜色",
   "tokens.typeNumber": "数值",
+  "tokens.strictLabel": "严格模式",
+  "tokens.strictHint": "开启后 agent 写字面量颜色会被拒绝，并提示可用的最近 Token；不影响手选颜色",
 
   // 检查器
   "inspector.title": "检查器",
