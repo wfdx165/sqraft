@@ -792,6 +792,7 @@ export const enUS: Record<keyof typeof zhCN, string> = {
 
   // Context menus
   "objectMenu.fitPage": "Fit this page",
+  "objectMenu.presentFrom": "Present from Here",
   "objectMenu.copyAs": "Copy as",
   "objectMenu.copyPng1": "PNG 1×",
   "objectMenu.copyPng2": "PNG 2×",

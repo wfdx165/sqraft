@@ -792,6 +792,7 @@ export const jaJP: Record<keyof typeof zhCN, string> = {
 
   // コンテキストメニュー
   "objectMenu.fitPage": "このページに合わせる",
+  "objectMenu.presentFrom": "このページからプレゼン",
   "objectMenu.copyAs": "コピー",
   "objectMenu.copyPng1": "PNG 1×",
   "objectMenu.copyPng2": "PNG 2×",

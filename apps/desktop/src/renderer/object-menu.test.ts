@@ -13,6 +13,7 @@ function setup(): { pageId: string; rectId: string } {
   ui.mode = "edit";
   ui.activePageId = pageId;
   ui.selection = [];
+  ui.presenter = null;
   return { pageId, rectId: rect.id };
 }
 
@@ -38,8 +39,20 @@ describe("右键菜单内容", () => {
   it("页面菜单把复制收进「复制为」子菜单", () => {
     const { pageId } = setup();
     openPageMenu(pageId, { x: 0, y: 0 });
-    expect(labels()).toEqual(["适配该页", "复制为", "重命名", "删除页面"]);
+    expect(labels()).toEqual(["适配该页", "从这里开始演示", "复制为", "重命名", "删除页面"]);
     expect(copyAsLabels()).toEqual(["PNG 1×", "PNG 2×", "PNG 4×", "SVG"]);
+  });
+
+  it("从这里开始演示：以右键的那一页作为起点（不回落活动页）", () => {
+    const { pageId } = setup();
+    const other = createNode("page", { name: "另一页", x: 600, y: 0, width: 390, height: 844 });
+    docStore.apply({ type: "node.create", params: { nodes: [other], parentId: null } });
+
+    openPageMenu(other.id, { x: 0, y: 0 });
+    // 菜单打开后活动页可能又变了；菜单项必须用右键的那一页，而不是 presenterStartPage()
+    ui.activePageId = pageId;
+    contextMenu.items.find((item) => item.label === "从这里开始演示")!.run!();
+    expect(ui.presenter).toEqual({ pageId: other.id, scroll: 0, stack: [] });
   });
 
   it("元素菜单同样收进子菜单", () => {

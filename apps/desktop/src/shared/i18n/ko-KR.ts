@@ -792,6 +792,7 @@ export const koKR: Record<keyof typeof zhCN, string> = {
 
   // 컨텍스트 메뉴
   "objectMenu.fitPage": "이 페이지에 맞추기",
+  "objectMenu.presentFrom": "이 페이지부터 프레젠테이션",
   "objectMenu.copyAs": "복사",
   "objectMenu.copyPng1": "PNG 1×",
   "objectMenu.copyPng2": "PNG 2×",

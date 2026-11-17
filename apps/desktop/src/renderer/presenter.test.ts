@@ -45,6 +45,12 @@ describe("演示模式：进入与起点", () => {
     enterPresenter();
     expect(ui.presenter).toMatchObject({ pageId: docStore.doc.rootIds[0] });
   });
+
+  it("可以从指定页进入（右键「从这里开始演示」）", () => {
+    const { b } = twoPageDoc();
+    enterPresenter(b);
+    expect(ui.presenter).toEqual({ pageId: b, scroll: 0, stack: [] });
+  });
 });
 
 describe("演示模式：跳转与返回栈", () => {
@@ -92,6 +98,28 @@ describe("演示模式：跳转与返回栈", () => {
     enterPresenter(a);
     for (let i = 0; i < MAX_PRESENTER_STACK * 3; i += 1) jumpTo(i % 2 === 0 ? b : a);
     expect(ui.presenter?.stack.length).toBe(MAX_PRESENTER_STACK);
+  });
+
+  it("退栈跳过已被删除的页面，不落到空白页，并还原存活帧的滚动位置", () => {
+    const { a, b } = twoPageDoc();
+    enterPresenter(a);
+    if (ui.presenter) ui.presenter.scroll = 120;
+    jumpTo(b); // 栈 [{ a, 120 }]，当前 b
+    jumpTo(a); // 栈 [{ a, 120 }, { b, 0 }]，当前 a
+    docStore.apply({ type: "node.delete", params: { nodeId: b } });
+
+    expect(goBack()).toBe(true);
+    expect(ui.presenter).toMatchObject({ pageId: a, scroll: 120, stack: [] });
+  });
+
+  it("栈里的页都被删掉时返回 false，由调用方退出演示", () => {
+    const { a, b } = twoPageDoc();
+    enterPresenter(b);
+    jumpTo(a); // 栈 [b]，当前 a
+    docStore.apply({ type: "node.delete", params: { nodeId: b } });
+
+    expect(goBack()).toBe(false);
+    expect(ui.presenter?.pageId).toBe(a);
   });
 });
 

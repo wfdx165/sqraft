@@ -6,6 +6,7 @@ import type { DocNode, NodeId } from "@sqraft/core";
 import { openContextMenu, type ContextMenuItem } from "./context-menu";
 import { copySelectionAction } from "./canvas/node-clipboard";
 import { canDeletePage, deletePage } from "./canvas/page-actions";
+import { enterPresenter } from "./presenter";
 import { keyOf } from "./shortcuts";
 import { docStore, hooks, select, ui } from "./store";
 import { t } from "./i18n";
@@ -44,6 +45,13 @@ export function openPageMenu(pageId: NodeId, position: { x: number; y: number })
         ui.activePageId = pageId;
         hooks.fitActivePage();
       },
+    },
+    {
+      // 右键会先把该页设为活动页（openPageMenu 开头），所以这里与 ⌥⌘Enter 等价；
+      // 若要"不改活动页直接演示某页"，需要单独的入口，别复用本菜单的副作用
+      label: t("objectMenu.presentFrom"),
+      hint: keyOf("view.present"),
+      run: () => enterPresenter(pageId),
     },
     {
       // 页面选中时没有图层选区，复制回退成“整页带背景”，与 ⌘⇧C 一致

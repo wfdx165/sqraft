@@ -792,6 +792,7 @@ export const zhCN = {
 
   // 右键菜单
   "objectMenu.fitPage": "适配该页",
+  "objectMenu.presentFrom": "从这里开始演示",
   "objectMenu.copyAs": "复制为",
   "objectMenu.copyPng1": "PNG 1×",
   "objectMenu.copyPng2": "PNG 2×",
