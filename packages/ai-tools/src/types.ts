@@ -31,8 +31,16 @@ export interface DocumentHost {
   openDocument(): Promise<boolean>;
   /** 切到某个页面：create_page 后让「省略 parentId」的后续操作落到新页 */
   activatePage?(pageId: NodeId): void;
-  /** 按倍率渲染 PNG data URL（由宿主注入，工具层不碰 DOM；允许先解码图片再返回） */
-  exportPng?(request: { pageId: NodeId; nodeIds?: NodeId[]; scale: number }): string | Promise<string>;
+  /**
+   * 导出成数据（由宿主注入，工具层不碰 DOM / 文件系统）：
+   * png 返回 data URL，svg 返回源码；`rasterized` 是被栅格化的节点名。
+   */
+  exportImage?(request: {
+    format: "png" | "svg";
+    pageId: NodeId;
+    nodeIds?: NodeId[];
+    scale: number;
+  }): Promise<{ image?: string; svg?: string; rasterized?: string[] }>;
   /** 导入字体（字节内联，不收路径），返回字族/字重/风格 */
   importFont?(fileName: string, dataBase64: string): Promise<{ family: string; weight: number; style: string } | null>;
 }

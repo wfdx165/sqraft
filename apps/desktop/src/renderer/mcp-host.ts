@@ -253,7 +253,18 @@ export function installMcpHost(): void {
         return { name: info.name, version: info.version, platform: window.sqraft.platform };
       },
       activatePage: (pageId) => hooks.activatePage(pageId),
-      exportPng: (request) => hooks.renderExport(request),
+      exportImage: async (request) => {
+        if (request.format === "svg") {
+          const result = await hooks.renderExportSvg({ pageId: request.pageId, nodeIds: request.nodeIds });
+          return { svg: result.svg, rasterized: result.rasterized };
+        }
+        const image = await hooks.renderExport({
+          pageId: request.pageId,
+          nodeIds: request.nodeIds,
+          scale: request.scale,
+        });
+        return { image, rasterized: [] };
+      },
       importFont: async (fileName, dataBase64) => {
         const binary = atob(dataBase64);
         const bytes = new Uint8Array(binary.length);

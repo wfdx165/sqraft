@@ -9,18 +9,45 @@
  */
 import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type MenuItemConstructorOptions } from "electron";
 import { basename } from "node:path";
-import { CHANNELS } from "../shared/ipc";
+import { CHANNELS, type MenuState } from "../shared/ipc";
 import { formatBinding } from "../shared/binding";
 import { commandOf, COMMANDS, isCommandId, type CommandId } from "../shared/commands";
 import { clearImageCache } from "./image-cache";
 import { logFileDir } from "./log-file";
 import { t } from "./i18n";
+import { logApp } from "./mcp/log";
 
 /** 渲染层同步过来的、面向菜单的动作键位（默认值兜底）。 */
 let bindings: Record<string, string> = {};
 
 /** 最近打开：由主进程的 recent-state 同步进来，菜单只负责展示与派发。 */
 let recentFiles: string[] = [];
+
+/**
+ * 会话状态（渲染层推送）：没有文档时大部分动作无处落地，演示中渲染层会丢弃所有动作。
+ * 菜单要跟这个状态一致，否则点下去只是静默失败。
+ */
+let menuState: MenuState = { docOpen: false, presenting: false };
+
+/**
+ * 即使没有文档也保持可用的菜单项：它们先判断焦点是否在输入框，走原生 `execCommand`。
+ * 设置面板里的输入框在欢迎页也会用到，禁掉就没法复制粘贴文字了。
+ */
+const MENU_ALWAYS_ENABLED: ReadonlySet<CommandId> = new Set([
+  "edit.copy",
+  "edit.cut",
+  "edit.paste",
+  "edit.selectAll",
+]);
+
+/** 状态变了才重建菜单（重建会关掉正在展开的原生菜单，别每帧都做）。 */
+export function setMenuState(next: MenuState): void {
+  const docOpen = next.docOpen === true;
+  const presenting = next.presenting === true;
+  if (docOpen === menuState.docOpen && presenting === menuState.presenting) return;
+  menuState = { docOpen, presenting };
+  rebuildMenu();
+}
 
 export function setRecentFiles(files: string[]): void {
   recentFiles = [...files];
@@ -46,6 +73,13 @@ function keyOf(action: string): string {
   return bindings[action] ?? DEFAULT_BINDINGS[action] ?? "";
 }
 
+/** 菜单项是否可点：演示模式优先，其次看是否需要文档。 */
+function isMenuEnabled(action: CommandId): boolean {
+  if (menuState.presenting && action !== "view.present") return false;
+  if (MENU_ALWAYS_ENABLED.has(action)) return true;
+  return menuState.docOpen || commandOf(action).requires !== "doc";
+}
+
 /**
  * 生成一个动作菜单项：macOS 显示快捷键但不注册，其他平台把键位写进标签。
  * 文案来自注册表（`menuLabelKey` 优先），不再由调用方各传一份。
@@ -55,6 +89,8 @@ function actionItem(action: CommandId, mac: boolean): MenuItemConstructorOptions
   const label = t(command.menuLabelKey ?? command.labelKey);
   const accelerator = toAccelerator(keyOf(action));
   const item: MenuItemConstructorOptions = {
+    // 演示中除「演示」外全灰；没有文档时 requires:"doc" 的项灰掉
+    enabled: isMenuEnabled(action),
     // 非 mac 把键位写进标签；Windows 显示 Ctrl/Alt/Shift，不能把 ⌘ 直接甩给用户
     label: mac || !accelerator ? label : `${label}    ${formatBinding(keyOf(action), mac ? "darwin" : "win32")}`,
     click: () => {
@@ -211,7 +247,16 @@ export function buildTemplate(
       actionItem("file.insertImage", mac),
       actionItem("file.save", mac),
       actionItem("file.saveAs", mac),
-      actionItem("file.exportPng", mac),
+      {
+        label: t("menu.exportAs"),
+        enabled: menuState.docOpen && !menuState.presenting,
+        submenu: [
+          actionItem("file.exportPng1", mac),
+          actionItem("file.exportPng2", mac),
+          actionItem("file.exportPng4", mac),
+          actionItem("file.exportSvg", mac),
+        ],
+      },
       { type: "separator" },
       ...(mac ? [] : [settingsItem(mac), mcpSetupItem()]),
       ...(mac ? [] : [{ type: "separator" as const }]),
@@ -342,6 +387,17 @@ export function registerMenuChannels(): void {
   ipcMain.on(CHANNELS.menuSetBindings, (_event, next: Record<string, string>) => {
     bindings = { ...next };
     rebuildMenu();
+  });
+  ipcMain.on(CHANNELS.menuSetState, (_event, next: MenuState) => {
+    if (!next || typeof next.docOpen !== "boolean" || typeof next.presenting !== "boolean") {
+      // 渲染层传错类型时直接丢弃；必须留一条日志，否则"菜单一直灰着"无从查起
+      logApp("warn", "menu: invalid state ignored", {
+        docOpen: typeof next?.docOpen,
+        presenting: typeof next?.presenting,
+      });
+      return;
+    }
+    setMenuState(next);
   });
   ipcMain.handle(CHANNELS.appRunCommand, (_event, id: unknown) => {
     if (!isCommandId(id) || commandOf(id).owner !== "main") return false;

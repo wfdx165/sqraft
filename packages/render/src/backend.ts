@@ -52,6 +52,11 @@ export interface ResolvedImage {
    * 后端取样时乘上它——上层不需要知道拿到的是哪一级位图。
    */
   scale?: number;
+  /**
+   * 原图字节的 data URL（或等价的 `href`）。SVG 后端拿不到 Canvas 对象，
+   * 导出路径由宿主补上；画布路径不需要，缺省不填。
+   */
+  href?: string;
 }
 
 export interface RenderBackend {
@@ -117,6 +122,8 @@ export interface RenderBackend {
   /** `cacheKey` 语义同 pushEffects：返回 true 表示命中缓存，调用方跳过目标子树并直接 popMaskLayer。 */
   pushMaskLayer(bounds?: Rect, cacheKey?: string): boolean | void;
   popMaskLayer(drawMask: () => void, alpha?: number): void;
+  /** 把已经渲染好的位图贴回原位置（SVG 后端的栅格化兜底）；矩形是世界坐标。 */
+  drawRasterFallback?(raster: { href: string; rect: Rect }): void;
   endFrame(): void;
 }
 

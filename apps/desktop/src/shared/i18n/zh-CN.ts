@@ -52,7 +52,11 @@ export const zhCN = {
   "menu.insertImage": "插入图片…",
   "menu.save": "保存",
   "menu.saveAs": "另存为…",
-  "menu.exportPng": "导出 PNG…",
+  "menu.exportAs": "导出为",
+  "menu.exportPng1": "PNG 1×",
+  "menu.exportPng2": "PNG 2×",
+  "menu.exportPng4": "PNG 4×",
+  "menu.exportSvg": "SVG",
   "menu.clearImageCache": "清除图片缓存",
   "menu.imageCacheCleared": "已清除 {mb}MB 图片缓存",
   "menu.imageCacheEmpty": "图片缓存已经是空的",
@@ -130,6 +134,7 @@ export const zhCN = {
   // 文件对话框
   "fileFilter.sqraft": "Sqraft 设计文件",
   "fileFilter.png": "PNG 图片",
+  "fileFilter.svg": "SVG 矢量图",
 
   // 关闭 / 覆盖
   "dialog.unsavedMessage": "当前文档有未保存的改动",
@@ -310,13 +315,6 @@ export const zhCN = {
   "shortcuts.confirmReset": "确认恢复？",
   "shortcuts.resetDefault": "恢复默认",
 
-  // 导出 PNG
-  "export.title": "导出 PNG",
-  "export.scale": "倍率",
-  "export.hint": "选区导出透明背景；没有选区时导出活动页（带页面背景）。",
-  "export.nothing": "导出失败：当前没有可导出的内容",
-  "export.exporting": "导出中…",
-  "export.export": "导出…",
 
   // 关于
   "about.title": "关于 Sqraft",
@@ -730,6 +728,10 @@ export const zhCN = {
   "canvas.copyNoPage": "复制失败：当前没有页面",
   "canvas.copyEmpty": "复制失败：内容为空或过大",
   "canvas.copiedPng": "已复制 PNG 到剪贴板",
+  "canvas.copiedSvg": "已复制 SVG 源码到剪贴板",
+  "canvas.copiedRaster": "已复制，{count} 个节点被栅格化",
+  "canvas.exportedRaster": "已导出，{count} 个节点被栅格化",
+  "canvas.exportTooLarge": "选区太大，改用 2× 再试",
   "canvas.copyClipboardUnavailable": "复制失败：剪贴板不可用",
   "canvas.copyFailed": "复制失败：{detail}",
   "canvas.zoomOut": "缩小",
@@ -774,7 +776,10 @@ export const zhCN = {
   "shortcut.insertImage": "插入图片",
   "shortcut.saveFile": "保存文件",
   "shortcut.saveAs": "另存为",
-  "shortcut.exportPng": "导出 PNG",
+  "shortcut.exportPng1": "导出 PNG 1×",
+  "shortcut.exportPng2": "导出 PNG 2×",
+  "shortcut.exportPng4": "导出 PNG 4×",
+  "shortcut.exportSvg": "导出 SVG",
   "shortcut.closeDoc": "关闭文档",
   "shortcut.fixedCancel": "取消 / 逐级退出",
   "shortcut.fixedPanel": "快捷键设置",
@@ -787,7 +792,11 @@ export const zhCN = {
 
   // 右键菜单
   "objectMenu.fitPage": "适配该页",
-  "objectMenu.copyPng": "复制为 PNG",
+  "objectMenu.copyAs": "复制为",
+  "objectMenu.copyPng1": "PNG 1×",
+  "objectMenu.copyPng2": "PNG 2×",
+  "objectMenu.copyPng4": "PNG 4×",
+  "objectMenu.copySvg": "SVG",
   "page.deleteConfirm": "删除页面「{name}」及其全部图层？",
 
   // 文件会话

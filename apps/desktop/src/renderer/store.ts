@@ -141,12 +141,6 @@ export function select(ids: NodeId[]): void {
   ui.selection = ids;
 }
 
-/** 导出 PNG 的弹窗状态（纯 UI）：导出“当前选择或活动页”。 */
-export const exportUi = reactive({
-  open: false,
-  scale: 2,
-});
-
 /** 由 CanvasView 注入的实现（解耦组件引用）。 */
 export const hooks: {
   /** 离屏重绘文档（不含 UI 叠加层）；region 为文档坐标，可只取一块。 */
@@ -169,12 +163,16 @@ export const hooks: {
   selectAllLayers: () => void;
   /** 按倍率渲染 PNG data URL（导出、复制、MCP 共用；会先等图片解码） */
   renderExport: (request: { pageId?: NodeId; nodeIds?: NodeId[]; scale: number }) => Promise<string>;
+  /** 渲染 SVG 源码（导出、复制、MCP 共用；返回被栅格化的节点名） */
+  renderExportSvg: (request: { pageId?: NodeId; nodeIds?: NodeId[] }) => Promise<{ svg: string; rasterized: string[] }>;
   /** 双击/F2/右键：给页面或图层打开行内改名（由画布实现） */
   startRenameOf: (id: NodeId) => void;
   /** 删除当前选区（跳过页面与锁定节点） */
   deleteSelectionNow: () => void;
-  /** 把当前选区（或活动页）复制成 PNG 到剪贴板 */
-  copySelectionPng: () => void;
+  /** 把当前选区（或活动页）复制成 PNG / SVG 到剪贴板 */
+  copySelectionAs: (format: "png" | "svg", scale: number) => void;
+  /** 把当前选区（或活动页）导出成 PNG / SVG 文件 */
+  exportSelectionAs: (format: "png" | "svg", scale: number) => void;
   /** 当前视口（文档坐标查询用）；画布还没挂载时返回 null */
   getViewport: () => { x: number; y: number; width: number; height: number; zoom: number } | null;
   /** 把视线带到 agent 刚改动的地方：必要时切页，再缩到改动包围盒（不改选区） */
@@ -198,9 +196,11 @@ export const hooks: {
   pasteNodes: async () => false,
   selectAllLayers: () => {},
   renderExport: async () => "",
+  renderExportSvg: async () => ({ svg: "", rasterized: [] }),
   startRenameOf: () => {},
   deleteSelectionNow: () => {},
-  copySelectionPng: () => {},
+  copySelectionAs: () => {},
+  exportSelectionAs: () => {},
   getViewport: () => null,
   revealAgentActivity: () => {},
   requestRedraw: () => {},

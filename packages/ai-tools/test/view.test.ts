@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { createDocWithPage, createEmptyDoc, createNode, DocStore, firstPageId, makeExecutor } from "./helpers";
 import { call, setup } from "./helpers";
 
+/** 1×1 透明 PNG：用于断言 data URL 的尺寸解析。 */
+const PNG_1X1 =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+
 describe("AI 工具：文档级操作与截图区域", () => {
   it("document.new 交给宿主执行", async () => {
     const store = new DocStore(createDocWithPage());
@@ -92,19 +96,33 @@ describe("AI 工具：文档级操作与截图区域", () => {
 
 
 describe("AI 工具：导出与布局检查", () => {
-  it("export_png 校验倍率并交给宿主渲染", async () => {
+  it("export_as 校验参数并交给宿主导出", async () => {
     const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     const run = makeExecutor(store, async () => "", () => pageId, undefined, {
       newDocument: async () => true,
       openDocument: async () => true,
-      exportPng: (request) => `data:image/png;base64,${request.scale}`,
+      exportImage: async (request) =>
+        request.format === "svg"
+          ? {
+              svg: '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80"></svg>',
+              rasterized: ["背景模糊卡片"],
+            }
+          : { image: PNG_1X1, rasterized: [] },
     });
 
-    const ok = await call(run, "export_png", { scale: 3 });
-    expect(ok.image).toBe("data:image/png;base64,3");
-    await expect(run("export_png", { scale: 9 })).rejects.toThrow(/scale/);
-    await expect(run("export_png", { pageId: "missing" })).rejects.toThrow(/pageId/);
+    const svg = await call(run, "export_as", { format: "svg" });
+    expect(svg.width).toBe(120);
+    expect(svg.height).toBe(80);
+    expect(svg.svg).toContain("<svg");
+    expect(svg.rasterized).toEqual(["背景模糊卡片"]);
+
+    const png = await call(run, "export_as", { format: "png", scale: 4 });
+    expect(png.image).toBe(PNG_1X1);
+    expect(png.width).toBe(1);
+
+    await expect(run("export_as", { format: "png", scale: 3 })).rejects.toThrow(/scale/);
+    await expect(run("export_as", { format: "png", pageId: "missing" })).rejects.toThrow(/pageId/);
   });
 
   it("inspect_layout 返回世界坐标与布局参数", async () => {

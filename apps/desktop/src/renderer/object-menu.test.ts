@@ -25,31 +25,37 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  hooks.copySelectionPng = () => {};
+  hooks.copySelectionAs = () => {};
 });
 
 describe("右键菜单内容", () => {
-  it("页面菜单用「复制为 PNG」替代导出", () => {
+  /** 「复制为」子菜单的四个选项。 */
+  function copyAsLabels(): string[] {
+    const parent = contextMenu.items.find((item) => item.label === "复制为");
+    return (parent?.children ?? []).map((item) => item.label);
+  }
+
+  it("页面菜单把复制收进「复制为」子菜单", () => {
     const { pageId } = setup();
     openPageMenu(pageId, { x: 0, y: 0 });
-    expect(labels()).toEqual(["适配该页", "复制为 PNG", "重命名", "删除页面"]);
-    expect(labels()).not.toContain("导出 PNG…");
+    expect(labels()).toEqual(["适配该页", "复制为", "重命名", "删除页面"]);
+    expect(copyAsLabels()).toEqual(["PNG 1×", "PNG 2×", "PNG 4×", "SVG"]);
   });
 
-  it("元素菜单保留复制，去掉导出", () => {
+  it("元素菜单同样收进子菜单", () => {
     const { rectId } = setup();
     openNodeMenu(rectId, { x: 0, y: 0 });
-    expect(labels()).toEqual(["复制", "复制为 PNG", "重命名", "删除"]);
-    expect(labels()).not.toContain("导出 PNG…");
+    expect(labels()).toEqual(["复制", "复制为", "重命名", "删除"]);
+    expect(copyAsLabels()).toEqual(["PNG 1×", "PNG 2×", "PNG 4×", "SVG"]);
   });
 
-  it("页面右键的复制项走 copySelectionPng，并保持页面选中", () => {
+  it("页面右键的复制子项走 copySelectionAs，并保持页面选中", () => {
     const { pageId } = setup();
     const copy = vi.fn();
-    hooks.copySelectionPng = copy;
+    hooks.copySelectionAs = copy;
     openPageMenu(pageId, { x: 0, y: 0 });
-    contextMenu.items.find((item) => item.label === "复制为 PNG")!.run();
-    expect(copy).toHaveBeenCalledTimes(1);
+    contextMenu.items.find((item) => item.label === "复制为")!.children![1].run!();
+    expect(copy).toHaveBeenCalledWith("png", 2);
     expect(ui.selection).toEqual([pageId]);
   });
 

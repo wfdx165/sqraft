@@ -2429,6 +2429,23 @@ describe("子树绘制包围盒", () => {
     const box = subtreeWorldBounds(store.doc, rect.id)!;
     expect(box).toEqual({ x: -14, y: -4, width: 98, height: 88 });
   });
+
+  it("把描边宽度算进去（导出选区不被裁边）", () => {
+    const store = new DocStore(createDocWithPage());
+    const pageId = firstPageId(store.doc)!;
+    const rect = createNode("rect", {
+      parentId: pageId,
+      x: 100,
+      y: 100,
+      width: 50,
+      height: 40,
+      style: { stroke: { value: "#000" }, strokeWidth: 8 },
+    });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+    const box = subtreeWorldBounds(store.doc, rect.id)!;
+    // 描边每边压出 4px
+    expect(box).toEqual({ x: 96, y: 96, width: 58, height: 48 });
+  });
 });
 
 describe("脏标记", () => {

@@ -51,6 +51,12 @@ export type UnsavedChoice = "save" | "discard" | "cancel";
 /** 外部修改后的保存冲突：覆盖 / 另存为 / 取消 */
 export type OverwriteChoice = "overwrite" | "save-as" | "cancel";
 
+/** 主进程菜单要用的会话状态（渲染层推送）。 */
+export interface MenuState {
+  docOpen: boolean;
+  presenting: boolean;
+}
+
 export interface AppInfo {
   name: string;
   version: string;
@@ -245,8 +251,8 @@ export interface SqraftApi {
     openPath(path: string): Promise<OpenFileResult>;
     save(request: SaveFileRequest): Promise<SaveFileResult>;
     saveAs(request: SaveAsRequest): Promise<SaveAsResult>;
-    /** 导出 PNG：弹系统保存框并落盘（bytes 是 PNG 原始字节） */
-    exportPng(request: { suggestedName: string; bytes: Uint8Array }): Promise<SaveAsResult>;
+    /** 导出 PNG / SVG：弹系统保存框并落盘（bytes 是原始字节） */
+    exportFile(request: { suggestedName: string; bytes: Uint8Array; format: "png" | "svg" }): Promise<SaveAsResult>;
   };
   dialog: {
     unsaved(): Promise<UnsavedChoice>;
@@ -300,6 +306,8 @@ export interface SqraftApi {
     onCommand(handler: (action: string) => void): () => void;
     /** 把当前键位同步给主进程，用于菜单里的快捷键提示 */
     setBindings(bindings: Record<string, string>): void;
+    /** 文档是否打开、是否在演示：主进程据此置灰菜单项 */
+    setState(state: MenuState): void;
   };
   app: {
     info(): Promise<AppInfo>;
@@ -354,7 +362,7 @@ export const CHANNELS = {
   fileOpen: "file:open",
   fileSave: "file:save",
   fileSaveAs: "file:save-as",
-  fileExportPng: "file:export-png",
+  fileExport: "file:export",
   fileOpenPath: "file:open-path",
   fileOpenRequest: "file:open-request",
   fileDropped: "file:dropped",
@@ -396,6 +404,7 @@ export const CHANNELS = {
   updateChanged: "update:changed",
   menuCommand: "menu:command",
   menuSetBindings: "menu:set-bindings",
+  menuSetState: "menu:set-state",
   appRendererReady: "app:renderer-ready",
   appSetDirty: "app:set-dirty",
   appLog: "app:log",

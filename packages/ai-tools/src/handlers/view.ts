@@ -3,18 +3,58 @@ import type { DocNode, NodeId, Rect, ScreenshotRegion } from "../shared";
 import { diagnose, firstPageId, getPages, resolvePaint, round2, worldRect } from "../shared";
 import type { Handler } from "../types";
 
-/** `export_png` */
-export const handleExportPng: Handler = async (ctx, args) => {
-    if (!ctx.host?.exportPng) throw new Error("当前宿主不支持导出 PNG");
+/** `export_as`：导出成数据（不写剪贴板、不写盘）。 */
+export const handleExportAs: Handler = async (ctx, args) => {
+    if (!ctx.host?.exportImage) throw new Error("当前宿主不支持导出");
     const pageId = (args.pageId as NodeId | undefined) ?? ctx.getActivePageId?.() ?? firstPageId(ctx.store.doc);
     if (!pageId || !ctx.store.doc.nodes[pageId]) throw new Error("pageId 不存在");
     const nodeIds = Array.isArray(args.nodeIds) ? (args.nodeIds as NodeId[]) : undefined;
+    const format = args.format === "svg" ? "svg" : "png";
     const scale = typeof args.scale === "number" ? args.scale : 2;
-    if (!(scale > 0 && scale <= 4)) throw new Error("scale 需要在 (0, 4] 之间");
-    const image = await ctx.host.exportPng({ pageId, nodeIds, scale });
-    if (!image) throw new Error("导出失败：没有可导出的内容");
-    return JSON.stringify({ ok: true, image });
+    if (format === "png" && ![1, 2, 4].includes(scale)) throw new Error("scale 只能是 1、2 或 4");
+    const result = await ctx.host.exportImage({ format, pageId, nodeIds, scale });
+    const payload = format === "svg" ? result.svg : result.image;
+    if (!payload) throw new Error("导出失败：没有可导出的内容");
+    const MAX_BYTES = 4 * 1024 * 1024;
+    if (payloadBytes(format, payload) > MAX_BYTES) {
+        throw new Error("导出结果超过 4MB，请缩小选区或降低倍率");
+    }
+    const size = format === "svg" ? svgSize(payload) : pngSize(payload);
+    return JSON.stringify({
+      ok: true,
+      format,
+      ...(format === "svg" ? { svg: payload } : { image: payload }),
+      ...size,
+      ...(result.rasterized?.length ? { rasterized: result.rasterized } : {}),
+    });
 };
+
+/** 结果体积按**字节**算：SVG 是文本（UTF-8），PNG 是 base64 文本。 */
+function payloadBytes(format: "png" | "svg", payload: string): number {
+    if (format === "svg") return new TextEncoder().encode(payload).length;
+    const comma = payload.indexOf(",");
+    if (comma < 0) return payload.length;
+    // base64 每 4 个字符还原 3 字节（含 padding 时略微高估，上限判断足够了）
+    return Math.ceil(((payload.length - comma - 1) * 3) / 4);
+}
+
+/** SVG 根上的宽高（导出时按文档单位写死）。 */
+function svgSize(svg: string): { width: number; height: number } {
+    const w = /<svg[^>]*\bwidth="([\d.]+)"/.exec(svg);
+    const h = /<svg[^>]*\bheight="([\d.]+)"/.exec(svg);
+    return { width: w ? Number(w[1]) : 0, height: h ? Number(h[1]) : 0 };
+}
+
+/** PNG data URL 的像素尺寸（IHDR 在文件头）。 */
+function pngSize(dataUrl: string): { width: number; height: number } {
+    const comma = dataUrl.indexOf(",");
+    if (comma < 0) return { width: 0, height: 0 };
+    const binary = atob(dataUrl.slice(comma + 1, comma + 1 + 32));
+    if (binary.length < 24) return { width: 0, height: 0 };
+    const bytes = Uint8Array.from(binary, (c) => c.charCodeAt(0));
+    const view = new DataView(bytes.buffer);
+    return { width: view.getUint32(16), height: view.getUint32(20) };
+}
 
 /** `screenshot` */
 export const handleScreenshot: Handler = async (ctx, args) => {

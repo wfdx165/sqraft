@@ -52,7 +52,11 @@ export const koKR: Record<keyof typeof zhCN, string> = {
   "menu.insertImage": "이미지 삽입…",
   "menu.save": "저장",
   "menu.saveAs": "다른 이름으로 저장…",
-  "menu.exportPng": "PNG 내보내기…",
+  "menu.exportAs": "내보내기",
+  "menu.exportPng1": "PNG 1×",
+  "menu.exportPng2": "PNG 2×",
+  "menu.exportPng4": "PNG 4×",
+  "menu.exportSvg": "SVG",
   "menu.clearImageCache": "이미지 캐시 지우기",
   "menu.imageCacheCleared": "이미지 캐시 {mb}MB를 지웠습니다",
   "menu.imageCacheEmpty": "이미지 캐시가 이미 비어 있습니다",
@@ -130,6 +134,7 @@ export const koKR: Record<keyof typeof zhCN, string> = {
   // 파일 대화상자
   "fileFilter.sqraft": "Sqraft 디자인 파일",
   "fileFilter.png": "PNG 이미지",
+  "fileFilter.svg": "SVG 이미지",
 
   // 닫기 / 덮어쓰기
   "dialog.unsavedMessage": "이 문서에 저장하지 않은 변경 사항이 있습니다",
@@ -310,13 +315,6 @@ export const koKR: Record<keyof typeof zhCN, string> = {
   "shortcuts.confirmReset": "초기화할까요?",
   "shortcuts.resetDefault": "기본값 복원",
 
-  // PNG 내보내기
-  "export.title": "PNG 내보내기",
-  "export.scale": "배율",
-  "export.hint": "선택 영역은 투명 배경으로 내보냅니다. 선택이 없으면 활성 페이지를 배경과 함께 내보냅니다.",
-  "export.nothing": "내보내지 못했습니다: 내보낼 내용이 없습니다",
-  "export.exporting": "내보내는 중…",
-  "export.export": "내보내기…",
 
   // Sqraft 정보
   "about.title": "Sqraft 정보",
@@ -730,6 +728,10 @@ export const koKR: Record<keyof typeof zhCN, string> = {
   "canvas.copyNoPage": "복사하지 못했습니다: 페이지가 없습니다",
   "canvas.copyEmpty": "복사하지 못했습니다: 내용이 비었거나 너무 큽니다",
   "canvas.copiedPng": "PNG를 클립보드에 복사했습니다",
+  "canvas.copiedSvg": "SVG 소스를 클립보드에 복사했습니다",
+  "canvas.copiedRaster": "복사했습니다({count}개 노드 래스터화)",
+  "canvas.exportedRaster": "내보냈습니다. {count}개 노드가 래스터화되었습니다",
+  "canvas.exportTooLarge": "선택 영역이 너무 큽니다. 2×로 다시 시도하세요",
   "canvas.copyClipboardUnavailable": "복사하지 못했습니다: 클립보드를 사용할 수 없습니다",
   "canvas.copyFailed": "복사하지 못했습니다: {detail}",
   "canvas.zoomOut": "축소",
@@ -774,7 +776,10 @@ export const koKR: Record<keyof typeof zhCN, string> = {
   "shortcut.insertImage": "이미지 삽입",
   "shortcut.saveFile": "파일 저장",
   "shortcut.saveAs": "다른 이름으로 저장",
-  "shortcut.exportPng": "PNG 내보내기",
+  "shortcut.exportPng1": "PNG 1× 내보내기",
+  "shortcut.exportPng2": "PNG 2× 내보내기",
+  "shortcut.exportPng4": "PNG 4× 내보내기",
+  "shortcut.exportSvg": "SVG 내보내기",
   "shortcut.closeDoc": "문서 닫기",
   "shortcut.fixedCancel": "취소 / 한 단계 뒤로",
   "shortcut.fixedPanel": "키보드 단축키",
@@ -787,7 +792,11 @@ export const koKR: Record<keyof typeof zhCN, string> = {
 
   // 컨텍스트 메뉴
   "objectMenu.fitPage": "이 페이지에 맞추기",
-  "objectMenu.copyPng": "PNG로 복사",
+  "objectMenu.copyAs": "복사",
+  "objectMenu.copyPng1": "PNG 1×",
+  "objectMenu.copyPng2": "PNG 2×",
+  "objectMenu.copyPng4": "PNG 4×",
+  "objectMenu.copySvg": "SVG",
   "page.deleteConfirm": "페이지 '{name}'과(와) 모든 레이어를 삭제할까요?",
 
   // 파일 세션

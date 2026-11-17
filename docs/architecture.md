@@ -322,7 +322,7 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 | `define_property` / `set_instance_prop` / `fill_slot` | 写 | 组件属性定义、实例属性覆盖、插槽填充 |
 | `import_font` | 写 | 导入字体文件（base64，≤5MB），返回字族/字重/风格 |
 | `inspect_layout` | 读 | 世界坐标、绝对定位、自动布局与 hug/fill 数据；同响应附 `diagnostics`（与写工具同一套规则） |
-| `export_png` | 读 | 页面或选区按倍率渲染 PNG（透明底选区）；页面导出只画该页，不含根级母版 |
+| `export_as` | 读 | 页面或选区导出成数据：`format:"png"` 给 data URL（`scale` 1/2/4），`format:"svg"` 给源码；选区透明底，页面导出只画该页、不含根级母版；背景模糊节点会被栅格化并列进 `rasterized` |
 | `screenshot` | 读 | 离屏重绘文档为 PNG（不含编辑器叠加层）；可选 `region` 只截文档坐标下的某块。`format="text"` 给纯文本替代视图：区域内节点的世界坐标、解析后的填充/描边颜色、文字与诊断（最多 200 个） |
 | `document.new` | 写 | 新建未命名空稿并切换过去 |
 | `document.open` | 写 | 只能触发系统文件对话框；不接受路径参数（agent 不能读任意磁盘文件） |

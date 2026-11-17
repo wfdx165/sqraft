@@ -562,7 +562,8 @@ export function subtreeWorldBounds(state: DocState, id: NodeId): Rect | null {
   walkSubtree(state, id, (n) => {
     const quad = worldQuad(state, n.id);
     if (!quad) return;
-    const pad = effectPadding(n.style.effects);
+    // 描边有一半压在形状外：取景不算进来就会被裁掉（导出选区、离屏层同理）。
+    const pad = effectPadding(n.style.effects) + Math.max(0, n.style.strokeWidth ?? 0) / 2;
     for (const p of quad) {
       if (p.x - pad < minX) minX = p.x - pad;
       if (p.y - pad < minY) minY = p.y - pad;

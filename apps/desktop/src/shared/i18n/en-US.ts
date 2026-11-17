@@ -52,7 +52,11 @@ export const enUS: Record<keyof typeof zhCN, string> = {
   "menu.insertImage": "Insert Image…",
   "menu.save": "Save",
   "menu.saveAs": "Save As…",
-  "menu.exportPng": "Export PNG…",
+  "menu.exportAs": "Export as",
+  "menu.exportPng1": "PNG 1×",
+  "menu.exportPng2": "PNG 2×",
+  "menu.exportPng4": "PNG 4×",
+  "menu.exportSvg": "SVG",
   "menu.clearImageCache": "Clear Image Cache",
   "menu.imageCacheCleared": "Cleared {mb} MB of image cache",
   "menu.imageCacheEmpty": "Image cache is already empty",
@@ -130,6 +134,7 @@ export const enUS: Record<keyof typeof zhCN, string> = {
   // File dialogs
   "fileFilter.sqraft": "Sqraft Design File",
   "fileFilter.png": "PNG Image",
+  "fileFilter.svg": "SVG image",
 
   // Close / overwrite
   "dialog.unsavedMessage": "This document has unsaved changes",
@@ -310,13 +315,6 @@ export const enUS: Record<keyof typeof zhCN, string> = {
   "shortcuts.confirmReset": "Confirm reset?",
   "shortcuts.resetDefault": "Restore Defaults",
 
-  // Export PNG
-  "export.title": "Export PNG",
-  "export.scale": "Scale",
-  "export.hint": "Selections export with a transparent background; with no selection, the active page is exported with its background.",
-  "export.nothing": "Export failed: nothing to export",
-  "export.exporting": "Exporting…",
-  "export.export": "Export…",
 
   // About
   "about.title": "About Sqraft",
@@ -730,6 +728,10 @@ export const enUS: Record<keyof typeof zhCN, string> = {
   "canvas.copyNoPage": "Copy failed: there is no page",
   "canvas.copyEmpty": "Copy failed: the content is empty or too large",
   "canvas.copiedPng": "PNG copied to clipboard",
+  "canvas.copiedSvg": "SVG source copied to clipboard",
+  "canvas.copiedRaster": "Copied; {count} node(s) rasterized",
+  "canvas.exportedRaster": "Exported. {count} node(s) were rasterized.",
+  "canvas.exportTooLarge": "Selection too large — try 2×",
   "canvas.copyClipboardUnavailable": "Copy failed: clipboard unavailable",
   "canvas.copyFailed": "Copy failed: {detail}",
   "canvas.zoomOut": "Zoom out",
@@ -774,7 +776,10 @@ export const enUS: Record<keyof typeof zhCN, string> = {
   "shortcut.insertImage": "Insert image",
   "shortcut.saveFile": "Save file",
   "shortcut.saveAs": "Save As",
-  "shortcut.exportPng": "Export PNG",
+  "shortcut.exportPng1": "Export PNG 1×",
+  "shortcut.exportPng2": "Export PNG 2×",
+  "shortcut.exportPng4": "Export PNG 4×",
+  "shortcut.exportSvg": "Export SVG",
   "shortcut.closeDoc": "Close document",
   "shortcut.fixedCancel": "Cancel / step back",
   "shortcut.fixedPanel": "Keyboard shortcuts",
@@ -787,7 +792,11 @@ export const enUS: Record<keyof typeof zhCN, string> = {
 
   // Context menus
   "objectMenu.fitPage": "Fit this page",
-  "objectMenu.copyPng": "Copy as PNG",
+  "objectMenu.copyAs": "Copy as",
+  "objectMenu.copyPng1": "PNG 1×",
+  "objectMenu.copyPng2": "PNG 2×",
+  "objectMenu.copyPng4": "PNG 4×",
+  "objectMenu.copySvg": "SVG",
   "page.deleteConfirm": "Delete page \"{name}\" and all its layers?",
 
   // File session

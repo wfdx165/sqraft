@@ -190,22 +190,27 @@ export function registerFileChannels(): void {
   });
 
   ipcMain.handle(
-    CHANNELS.fileExportPng,
-    async (event, request: { suggestedName: string; bytes: Uint8Array }): Promise<SaveAsResult> => {
+    CHANNELS.fileExport,
+    async (event, request: { suggestedName: string; bytes: Uint8Array; format: "png" | "svg" }): Promise<SaveAsResult> => {
       const window = windowOf(event.sender);
+      const format = request.format === "svg" ? "svg" : "png";
       const options = {
         defaultPath: request.suggestedName,
-        filters: [{ name: t("fileFilter.png"), extensions: ["png"] }],
+        filters: [
+          format === "svg"
+            ? { name: t("fileFilter.svg"), extensions: ["svg"] }
+            : { name: t("fileFilter.png"), extensions: ["png"] },
+        ],
       };
       const result = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options);
       if (result.canceled || !result.filePath) return { status: "canceled" };
       try {
         // 导出的是成品图，不参与"外部改动"检测，也不进最近文件
         await writeFileAtomic(result.filePath, request.bytes);
-        logApp("info", "file/export-png ok", { path: result.filePath, bytes: request.bytes?.length ?? 0 });
+        logApp("info", "file/export ok", { path: result.filePath, bytes: request.bytes?.length ?? 0 });
         return { status: "ok", path: result.filePath, name: basename(result.filePath), mtimeMs: 0 };
       } catch (error) {
-        logApp("error", "file/export-png failed", { path: result.filePath, error: messageOf(error) });
+        logApp("error", "file/export failed", { path: result.filePath, error: messageOf(error) });
         return { status: "error", message: t("error.exportFile", { detail: messageOf(error) }) };
       }
     },

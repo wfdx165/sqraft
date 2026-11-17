@@ -62,6 +62,6 @@ export const handlers: Record<string, Handler> = {
   "duplicate_node": nodes.handleDuplicateNode,
   "import_font": document.handleImportFont,
   "inspect_layout": read.handleInspectLayout,
-  "export_png": view.handleExportPng,
+  "export_as": view.handleExportAs,
   "screenshot": view.handleScreenshot,
 };

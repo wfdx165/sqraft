@@ -20,6 +20,16 @@ function pageOf(nodeId: NodeId): NodeId | null {
   return null;
 }
 
+/** 元素/页面右键的 Copy as 子菜单：格式 × 倍率在点菜单时定死。 */
+function copyAsItems(): ContextMenuItem[] {
+  return [
+    { label: t("objectMenu.copyPng1"), run: () => hooks.copySelectionAs("png", 1) },
+    { label: t("objectMenu.copyPng2"), run: () => hooks.copySelectionAs("png", 2) },
+    { label: t("objectMenu.copyPng4"), run: () => hooks.copySelectionAs("png", 4) },
+    { label: t("objectMenu.copySvg"), run: () => hooks.copySelectionAs("svg", 1) },
+  ];
+}
+
 /** 右键页面（画布上的页面本体 / 左栏页面行）。 */
 export function openPageMenu(pageId: NodeId, position: { x: number; y: number }): void {
   if (docStore.doc.nodes[pageId]?.type !== "page") return;
@@ -36,10 +46,10 @@ export function openPageMenu(pageId: NodeId, position: { x: number; y: number })
       },
     },
     {
-      // 页面选中时没有图层选区，复制路径回退成“整页 2× 带背景”，与 ⌘⇧C 一致
-      label: t("objectMenu.copyPng"),
+      // 页面选中时没有图层选区，复制回退成“整页带背景”，与 ⌘⇧C 一致
+      label: t("objectMenu.copyAs"),
       hint: keyOf("edit.copyImage"),
-      run: () => hooks.copySelectionPng(),
+      children: copyAsItems(),
     },
     { label: t("common.rename"), hint: keyOf("edit.rename"), separator: true, run: () => hooks.startRenameOf(pageId) },
     {
@@ -68,7 +78,7 @@ export function openNodeMenu(nodeId: NodeId, position: { x: number; y: number })
   const onlyOne = ids.length === 1;
   const items: ContextMenuItem[] = [
     { label: t("common.copy"), hint: keyOf("edit.copy"), run: () => void copySelectionAction() },
-    { label: t("objectMenu.copyPng"), hint: keyOf("edit.copyImage"), run: () => hooks.copySelectionPng() },
+    { label: t("objectMenu.copyAs"), hint: keyOf("edit.copyImage"), children: copyAsItems() },
     {
       label: t("common.rename"),
       hint: keyOf("edit.rename"),

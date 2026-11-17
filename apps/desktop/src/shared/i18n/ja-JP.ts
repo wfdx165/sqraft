@@ -52,7 +52,11 @@ export const jaJP: Record<keyof typeof zhCN, string> = {
   "menu.insertImage": "画像を挿入…",
   "menu.save": "保存",
   "menu.saveAs": "別名で保存…",
-  "menu.exportPng": "PNG を書き出し…",
+  "menu.exportAs": "書き出し",
+  "menu.exportPng1": "PNG 1×",
+  "menu.exportPng2": "PNG 2×",
+  "menu.exportPng4": "PNG 4×",
+  "menu.exportSvg": "SVG",
   "menu.clearImageCache": "画像キャッシュを消去",
   "menu.imageCacheCleared": "画像キャッシュを {mb}MB 消去しました",
   "menu.imageCacheEmpty": "画像キャッシュはすでに空です",
@@ -130,6 +134,7 @@ export const jaJP: Record<keyof typeof zhCN, string> = {
   // ファイルダイアログ
   "fileFilter.sqraft": "Sqraft デザインファイル",
   "fileFilter.png": "PNG 画像",
+  "fileFilter.svg": "SVG 画像",
 
   // 閉じる / 上書き
   "dialog.unsavedMessage": "このドキュメントには保存されていない変更があります",
@@ -310,13 +315,6 @@ export const jaJP: Record<keyof typeof zhCN, string> = {
   "shortcuts.confirmReset": "リセットしますか？",
   "shortcuts.resetDefault": "デフォルトに戻す",
 
-  // PNG 書き出し
-  "export.title": "PNG を書き出し",
-  "export.scale": "スケール",
-  "export.hint": "選択範囲は透明背景で書き出されます。選択がない場合はアクティブページを背景付きで書き出します。",
-  "export.nothing": "書き出しに失敗しました：書き出す内容がありません",
-  "export.exporting": "書き出し中…",
-  "export.export": "書き出し…",
 
   // このアプリについて
   "about.title": "Sqraft について",
@@ -730,6 +728,10 @@ export const jaJP: Record<keyof typeof zhCN, string> = {
   "canvas.copyNoPage": "コピーに失敗しました：ページがありません",
   "canvas.copyEmpty": "コピーに失敗しました：内容が空か大きすぎます",
   "canvas.copiedPng": "PNG をクリップボードにコピーしました",
+  "canvas.copiedSvg": "SVG ソースをクリップボードにコピーしました",
+  "canvas.copiedRaster": "コピーしました（{count} 個のノードをラスタライズ）",
+  "canvas.exportedRaster": "書き出しました。{count} 個のノードはラスタライズされました",
+  "canvas.exportTooLarge": "選択範囲が大きすぎます。2× で試してください",
   "canvas.copyClipboardUnavailable": "コピーに失敗しました：クリップボードを利用できません",
   "canvas.copyFailed": "コピーに失敗しました：{detail}",
   "canvas.zoomOut": "縮小",
@@ -774,7 +776,10 @@ export const jaJP: Record<keyof typeof zhCN, string> = {
   "shortcut.insertImage": "画像を挿入",
   "shortcut.saveFile": "ファイルを保存",
   "shortcut.saveAs": "別名で保存",
-  "shortcut.exportPng": "PNG を書き出し",
+  "shortcut.exportPng1": "PNG 1× を書き出す",
+  "shortcut.exportPng2": "PNG 2× を書き出す",
+  "shortcut.exportPng4": "PNG 4× を書き出す",
+  "shortcut.exportSvg": "SVG を書き出す",
   "shortcut.closeDoc": "ドキュメントを閉じる",
   "shortcut.fixedCancel": "キャンセル / 一段戻る",
   "shortcut.fixedPanel": "キーボードショートカット",
@@ -787,7 +792,11 @@ export const jaJP: Record<keyof typeof zhCN, string> = {
 
   // コンテキストメニュー
   "objectMenu.fitPage": "このページに合わせる",
-  "objectMenu.copyPng": "PNG としてコピー",
+  "objectMenu.copyAs": "コピー",
+  "objectMenu.copyPng1": "PNG 1×",
+  "objectMenu.copyPng2": "PNG 2×",
+  "objectMenu.copyPng4": "PNG 4×",
+  "objectMenu.copySvg": "SVG",
   "page.deleteConfirm": "ページ「{name}」とそのすべてのレイヤーを削除しますか？",
 
   // ファイルセッション

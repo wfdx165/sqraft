@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { MenuItemConstructorOptions } from "electron";
 
 /** 主进程菜单测试用的假窗口（菜单点击时才现取，见 BrowserWindow.getAllWindows） */
@@ -15,7 +15,7 @@ vi.mock("electron", () => ({
 
 vi.mock("./image-cache", () => ({ clearImageCache: vi.fn(async () => 0) }));
 
-const { buildTemplate, runMainCommand, registerMenuChannels } = await import("./menu");
+const { buildTemplate, runMainCommand, registerMenuChannels, setMenuState } = await import("./menu");
 const { setMainLanguage } = await import("./i18n");
 
 function flatten(items: MenuItemConstructorOptions[]): MenuItemConstructorOptions[] {
@@ -220,5 +220,64 @@ describe("主进程命令派发", () => {
     expect(handler).toBeTypeOf("function");
     expect(handler!({}, "bogus")).toBe(false);
     expect(handler!({}, "file.save")).toBe(false);
+  });
+});
+
+describe("菜单按会话状态置灰", () => {
+  // 模块级状态会留在后面的用例里：测完恢复成"有文档、不在演示"
+  afterEach(() => setMenuState({ docOpen: true, presenting: false }));
+
+  /** 按中文标签取菜单项（测试默认语言是 zh-CN）。 */
+  function itemAt(label: string, platform: NodeJS.Platform = "darwin"): MenuItemConstructorOptions | undefined {
+    return flatten(buildTemplate(platform)).find((item) => item.label === label);
+  }
+
+  const docOnly = [
+    "插入图片…",
+    "保存",
+    "另存为…",
+    "关闭文档",
+    "撤销",
+    "重做",
+    "放大",
+    "缩小",
+    "演示",
+  ];
+
+  it("没有文档时，需要文档的项全部置灰", () => {
+    setMenuState({ docOpen: false, presenting: false });
+    for (const label of docOnly) {
+      expect(itemAt(label)?.enabled, label).toBe(false);
+    }
+    // 导出整组：父项与四个子项都灰
+    const exportAs = itemAt("导出为");
+    expect(exportAs?.enabled).toBe(false);
+    const children = Array.isArray(exportAs?.submenu) ? exportAs!.submenu : [];
+    expect(children.map((item) => item.enabled)).toEqual([false, false, false, false]);
+  });
+
+  it("没有文档时，新建/打开/复制/剪切/粘贴/全选仍可用", () => {
+    setMenuState({ docOpen: false, presenting: false });
+    for (const label of ["新建", "打开…", "复制", "剪切", "粘贴", "全选"]) {
+      expect(itemAt(label)?.enabled, label).not.toBe(false);
+    }
+  });
+
+  it("打开文档后全部恢复", () => {
+    setMenuState({ docOpen: true, presenting: false });
+    for (const label of [...docOnly, "导出为"]) {
+      expect(itemAt(label)?.enabled, label).not.toBe(false);
+    }
+    const exportAs = itemAt("导出为");
+    const children = Array.isArray(exportAs?.submenu) ? exportAs!.submenu : [];
+    expect(children.every((item) => item.enabled !== false)).toBe(true);
+  });
+
+  it("演示中除「演示」外全灰", () => {
+    setMenuState({ docOpen: true, presenting: true });
+    for (const label of ["保存", "撤销", "放大", "复制", "粘贴", "导出为"]) {
+      expect(itemAt(label)?.enabled, label).toBe(false);
+    }
+    expect(itemAt("演示")?.enabled).not.toBe(false);
   });
 });

@@ -724,16 +724,18 @@ export const tools: ToolDefinition[] = [
     },
   },
   {
-    name: "export_png",
+    name: "export_as",
     description:
-      "按倍率把页面或一组节点渲染成 PNG data URL（不含选中框/参考线等 UI 叠加层）。有 nodeIds 时导出选区（透明背景），否则导出整页（带页面背景）。",
+      "把页面或一组节点导出成数据返回给调用方：format=svg 给 SVG 源码，format=png 给 PNG data URL。不写剪贴板、不写文件。有 nodeIds 时导出选区（透明背景），否则导出整页（带页面背景、不含根级主组件）。含背景模糊的节点会被栅格化（拍平后背景模糊效果会丢失），名字出现在 rasterized 里。",
     input_schema: {
       type: "object",
       properties: {
+        format: { type: "string", enum: ["png", "svg"], description: "必填：png=数据 URL，svg=源码字符串" },
         pageId: { type: "string", description: "页面 id；省略时用当前活动页" },
         nodeIds: { type: "array", items: { type: "string" }, description: "要导出的节点（透明背景）" },
-        scale: { type: "number", description: "倍率 1–4，默认 2" },
+        scale: { type: "number", enum: [1, 2, 4], description: "只对 png 有效，默认 2" },
       },
+      required: ["format"],
       additionalProperties: false,
     },
   },

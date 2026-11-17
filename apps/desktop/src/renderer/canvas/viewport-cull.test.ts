@@ -122,8 +122,9 @@ describe("视口剔除（ADR-0032）", () => {
     const exact = subtreeWorldBounds(store.doc, page.id)!;
     expect(fast.x).toBeLessThanOrEqual(exact.x);
     expect(fast.y).toBeLessThanOrEqual(exact.y);
-    expect(fast.x + fast.width).toBeGreaterThanOrEqual(exact.x + exact.width + 4 - 1e-6);
-    expect(fast.y + fast.height).toBeGreaterThanOrEqual(exact.y + exact.height + 4 - 1e-6);
+    // 两边都按描边宽度外扩过了，fast 只需要不小于 exact
+    expect(fast.x + fast.width).toBeGreaterThanOrEqual(exact.x + exact.width - 1e-6);
+    expect(fast.y + fast.height).toBeGreaterThanOrEqual(exact.y + exact.height - 1e-6);
   });
 
   it("缓存随文档版本失效：改动后包围盒跟着变", () => {

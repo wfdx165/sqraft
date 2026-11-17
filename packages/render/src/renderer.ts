@@ -198,6 +198,12 @@ function drawNode(
   options: DrawOptions,
 ): void {
   if (!node.visible) return;
+  // 栅格化兜底：整棵子树已经画好，直接把位图贴回去（SVG 导出用）
+  const raster = options.rasterFallback?.get(node.id);
+  if (raster) {
+    backend.drawRasterFallback?.(raster);
+    return;
+  }
   // 屏幕上不到半个设备像素的叶子直接跳过（缩小看全局时省掉成千上万次绘制；导出不传 pixelRatio，不受影响）
   if (ctx.pixelRatio && node.children.length === 0 && tooSmallToSee(node, ctx.pixelRatio)) return;
   // 数值 Token 在读时解析：字号 / 描边宽 / 圆角等统一在这里落到字面量。
@@ -324,6 +330,11 @@ export interface DrawOptions {
    * 与 `onlyRootIds` 互斥：选区导出走 `onlyRootIds`。
    */
   onlyPageIds?: readonly NodeId[];
+  /**
+   * 栅格化兜底（SVG 导出用）：命中的节点整棵子树已经被渲染成位图，
+   * `rect` 是它在页面坐标系里的包围盒。命中时不画内容、不套效果。
+   */
+  rasterFallback?: ReadonlyMap<NodeId, { href: string; rect: Rect }>;
 }
 
 /**
