@@ -15,9 +15,6 @@ vi.mock("electron", () => ({
 
 vi.mock("./image-cache", () => ({ clearImageCache: vi.fn(async () => 0) }));
 
-const { buildTemplate, runMainCommand, registerMenuChannels } = await import("./menu");
-vi.mock("./image-cache", () => ({ clearImageCache: vi.fn(async () => 0) }));
-
 const { buildTemplate, runMainCommand, registerMenuChannels, setMenuState } = await import("./menu");
 const { setMainLanguage } = await import("./i18n");
 
