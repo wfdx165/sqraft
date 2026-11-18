@@ -2399,8 +2399,8 @@ onMounted(() => {
       startLabelRename(node);
       return;
     }
-    if (node.type === "component") {
-      // 母版回根节点：输入框贴在它的名称标签上，和画布双击标签一致
+    if (node.type === "component" || node.type === "componentSet") {
+      // 母版/组件集合回根节点：输入框贴在它的名称标签上，和画布双击标签一致
       select([id]);
       startLabelRename(node);
       return;

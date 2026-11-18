@@ -43,6 +43,16 @@ export interface DocumentHost {
   }): Promise<{ image?: string; svg?: string; rasterized?: string[] }>;
   /** 导入字体（字节内联，不收路径），返回字族/字重/风格 */
   importFont?(fileName: string, dataBase64: string): Promise<{ family: string; weight: number; style: string } | null>;
+  /**
+   * 把 SVG 源码导入页面（不读磁盘、不访问网络）；返回新建 frame 与缺字体。
+   * 含暂不支持特性时返回 null，由工具层报错。
+   */
+  importSvg?(request: {
+    svg: string;
+    pageId: NodeId;
+    x?: number;
+    y?: number;
+  }): Promise<{ frameId: NodeId; width: number; height: number; rasterized: string[]; missingFonts: string[] } | null>;
 }
 
 /** 执行器向外提供的宿主能力（由渲染层注入；工具层不碰文件系统与 DOM）。 */

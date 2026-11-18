@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { createDocWithPage, createNode, firstPageId } from "@sqraft/core";
-import { exportFileName, exportObjectName } from "./export-name";
+import { exportFileName, exportMatrixObjectName, exportObjectName } from "./export-name";
 
 describe("导出 PNG 的文件名", () => {
   it("文档名 + 对象名 + 倍率", () => {
@@ -29,6 +29,32 @@ describe("导出 PNG 的文件名", () => {
     expect(exportFileName("未命名", "矩形", "svg")).toBe("未命名-矩形.svg");
     expect(exportFileName("未命名", "矩形", "svg", 2)).toBe("未命名-矩形.svg");
     expect(exportFileName("未命名", "", "svg")).toBe("未命名.svg");
+  });
+
+  it("ZIP 导出包也不带倍率后缀", () => {
+    expect(exportFileName("未命名", "矩形", "zip")).toBe("未命名-矩形.zip");
+    expect(exportFileName("电商改版.sqraft", "", "zip")).toBe("电商改版.zip");
+  });
+});
+
+describe("多倍率导出的对象名", () => {
+  it("页面名在前，单选中对象时再接节点名；整页不重复", () => {
+    const doc = createDocWithPage("首页");
+    const pageId = firstPageId(doc)!;
+    const a = createNode("rect", { parentId: pageId, name: "按钮" });
+    const b = createNode("rect", { parentId: pageId, name: "卡片" });
+    doc.nodes[a.id] = a;
+    doc.nodes[b.id] = b;
+
+    expect(exportMatrixObjectName(doc, { pageId })).toBe("首页");
+    expect(exportMatrixObjectName(doc, { pageId, nodeIds: [a.id] })).toBe("首页-按钮");
+    expect(exportMatrixObjectName(doc, { pageId, nodeIds: [a.id, b.id] })).toBe("首页");
+    expect(exportMatrixObjectName(doc, { pageId: null, nodeIds: [a.id] })).toBe("按钮");
+  });
+
+  it("页面名与对象名经 exportFileName 后得到完整前缀", () => {
+    expect(exportFileName("未命名", "首页-按钮", "zip")).toBe("未命名-首页-按钮.zip");
+    expect(exportFileName("未命名", "首页-按钮", "png", 2)).toBe("未命名-首页-按钮@2.png");
   });
 });
 

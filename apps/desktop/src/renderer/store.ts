@@ -141,6 +141,9 @@ export function select(ids: NodeId[]): void {
   ui.selection = ids;
 }
 
+/** 多倍率导出对话框（纯 UI）。 */
+export const exportMatrixUi = reactive({ open: false });
+
 /** 由 CanvasView 注入的实现（解耦组件引用）。 */
 export const hooks: {
   /** 离屏重绘文档（不含 UI 叠加层）；region 为文档坐标，可只取一块。 */

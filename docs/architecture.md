@@ -76,13 +76,13 @@ packages/ai-tools/src/
 
 自动布局相关字段（子项侧）：`layoutSizingW/H`（fixed / hug / fill）、`layoutMinW/H`、`layoutMaxW/H`、`layoutAbsolute`。文本节点另有 `textAutoResize`（auto-width / auto-height / fixed）、`listType`、`truncate`。
 
-节点类型（v1）：`page / frame / group / rect / ellipse / line / polygon / star / path / text / image / instance / component / slot`。
+节点类型（v1）：`page / frame / group / rect / ellipse / line / polygon / star / path / text / image / instance / component / componentSet / slot`。根节点只放页面、主组件与组件集合（ADR-0025 / ADR-0038）。
 
 **参数化多边形**：`polygon` 节点持有可选的 `sides`（3–12，默认 3），顶点由包围盒推导——包围盒就是形状的外接矩形，改宽高或改边数时顶点重算。三角形只是 `sides: 3` 的实例，不存在独立的 `triangle` 类型。命令层在任何入口夹紧边数，GUI 与 AI 共用同一规则。详见 ADR-0013。
 
 **矢量路径**：`path` 节点持有可选的 `vector` 字段（`{ closed, anchors }`）。锚点是节点本地坐标，`in/out` 是相对锚点的柄偏移（全 0 = 尖角）；节点框由锚点 + 手柄的包围盒推导。命令层收到 `vector` 时会把路径归一化到最小坐标 0，并把平移量计入节点 `x / y`，因此 GUI 与 AI 都可以直接给父容器坐标。详见 ADR-0012。
 
-**组件、实例与插槽**：`component` 是文档根节点上的主组件（不属于任何页面，见 ADR-0025），持有 `propertyDefs`（文本、布尔、实例替换三种组件属性）；`instance` 是物化子树，持有 `componentId / mainId / propValues / overrides`，子孙节点都是真实节点并带 `mainId` 指回母版；`slot` 是具名内容区域，实例侧用 `slotFilled` 标记默认内容是否已被替换。实例子孙 id 由「实例 id + 母版节点身份键」确定性派生，保证同步、撤销与 AI 读写一致。详见 ADR-0014 与 §7。
+**组件、实例与插槽**：`component` 是文档根节点上的主组件（不属于任何页面，见 ADR-0025），持有 `propertyDefs`（文本、布尔、实例替换三种组件属性）；`componentSet` 也是根节点，只装 `component` 子节点，持有 `variantProperties`（枚举属性）与 `variantMap`（组合键 → 变体组件 id），子节点用 wrap 自动布局排布（ADR-0038）；`instance` 是物化子树，持有 `componentId / mainId / propValues / overrides`，子孙节点都是真实节点并带 `mainId` 指回母版；`slot` 是具名内容区域，实例侧用 `slotFilled` 标记默认内容是否已被替换。实例子孙 id 由「实例 id + 母版节点身份键」确定性派生，保证同步、撤销与 AI 读写一致。详见 ADR-0014 与 §7。
 
 ## 4. 命令系统
 
@@ -92,7 +92,7 @@ packages/ai-tools/src/
 2. **可逆**：每条命令实现 `invert(doc)`，得到逆命令入撤销栈。
 3. **原子**：一批命令先整批校验（`vector` 合法性等）再执行——要么全成、要么全不成；中途抛错不留「已生效但无法撤销」的改动。
 4. **可合并**：连续手势（拖拽、调间距）走事务——`begin / update(重放) / commit`，提交时合并为一条命令写入 Op Log。
-5. **命令展开**：`component.create`、`instance.create`、`instance.swap`、`component.detach`、`slot.*`、`property.*`、`instance.resetOverride` 在 `apply` 前展开成基础节点命令；母版同步与自动覆盖记录作为同一批命令追加。批命令校验时会把「同一批里先创建、后引用」的节点视为已存在。所有逆命令进同一个撤销条目。
+5. **命令展开**：`component.create`、`instance.create`、`instance.swap`、`component.detach`、`slot.*`、`property.*`、`variant.*`、`instance.resetOverride` 在 `apply` 前展开成基础节点命令；母版同步与自动覆盖记录作为同一批命令追加。批命令校验时会把「同一批里先创建、后引用」的节点视为已存在。所有逆命令进同一个撤销条目。
 
 撤销栈存逆命令流；每 N 条命令做一次**检查点快照**（内存），用于快速回退与崩溃恢复。文件持久化为"快照 + 增量操作日志"（见 §10）。
 
@@ -319,10 +319,12 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 | `duplicate_node` / `group_nodes` / `arrange_nodes` | 写 | 复制、分组/解组、对齐/分布 |
 | `move_node` | 写 | 换父级（等价画布拖动，世界坐标不变；自动布局容器默认进流） |
 | `create_instance` / `swap_instance` / `detach_instance` | 写 | 组件实例的建立、替换与解绑 |
-| `define_property` / `set_instance_prop` / `fill_slot` | 写 | 组件属性定义、实例属性覆盖、插槽填充 |
+| `define_property` / `set_instance_prop` / `fill_slot` | 写 | 组件属性定义、实例属性覆盖、插槽填充；`set_instance_prop` 的 `propertyId` 命中变体属性时等价于切换变体 |
+| `create_component_set` / `add_variant` | 写 | 把 2+ 根级主组件组成组件集合（组件名解析 `Property=Value`），复制现有变体并写入新的属性组合；切变体保留几何、属性值与同名覆盖 |
 | `import_font` | 写 | 导入字体文件（base64，≤5MB），返回字族/字重/风格 |
 | `inspect_layout` | 读 | 世界坐标、绝对定位、自动布局与 hug/fill 数据；同响应附 `diagnostics`（与写工具同一套规则） |
-| `export_as` | 读 | 页面或选区导出成数据：`format:"png"` 给 data URL（`scale` 1/2/4），`format:"svg"` 给源码；选区透明底，页面导出只画该页、不含根级母版；背景模糊节点会被栅格化并列进 `rasterized` |
+| `export_as` | 读 | 页面或选区导出成数据：`format:"png"` 给 data URL（`scale` 1/2/4），`format:"svg"` 给源码；选区透明底，页面导出只画该页、不含根级母版；背景模糊与 angular/diamond 渐变节点会被栅格化并列进 `rasterized` |
+| `import_svg` | 写 | SVG 源码（≤5MB）导入成可编辑节点，包在一个 frame 里、一个撤销步；支持形状/路径/文本/本地 use/纯色与线性径向渐变；不支持的特性按元素栅格化并以图片节点落回原位，清单进 `rasterized` |
 | `screenshot` | 读 | 离屏重绘文档为 PNG（不含编辑器叠加层）；可选 `region` 只截文档坐标下的某块。`format="text"` 给纯文本替代视图：区域内节点的世界坐标、解析后的填充/描边颜色、文字与诊断（最多 200 个） |
 | `document.new` | 写 | 新建未命名空稿并切换过去 |
 | `document.open` | 写 | 只能触发系统文件对话框；不接受路径参数（agent 不能读任意磁盘文件） |

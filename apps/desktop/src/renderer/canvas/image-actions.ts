@@ -7,7 +7,12 @@
 import { createNode, type DocNode, type NodeId } from "@sqraft/core";
 import { putAsset } from "../assets";
 import { docStore, select } from "../store";
+import { showToast } from "../toast";
 import { t } from "../i18n";
+import { insertSvgFrame } from "./svg-insert";
+
+/** SVG 源文件上限（与导入规格一致）。 */
+const MAX_SVG_BYTES = 5 * 1024 * 1024;
 
 export interface ImageInsertDeps {
   /** 当前视口（世界坐标原点 + 像素尺寸 + 缩放） */
@@ -36,6 +41,7 @@ export async function insertImages(
   files: readonly { bytes: Uint8Array; name: string }[],
   deps: ImageInsertDeps,
   anchor?: { x: number; y: number },
+  options: { svgAsImage?: boolean } = {},
 ): Promise<void> {
   // 落在哪一页：拖放点/视口中心下的页面优先，其次活动页。
   // 只认 activePageId 的话，拖动模式或视角停在别的页时图片会插到看不见的页里。
@@ -49,6 +55,7 @@ export async function insertImages(
 
   const problems: string[] = [];
   const nodes: DocNode[] = [];
+  const svgFrames: DocNode[] = [];
   // 落点夹在页面内：视口中心可能落在页面外（缩放很小时），不夹会把图插到画板外
   const local = anchor ? { x: anchor.x - page.x, y: anchor.y - page.y } : { x: 40, y: 40 };
   let cursorX = Math.round(Math.min(Math.max(0, local.x), Math.max(0, page.width - 40)));
@@ -56,6 +63,40 @@ export async function insertImages(
   const maxSide = Math.max(page.width, page.height) * 0.8;
 
   for (const file of files) {
+    // SVG 默认按矢量导入；⌥ 拖入或解析失败时退回图片
+    if (!options.svgAsImage && /\.svg$/i.test(file.name)) {
+      if (file.bytes.length > MAX_SVG_BYTES) {
+        problems.push(`${file.name}：${t("svgImport.tooLarge", { mb: Math.round(MAX_SVG_BYTES / 1024 / 1024) })}`);
+        continue;
+      }
+      let inserted: Awaited<ReturnType<typeof insertSvgFrame>> | null = null;
+      try {
+        inserted = await insertSvgFrame({
+          text: new TextDecoder().decode(file.bytes),
+          name: file.name,
+          pageId,
+          x: cursorX,
+          y: cursorY,
+        });
+      } catch (error) {
+        problems.push(`${file.name}：${error instanceof Error ? error.message : String(error)}`);
+      }
+      if (!inserted) continue;
+      if (inserted.status === "ok") {
+        const frame = docStore.doc.nodes[inserted.result.frameId];
+        if (frame) svgFrames.push(frame);
+        if (inserted.result.missingFonts.length > 0) {
+          showToast(t("svgImport.missingFonts", { fonts: inserted.result.missingFonts.join(", ") }), "error");
+        }
+        if (inserted.result.rasterized.length > 0) {
+          showToast(t("svgImport.rasterized", { count: inserted.result.rasterized.length }), "info");
+        }
+        cursorX += inserted.result.width + 16;
+        continue;
+      }
+      showToast(t("svgImport.fallback"));
+    }
+
     const asset = await putAsset(file.bytes);
     if (!asset.ok) {
       problems.push(`${file.name}：${asset.reason}`);
@@ -85,8 +126,11 @@ export async function insertImages(
 
   if (nodes.length > 0) {
     docStore.apply({ type: "node.create", params: { nodes, parentId: pageId } }, "插入图片");
+  }
+  const selected = [...nodes.map((node) => node.id), ...svgFrames.map((frame) => frame.id)];
+  if (selected.length > 0) {
     deps.focusPage(pageId);
-    select(nodes.map((node) => node.id));
+    select(selected);
   }
   if (problems.length > 0) await window.sqraft.dialog.error(problems.join("\n"));
 }
@@ -96,13 +140,14 @@ export async function insertFromFiles(
   files: FileList | readonly File[],
   deps: ImageInsertDeps,
   anchor?: { x: number; y: number },
+  options: { svgAsImage?: boolean } = {},
 ): Promise<void> {
   const payload: { bytes: Uint8Array; name: string }[] = [];
   for (const file of Array.from(files)) {
     if (!file.type.startsWith("image/") && !/\.(png|jpe?g|webp|gif|svg)$/i.test(file.name)) continue;
     payload.push({ bytes: new Uint8Array(await file.arrayBuffer()), name: file.name });
   }
-  if (payload.length > 0) await insertImages(payload, deps, anchor);
+  if (payload.length > 0) await insertImages(payload, deps, anchor, options);
 }
 
 /** 拖入文件：只要不是 .sqraft（那个交给主进程打开），其它图片就地插入。 */
@@ -119,7 +164,8 @@ export function dropImages(
   const anchor = rect
     ? deps.screenToWorld(event.clientX - rect.left, event.clientY - rect.top)
     : undefined;
-  void insertFromFiles(files, deps, anchor);
+  // ⌥ 拖入 = 明确要位图，绕过 SVG 矢量导入
+  void insertFromFiles(files, deps, anchor, { svgAsImage: event.altKey });
 }
 
 /** 文件选择框的 change：读完立刻清空，选同一个文件也能再次触发。 */

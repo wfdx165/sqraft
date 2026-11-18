@@ -8,7 +8,7 @@ import { worldToScreen, type Viewport } from "@sqraft/render";
 import { docStore } from "../store";
 import { pageAt } from "./hit";
 
-const CONTAINER_TYPES = new Set(["frame", "component", "instance"]);
+const CONTAINER_TYPES = new Set(["frame", "component", "componentSet", "instance"]);
 
 /** 指针下最深的容器（画板 / 组件 / 实例）；页面与普通节点不算。 */
 export function hoverContainerAt(wx: number, wy: number): NodeId | null {

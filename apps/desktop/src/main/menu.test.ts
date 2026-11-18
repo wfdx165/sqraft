@@ -253,7 +253,7 @@ describe("菜单按会话状态置灰", () => {
     const exportAs = itemAt("导出为");
     expect(exportAs?.enabled).toBe(false);
     const children = Array.isArray(exportAs?.submenu) ? exportAs!.submenu : [];
-    expect(children.map((item) => item.enabled)).toEqual([false, false, false, false]);
+    expect(children.map((item) => item.enabled)).toEqual([false, false, false, false, false]);
   });
 
   it("没有文档时，新建/打开/复制/剪切/粘贴/全选仍可用", () => {

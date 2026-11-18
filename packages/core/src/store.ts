@@ -4,7 +4,7 @@
  */
 
 import type { ComponentPropertyDef, DocNode, DocState, NodeId } from "./model";
-import { createNode, walkSubtree, worldRect } from "./model";
+import { createNode, isRootNodeType, walkSubtree, worldRect } from "./model";
 import { AppError } from "./errors";
 import { applyTokenCommand } from "./token-commands";
 import { clampSides } from "./polygon";
@@ -30,6 +30,14 @@ import { collectLayoutContainers, solveContainer } from "./layout-pass";
 import { expandDuplicate, type DuplicateParams } from "./duplicate";
 import { expandAlign, expandDistribute, expandReorder, type AlignParams, type DistributeParams, type ReorderParams } from "./arrange";
 import { expandGroup, expandUngroup, type GroupParams } from "./group";
+import {
+  planVariantAdd,
+  planVariantCombine,
+  planVariantRemove,
+  planVariantRemoveValue,
+  planVariantSet,
+  planVariantUpdateProperty,
+} from "./variant";
 import { expandScale, type ScaleParams } from "./scale";
 import { expandRotate, type RotateParams } from "./rotate";
 import { allowsLinksAt, assertNodeCreateLinks, assertNodeUpdateLinks, linkCleanupForPage, linkStripTargets, normalizeInteractions } from "./interaction";
@@ -80,6 +88,30 @@ export type Command =
   | { type: "property.delete"; params: { componentId: NodeId; propertyId: string } }
   /** 设置或清除实例属性值；null 表示回落母版 */
   | { type: "property.set"; params: { instanceId: NodeId; propertyId: string; value: string | boolean | NodeId | null } }
+  /** 把 2+ 根级主组件组成组件集合（ADR-0038） */
+  | { type: "variant.combine"; params: { nodeIds: NodeId[]; setId: NodeId } }
+  /** 复制一个现有变体并写入新的属性组合；idMap 覆盖整棵子树 */
+  | {
+      type: "variant.add";
+      params: {
+        setId: NodeId;
+        sourceComponentId: NodeId;
+        values: Record<string, string>;
+        componentId: NodeId;
+        idMap: Record<NodeId, NodeId>;
+      };
+    }
+  /** 实例切换变体：保留几何、属性值与同名覆盖 */
+  | { type: "variant.set"; params: { instanceId: NodeId; values: Record<string, string> } }
+  /** 重命名变体属性或某个值，批量同步映射键与变体名 */
+  | {
+      type: "variant.updateProperty";
+      params: { setId: NodeId; propertyId: string; name?: string; renameValue?: { from: string; to: string } };
+    }
+  /** 删除变体；有实例引用时拒绝 */
+  | { type: "variant.remove"; params: { setId: NodeId; componentId: NodeId } }
+  /** 删除某个属性值及其所有变体；有实例引用时整体拒绝 */
+  | { type: "variant.removeValue"; params: { setId: NodeId; propertyId: string; value: string } }
   /** 直接把实例换成另一个组件（保留位置、同名插槽内容） */
   | { type: "instance.swap"; params: { instanceId: NodeId; componentId: NodeId } }
   /** 实例脱离为普通画板；嵌套实例与插槽内容保留 */
@@ -553,6 +585,20 @@ export class DocStore {
     const out: Command[] = [];
     if (node.type === "page") out.push(...this.expandPageLinkCleanup(node.id));
 
+    // 变体：有实例引用时拒绝；没有则顺手清掉集合里的映射
+    const set = node.type === "component" && node.parentId ? this.state.nodes[node.parentId] : null;
+    if (set?.type === "componentSet") {
+      const used = Object.values(this.state.nodes).some(
+        (entry) => entry.type === "instance" && entry.componentId === node.id,
+      );
+      if (used) throw new Error(`变体「${node.name}」仍有实例引用，不能删除`);
+      const nextMap: Record<NodeId, NodeId> = {};
+      for (const [key, id] of Object.entries(set.variantMap ?? {})) {
+        if (id !== node.id) nextMap[key] = id;
+      }
+      out.push({ type: "node.update", params: { nodeId: set.id, patch: { variantMap: nextMap } } });
+    }
+
     const components = new Set<NodeId>();
     if (node.type === "component") components.add(node.id);
     walkSubtree(this.state, node.id, (n) => {
@@ -601,7 +647,16 @@ export class DocStore {
     const out: Command[] = [];
     for (const cmd of list) {
       if (cmd.type === "component.create") out.push(...this.expandComponentCreate(cmd, nameFor));
-      else if (cmd.type === "node.duplicate") out.push(...expandDuplicate(this.state, cmd.params));
+      else if (cmd.type === "node.duplicate") {
+        for (const id of cmd.params.nodeIds) {
+          const node = this.state.nodes[id];
+          if (node?.type !== "component" || !node.parentId) continue;
+          if (this.state.nodes[node.parentId]?.type === "componentSet") {
+            throw new Error("变体不能用普通复制；请在组件面板或右键菜单里「复制为新变体」");
+          }
+        }
+        out.push(...expandDuplicate(this.state, cmd.params));
+      }
       else if (cmd.type === "node.reorder") out.push(...expandReorder(this.state, cmd.params));
       else if (cmd.type === "node.align") out.push(...expandAlign(this.state, cmd.params));
       else if (cmd.type === "node.distribute") out.push(...expandDistribute(this.state, cmd.params));
@@ -634,6 +689,12 @@ export class DocStore {
       else if (cmd.type === "property.rename") out.push(...this.expandPropertyRename(cmd));
       else if (cmd.type === "property.delete") out.push(...this.expandPropertyDelete(cmd));
       else if (cmd.type === "property.set") out.push(...this.expandPropertySet(cmd));
+      else if (cmd.type === "variant.combine") out.push(...planVariantCombine(this.state, cmd.params));
+      else if (cmd.type === "variant.add") out.push(...planVariantAdd(this.state, cmd.params));
+      else if (cmd.type === "variant.set") out.push(...planVariantSet(this.state, cmd.params));
+      else if (cmd.type === "variant.updateProperty") out.push(...planVariantUpdateProperty(this.state, cmd.params));
+      else if (cmd.type === "variant.remove") out.push(...planVariantRemove(this.state, cmd.params));
+      else if (cmd.type === "variant.removeValue") out.push(...planVariantRemoveValue(this.state, cmd.params));
       else if (cmd.type === "instance.swap") out.push(...this.expandInstanceSwap(cmd));
       else if (cmd.type === "component.detach") out.push(...this.expandDetach(cmd.params.instanceId));
       else if (cmd.type === "node.delete") out.push(...this.expandDelete(cmd));
@@ -1067,17 +1128,53 @@ export class DocStore {
         assertNodeCreateLinks(this.state, cmd.params.nodes, cmd.params.parentId, pendingTypes, deletedPages);
         const rootNode = cmd.params.nodes[0];
         const components = cmd.params.nodes.filter((n) => n.type === "component");
-        // 主组件是单独的根节点：一批里最多一个，且必须在首位、父级为根
-        if (components.length > 0 && (components.length > 1 || rootNode?.type !== "component")) {
+        const sets = cmd.params.nodes.filter((n) => n.type === "componentSet");
+        // 组件集合是单独的根节点：一批里最多一个、必须在首位、父级为根
+        if (sets.length > 0 && (sets.length > 1 || rootNode?.type !== "componentSet" || cmd.params.parentId !== null)) {
+          throw new Error("组件集合必须是单独的根节点");
+        }
+        const setBatch = rootNode?.type === "componentSet";
+        // 主组件是单独的根节点：一批里最多一个，且必须在首位（组件集合的整树复制除外）
+        if (!setBatch && components.length > 0 && (components.length > 1 || rootNode?.type !== "component")) {
           throw new Error("主组件必须是单独的根节点");
         }
-        // 根节点只有页面与主组件（ADR-0025）；主组件反过来也只能放在根上
-        if (cmd.params.parentId === null) {
-          if (rootNode && rootNode.type !== "page" && rootNode.type !== "component") {
-            throw new Error("文档根节点只放页面与主组件");
+        if (setBatch) {
+          const byId = new Map(cmd.params.nodes.map((n) => [n.id, n]));
+          for (const component of components) {
+            let cur = component.parentId;
+            let inside = false;
+            while (cur) {
+              if (cur === rootNode.id) {
+                inside = true;
+                break;
+              }
+              cur = byId.get(cur)?.parentId ?? null;
+            }
+            if (!inside) throw new Error("组件集合只能包含主组件");
           }
-        } else if (components.length > 0) {
-          throw new Error("主组件必须放在文档根节点");
+          // 集合的直接子节点只能是主组件（整树复制/粘贴时也守住）
+          for (const childId of rootNode.children) {
+            const child = byId.get(childId) ?? this.state.nodes[childId];
+            if (child && child.type !== "component") throw new Error("组件集合只能包含主组件");
+          }
+        }
+        // 根节点只有页面、主组件与组件集合（ADR-0025 / ADR-0038）
+        if (cmd.params.parentId === null) {
+          if (rootNode && !isRootNodeType(rootNode.type)) {
+            throw new Error("文档根节点只放页面与主组件或组件集合");
+          }
+          break;
+        }
+        // 主组件只能放在根或组件集合里
+        if (components.length > 0) {
+          const parentType = this.state.nodes[cmd.params.parentId]?.type ?? pendingTypes.get(cmd.params.parentId);
+          if (parentType !== "componentSet") throw new Error("主组件必须放在文档根节点或组件集合里");
+        }
+        {
+          const parentType = this.state.nodes[cmd.params.parentId]?.type ?? pendingTypes.get(cmd.params.parentId);
+          if (parentType === "componentSet" && rootNode?.type !== "component") {
+            throw new Error("组件集合只能包含主组件");
+          }
         }
         break;
       }
@@ -1115,13 +1212,39 @@ export class DocStore {
         }
         if (node.type === "page") throw new Error("页面不能重定父级");
         if (parentId === null) {
-          // 提到/移回文档根：只允许主组件（转组件时同批里会先把类型改成 component），
+          // 提到/移回文档根：只允许主组件与组件集合；
           // 已在根上的主组件可以借此按 index 调整绘制顺序
           const targetType = pendingTypes.get(nodeId) ?? node.type;
-          if (targetType !== "component") throw new Error("文档根节点只放页面与主组件");
+          if (!isRootNodeType(targetType) || targetType === "page") {
+            throw new Error("文档根节点只放页面与主组件或组件集合");
+          }
+          if (node.parentId) {
+            const oldParent = this.state.nodes[node.parentId];
+            if (oldParent?.type === "componentSet") throw new Error("变体不能移出组件集合");
+          }
           break;
         }
-        if (node.type === "component") throw new Error("主组件固定在文档根节点，不能移进其它节点");
+        if (node.type === "component") {
+          const parentType = this.state.nodes[parentId]?.type ?? pendingTypes.get(parentId);
+          if (parentType !== "componentSet") {
+            throw new Error("主组件固定在文档根节点（或组件集合里），不能移进其它节点");
+          }
+          const oldParent = node.parentId ? this.state.nodes[node.parentId] : null;
+          if (oldParent?.type === "componentSet" && oldParent.id !== parentId) {
+            throw new Error("变体不能移到别的组件集合");
+          }
+          // 已存在的集合：只有 variantMap 里登记过的组件才能从这个入口进来
+          // （combine 时集合在同批新建，state 里还没有，由变体命令自己负责映射）
+          const targetSet = this.state.nodes[parentId];
+          if (targetSet?.type === "componentSet" && !Object.values(targetSet.variantMap ?? {}).includes(nodeId)) {
+            throw new Error("组件只能通过「复制为新变体」加入集合");
+          }
+          break;
+        }
+        if (node.type === "componentSet") throw new Error("组件集合固定在文档根节点");
+        if ((this.state.nodes[parentId]?.type ?? pendingTypes.get(parentId)) === "componentSet") {
+          throw new Error("组件集合只能包含主组件；请用「复制为新变体」加入");
+        }
         if (!node.parentId || !this.state.nodes[node.parentId]) throw new Error("根节点不能重定父级");
         const parent = this.state.nodes[parentId];
         if (!parent) {
@@ -1460,6 +1583,13 @@ export class DocStore {
       case "instance.swap":
       case "component.detach":
         throw new Error("实例生命周期命令必须先展开");
+      case "variant.combine":
+      case "variant.add":
+      case "variant.set":
+      case "variant.updateProperty":
+      case "variant.remove":
+      case "variant.removeValue":
+        throw new Error("变体命令必须先展开");
       case "node.reparent": {
         const { nodeId, parentId, index, x, y } = cmd.params;
         const node = this.state.nodes[nodeId];

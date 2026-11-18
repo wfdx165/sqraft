@@ -319,3 +319,89 @@ describe("SvgBackend：两端对齐", () => {
     expect(render(store.doc)).toContain("<tspan");
   });
 });
+
+describe("SvgBackend：渐变", () => {
+  it("线性渐变写进 defs，填充引用 url(#id)", () => {
+    const { store, pageId } = withPage();
+    const rect = createNode("rect", {
+      parentId: pageId,
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 50,
+      style: {
+        fill: {
+          type: "linear",
+          from: { x: 0, y: 0.5 },
+          to: { x: 1, y: 0.5 },
+          stops: [
+            { offset: 0, color: { value: "#000000" } },
+            { offset: 1, color: { value: "#ffffff" } },
+          ],
+        },
+      },
+    });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+    const svg = render(store.doc);
+    expect(svg).toContain("<linearGradient");
+    expect(svg).toContain('gradientUnits="objectBoundingBox"');
+    expect(svg).toContain('x1="0" y1="0.5" x2="1" y2="0.5"');
+    expect(svg).toContain('stop-color="#000000"');
+    expect(svg).toContain('stop-color="#ffffff"');
+    expect(svg).toContain('fill="url(#g0)"');
+  });
+
+  it("径向渐变带半径与焦点", () => {
+    const { store, pageId } = withPage();
+    const rect = createNode("rect", {
+      parentId: pageId,
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 100,
+      style: {
+        fill: {
+          type: "radial",
+          from: { x: 0.5, y: 0.5 },
+          to: { x: 1, y: 0.5 },
+          focus: { x: 0.4, y: 0.4 },
+          stops: [
+            { offset: 0, color: { value: "#111111" } },
+            { offset: 1, color: { value: "#222222" } },
+          ],
+        },
+      },
+    });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+    const svg = render(store.doc);
+    expect(svg).toContain("<radialGradient");
+    expect(svg).toContain('r="0.5"');
+    expect(svg).toContain('fx="0.4" fy="0.4"');
+  });
+
+  it("angular / diamond 在 SVG 里退回第一个 stop（宿主会先栅格化该节点）", () => {
+    const { store, pageId } = withPage();
+    const rect = createNode("rect", {
+      parentId: pageId,
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 100,
+      style: {
+        fill: {
+          type: "angular",
+          from: { x: 0.5, y: 0.5 },
+          to: { x: 1, y: 0.5 },
+          stops: [
+            { offset: 0, color: { value: "#abcdef" } },
+            { offset: 1, color: { value: "#ffffff" } },
+          ],
+        },
+      },
+    });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+    const svg = render(store.doc);
+    expect(svg).toContain('fill="#abcdef"');
+    expect(svg).not.toContain("<linearGradient");
+  });
+});

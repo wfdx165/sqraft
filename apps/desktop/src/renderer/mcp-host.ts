@@ -30,6 +30,7 @@ import { appInfo } from "./app-meta";
 import { measureText, textSizeOf } from "./text-metrics";
 import { putAsset } from "./assets";
 import { putFont } from "./fonts";
+import { insertSvgFrame } from "./canvas/svg-insert";
 import { t } from "./i18n";
 import { agentErrorText } from "./errors";
 import { AGENT_TEXT } from "../shared/agent-text";
@@ -281,6 +282,27 @@ export function installMcpHost(): void {
         // MIME 以实际内容为准（magic bytes），不信任 agent 传的值
         void mimeType;
         return { assetId: asset.id, width: asset.width, height: asset.height };
+      },
+      importSvg: async (request) => {
+        try {
+          const outcome = await insertSvgFrame({
+            text: request.svg,
+            name: "imported.svg",
+            pageId: request.pageId,
+            x: request.x,
+            y: request.y,
+          });
+          if (outcome.status !== "ok") return null;
+          return {
+            frameId: outcome.result.frameId,
+            width: outcome.result.width,
+            height: outcome.result.height,
+            rasterized: outcome.result.rasterized,
+            missingFonts: outcome.result.missingFonts,
+          };
+        } catch {
+          return null;
+        }
       },
     },
     // 选区是画布 UI 状态：只读给 agent 看，改还是走显式 nodeId

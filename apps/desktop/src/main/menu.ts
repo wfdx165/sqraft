@@ -255,6 +255,7 @@ export function buildTemplate(
           actionItem("file.exportPng2", mac),
           actionItem("file.exportPng4", mac),
           actionItem("file.exportSvg", mac),
+          actionItem("file.exportMatrix", mac),
         ],
       },
       { type: "separator" },

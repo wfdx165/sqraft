@@ -4,6 +4,9 @@ import {
   CHANNELS,
   type AppLogEntry,
   type AppLogLevel,
+  type ExportMatrixRequest,
+  type ExportMatrixResult,
+  type ExportSettings,
   type OpenFileResult,
   type OverwriteChoice,
   type SaveAsRequest,
@@ -14,11 +17,21 @@ import {
 } from "../shared/ipc";
 import { mtimeChanged, mtimeOf, writeFileAtomic } from "./files";
 import { stageDocument } from "./doc-stream";
-import { basename, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { logApp, logRenderer } from "./mcp/log";
-import { flushPendingOpen, forgetRecentFile, listRecentFiles, requestOpen, touchRecentFile, updateLanguagePreference } from "./recent-state";
+import {
+  exportPreferences,
+  flushPendingOpen,
+  forgetRecentFile,
+  listRecentFiles,
+  patchExportPreferences,
+  requestOpen,
+  touchRecentFile,
+  updateLanguagePreference,
+} from "./recent-state";
 import { getLanguagePreference, getLocale, setMainLanguage, t } from "./i18n";
 import { isLanguagePreference } from "../shared/i18n";
+import { normalizeExportSettings } from "./preferences";
 import { rebuildMenu } from "./menu";
 
 const SQRAFT_FILTER = () => [{ name: t("fileFilter.sqraft"), extensions: ["sqraft"] }];
@@ -211,6 +224,48 @@ export function registerFileChannels(): void {
         return { status: "ok", path: result.filePath, name: basename(result.filePath), mtimeMs: 0 };
       } catch (error) {
         logApp("error", "file/export failed", { path: result.filePath, error: messageOf(error) });
+        return { status: "error", message: t("error.exportFile", { detail: messageOf(error) }) };
+      }
+    },
+  );
+
+  ipcMain.handle(CHANNELS.fileExportSettings, (): ExportSettings => exportPreferences());
+
+  // 多倍率导出：渲染层已打成 zip，这里只选一次保存位置、一次原子写
+  ipcMain.handle(
+    CHANNELS.fileExportMatrix,
+    async (event, request: ExportMatrixRequest): Promise<ExportMatrixResult> => {
+      const window = windowOf(event.sender);
+      const bytes = request?.bytes;
+      if (!(bytes instanceof Uint8Array) || bytes.length === 0) {
+        return { status: "error", message: t("error.exportFile", { detail: t("exportMatrix.empty") }) };
+      }
+      const settings = normalizeExportSettings(request?.settings);
+      const suggested =
+        typeof request?.suggestedName === "string" && request.suggestedName.trim()
+          ? basename(request.suggestedName.trim())
+          : `${t("common.untitled")}.zip`;
+      const options: Electron.SaveDialogOptions = {
+        title: t("exportMatrix.chooseZip"),
+        buttonLabel: t("exportMatrix.saveZip"),
+        defaultPath: settings.directory ? join(settings.directory, suggested) : suggested,
+        filters: [{ name: t("fileFilter.zip"), extensions: ["zip"] }],
+      };
+      const picked = window ? await dialog.showSaveDialog(window, options) : await dialog.showSaveDialog(options);
+      if (picked.canceled || !picked.filePath) return { status: "canceled" };
+      // 用户手输的名字可能没带扩展名：补上，避免存成无后缀文件
+      const path = /\.zip$/i.test(picked.filePath) ? picked.filePath : `${picked.filePath}.zip`;
+      try {
+        await writeFileAtomic(path, bytes);
+        const directory = dirname(path);
+        await patchExportPreferences({ ...settings, directory }).catch((error: unknown) => {
+          logApp("warn", "file/export matrix prefs failed", { error: messageOf(error) });
+        });
+        const count = typeof request?.count === "number" && request.count > 0 ? request.count : 0;
+        logApp("info", "file/export matrix ok", { path, count, bytes: bytes.length });
+        return { status: "ok", count, path, name: basename(path) };
+      } catch (error) {
+        logApp("error", "file/export matrix failed", { path, error: messageOf(error) });
         return { status: "error", message: t("error.exportFile", { detail: messageOf(error) }) };
       }
     },

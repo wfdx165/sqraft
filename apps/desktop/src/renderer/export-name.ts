@@ -19,12 +19,24 @@ export function exportObjectName(doc: DocState, target: ExportNameTarget): strin
   return "";
 }
 
+/**
+ * 多倍率导出用的对象名：页面名在前，单选中对象时再接节点名。
+ * 整页导出时两者相同，不重复拼；多选只到页面名。
+ */
+export function exportMatrixObjectName(doc: DocState, target: ExportNameTarget): string {
+  const pageName = target.pageId ? (doc.nodes[target.pageId]?.name ?? "").trim() : "";
+  const objectName = exportObjectName(doc, target).trim();
+  if (!pageName) return objectName;
+  if (!objectName || objectName === pageName) return pageName;
+  return `${pageName}-${objectName}`;
+}
+
 /** 文件名里不能出现的字符（Windows 与 macOS 的并集）换成连字符。 */
 export function exportFileName(
   docName: string,
   objectName: string,
-  ext: "png" | "svg",
-  /** PNG 的导出倍率：文件名带上 @1 / @2 / @4，SVG 始终不带 */
+  ext: "png" | "svg" | "zip",
+  /** PNG 的导出倍率：文件名带上 @1 / @2 / @4，SVG / ZIP 始终不带 */
   scale = 1,
 ): string {
   const doc = docName.replace(/\.sqraft$/i, "").trim() || t("common.untitled");

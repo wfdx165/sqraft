@@ -171,6 +171,7 @@ export function drawRootLabels(g: CanvasRenderingContext2D, vp: Viewport, opts: 
   // 页面在前、母版在后：母版标签永远在最上层
   paintRootLabels(g, vp, opts, "page");
   paintRootLabels(g, vp, opts, "component");
+  paintRootLabels(g, vp, opts, "componentSet");
   g.restore();
 }
 
@@ -178,7 +179,7 @@ function paintRootLabels(
   g: CanvasRenderingContext2D,
   vp: Viewport,
   opts: RootLabelDrawOptions,
-  type: "page" | "component",
+  type: "page" | "component" | "componentSet",
 ): void {
   const roots = docStore.doc.rootIds;
   for (const id of roots) {
@@ -191,7 +192,7 @@ function paintRootLabels(
     // 整块在视口上方：标签会浮在没有对象的地方（命中同样跳过）
     if (screen.y + node.height * vp.zoom < 0) continue;
     if (screen.x > vp.width || screen.y > vp.height + 40) continue;
-    const library = node.type === "component";
+    const library = type !== "page";
     const selected = opts.selection.includes(node.id);
     const rect = chipRect(screen, labelTextWidth(node.name, vp, g));
     g.globalAlpha = !library && opts.mode === "edit" && opts.activePageId !== node.id ? ACTIVE_PAGE_ALPHA : 1;
@@ -249,7 +250,7 @@ export function labelAt(
   vp: Viewport,
   ctx: CanvasRenderingContext2D | null,
 ): DocNode | null {
-  for (const type of ["component", "page"] as const) {
+  for (const type of ["componentSet", "component", "page"] as const) {
     const roots = docStore.doc.rootIds;
     // 同类型里后画的在上层
     for (let i = roots.length - 1; i >= 0; i--) {

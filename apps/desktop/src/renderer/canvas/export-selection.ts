@@ -5,12 +5,15 @@
  * 入口是右键 Copy as 与文件菜单 Export as，两边都落到这里。
  */
 import { firstPageId, type DocNode, type NodeId } from "@sqraft/core";
+import type { ExportSettings } from "../../shared/ipc";
 import { fileState } from "../file-session";
-import { exportFileName, exportObjectName } from "../export-name";
+import { exportFileName, exportMatrixObjectName, exportObjectName } from "../export-name";
 import { t } from "../i18n";
 import { logInfo, logWarn } from "../log";
 import { docStore, ui } from "../store";
 import { showToast } from "../toast";
+import { matrixPlan } from "./export-matrix";
+import { buildExportZip, type ExportZipEntry } from "./export-zip";
 import { renderPngAsync, type ExportRequest } from "./export-image";
 import { renderSvgAsync } from "./svg-export";
 import { imageFor, ensureAssetDecoded } from "../assets";
@@ -58,6 +61,15 @@ function requestOf(target: Target, scale: number): ExportRequest {
 
 function tooLarge(scale: number): boolean {
   return scale >= 4;
+}
+
+/** data URL → 原始字节（PNG 导出落盘用）。 */
+function decodeDataUrl(dataUrl: string): Uint8Array {
+  const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+  return bytes;
 }
 
 /** 复制：PNG 走位图剪贴板，SVG 走纯文本。 */
@@ -139,10 +151,7 @@ export async function exportSelectionAs(format: ExportFormat, scale: number): Pr
       showToast(tooLarge(scale) ? t("canvas.exportTooLarge") : t("canvas.copyEmpty"), "error");
       return;
     }
-    const base64 = dataUrl.slice(dataUrl.indexOf(",") + 1);
-    const binary = atob(base64);
-    const bytes = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) bytes[i] = binary.charCodeAt(i);
+    const bytes = decodeDataUrl(dataUrl);
     const result = await window.sqraft.file.exportFile({
       suggestedName: exportFileName(fileState.name, objectName, "png", scale),
       bytes,
@@ -152,5 +161,77 @@ export async function exportSelectionAs(format: ExportFormat, scale: number): Pr
   } catch (error) {
     logWarn("export failed", { error: String(error) });
     showToast(t("canvas.copyFailed", { detail: String(error) }), "error");
+  }
+}
+
+/**
+ * 多倍率导出：渲染勾选的全部输出，打成一个 ZIP 交给主进程选一次保存位置。
+ * 任一输出渲染失败就整批中止（不写出半套文件）。
+ */
+export async function exportSelectionMatrix(settings: ExportSettings): Promise<"ok" | "canceled" | "error"> {
+  const target = exportTarget();
+  if (!target.pageId) {
+    showToast(t("canvas.copyNoPage"), "error");
+    return "error";
+  }
+  const plan = matrixPlan(settings);
+  if (plan.length === 0) {
+    showToast(t("exportMatrix.empty"), "error");
+    return "error";
+  }
+  try {
+    await document.fonts.ready;
+    // 多倍率导出统一用「页面名-对象名」，包名与包内文件同一套前缀
+    const objectName = exportMatrixObjectName(docStore.doc, target);
+    const entries: ExportZipEntry[] = [];
+    for (const item of plan) {
+      if (item.format === "svg") {
+        const { svg, rasterized } = await renderSvgAsync(docStore.doc, requestOf(target, 1));
+        if (!svg) {
+          showToast(t("canvas.copyEmpty"), "error");
+          return "error";
+        }
+        if (rasterized.length) logInfo("export/svg rasterized", { nodes: rasterized.join(", ") });
+        entries.push({
+          name: exportFileName(fileState.name, objectName, "svg"),
+          bytes: new TextEncoder().encode(svg),
+          format: "svg",
+        });
+        continue;
+      }
+      const dataUrl = await renderPngAsync(docStore.doc, requestOf(target, item.scale));
+      if (!dataUrl) {
+        showToast(t("canvas.exportTooLarge"), "error");
+        return "error";
+      }
+      entries.push({
+        name: exportFileName(fileState.name, objectName, "png", item.scale),
+        bytes: decodeDataUrl(dataUrl),
+        format: "png",
+      });
+    }
+
+    // 把实际导出的组合回写给偏好：对话框下次打开就是这次的选择
+    const effective: ExportSettings = {
+      scales: plan.filter((item) => item.format === "png").map((item) => item.scale),
+      includeSvg: plan.some((item) => item.format === "svg"),
+    };
+    const result = await window.sqraft.file.exportMatrix({
+      suggestedName: exportFileName(fileState.name, objectName, "zip"),
+      bytes: buildExportZip(entries),
+      count: entries.length,
+      settings: effective,
+    });
+    if (result.status === "canceled") return "canceled";
+    if (result.status === "error") {
+      showToast(result.message, "error");
+      return "error";
+    }
+    showToast(t("canvas.exportedZip", { name: result.name, count: result.count }), "info");
+    return "ok";
+  } catch (error) {
+    logWarn("export matrix failed", { error: String(error) });
+    showToast(t("canvas.copyFailed", { detail: String(error) }), "error");
+    return "error";
   }
 }

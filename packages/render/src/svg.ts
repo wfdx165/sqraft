@@ -16,6 +16,8 @@ import {
   type CornerRadius,
   type DocNode,
   type Rect,
+  type ResolvedGradient,
+  type ResolvedPaint,
   type VectorPath,
 } from "@sqraft/core";
 import type { RenderBackend, RenderEffect, ResolvedImage, Viewport } from "./backend";
@@ -160,16 +162,6 @@ export function vectorPathData(node: DocNode, vector: VectorPath): string {
   return parts.join(" ");
 }
 
-function paintAttrs(fill: string | undefined, stroke: string | undefined, strokeWidth: number): string {
-  const attrs: string[] = [];
-  if (fill) attrs.push(`fill="${escapeAttr(fill)}"`);
-  else attrs.push(`fill="none"`);
-  if (stroke) {
-    attrs.push(`stroke="${escapeAttr(stroke)}"`, `stroke-width="${num(strokeWidth)}"`);
-  }
-  return attrs.join(" ");
-}
-
 /** 与 canvas 的 effects 渲染顺序一致的滤镜链（背景模糊没有对应，交给栅格化兜底）。 */
 function filterBody(effects: readonly RenderEffect[]): string | null {
   const steps: string[] = [];
@@ -273,6 +265,7 @@ export class SvgBackend implements RenderBackend {
   private clipSeq = 0;
   private maskSeq = 0;
   private filterSeq = 0;
+  private gradientSeq = 0;
 
   constructor(options: SvgBackendOptions) {
     this.vp = options.viewport;
@@ -304,6 +297,7 @@ export class SvgBackend implements RenderBackend {
     this.clipSeq = 0;
     this.maskSeq = 0;
     this.filterSeq = 0;
+    this.gradientSeq = 0;
   }
 
   endFrame(): void {
@@ -385,24 +379,67 @@ export class SvgBackend implements RenderBackend {
     if (this.effectWraps.pop()) this.closeGroup();
   }
 
+  /** 纯色/渐变 → 可直接写进属性的值；渐变会顺手在 defs 里注册。 */
+  private paintRef(paint: ResolvedPaint | undefined): string | null {
+    if (!paint) return null;
+    if (paint.type === "solid") return escapeAttr(paint.color);
+    const g = paint.gradient;
+    if (g.type !== "linear" && g.type !== "radial") {
+      // angular / diamond 由宿主栅格化；兜底取第一个 stop，避免整块变空白
+      return escapeAttr(g.stops[0]?.color ?? "#000000");
+    }
+    const id = `g${this.gradientSeq++}`;
+    this.defs.push(this.gradientDef(id, g));
+    return `url(#${id})`;
+  }
+
+  private gradientDef(id: string, g: ResolvedGradient): string {
+    const stops = g.stops
+      .map((stop) => `<stop offset="${num(stop.offset)}" stop-color="${escapeAttr(stop.color)}"/>`)
+      .join("");
+    if (g.type === "linear") {
+      return `<linearGradient id="${id}" gradientUnits="objectBoundingBox" x1="${num(g.from.x)}" y1="${num(g.from.y)}" x2="${num(g.to.x)}" y2="${num(g.to.y)}">${stops}</linearGradient>`;
+    }
+    const r = Math.hypot(g.to.x - g.from.x, g.to.y - g.from.y) || 0.5;
+    const fx = g.focus?.x ?? g.from.x;
+    const fy = g.focus?.y ?? g.from.y;
+    return `<radialGradient id="${id}" gradientUnits="objectBoundingBox" cx="${num(g.from.x)}" cy="${num(g.from.y)}" r="${num(r)}" fx="${num(fx)}" fy="${num(fy)}">${stops}</radialGradient>`;
+  }
+
+  private paintAttrs(node: DocNode, fill: ResolvedPaint | undefined, stroke: ResolvedPaint | undefined, strokeWidth: number): string {
+    const attrs: string[] = [];
+    const fillRef = this.paintRef(fill);
+    attrs.push(fillRef ? `fill="${fillRef}"` : `fill="none"`);
+    const strokeRef = this.paintRef(stroke);
+    if (strokeRef) attrs.push(`stroke="${strokeRef}"`, `stroke-width="${num(strokeWidth)}"`);
+    return attrs.join(" ");
+  }
+
+  /** 下划线这类"用填充色画线"的地方只取纯色。 */
+  private paintSolid(paint: ResolvedPaint | undefined): string {
+    if (!paint) return "#000000";
+    if (paint.type === "solid") return escapeAttr(paint.color);
+    return escapeAttr(paint.gradient.stops[0]?.color ?? "#000000");
+  }
+
   drawRect(
     node: DocNode,
-    fill?: string,
-    stroke?: string,
+    fill?: ResolvedPaint,
+    stroke?: ResolvedPaint,
     strokeWidth = 1,
     radius: CornerRadius = ZERO_CORNER_RADIUS,
     shadow = false,
   ): void {
     const d = roundedRectPath(node.x, node.y, node.width, node.height, radius);
-    const attrs = [paintAttrs(fill, stroke, strokeWidth)];
+    const attrs = [this.paintAttrs(node, fill, stroke, strokeWidth)];
     if (shadow) {
       attrs.push(`style="filter:drop-shadow(0 10px 32px rgba(15,23,42,0.16))"`);
     }
     this.leaf(node, `<path d="${d}" ${attrs.join(" ")}/>`);
   }
 
-  drawEllipse(node: DocNode, fill?: string, stroke?: string, strokeWidth = 1): void {
-    const attrs = paintAttrs(fill, stroke, strokeWidth);
+  drawEllipse(node: DocNode, fill?: ResolvedPaint, stroke?: ResolvedPaint, strokeWidth = 1): void {
+    const attrs = this.paintAttrs(node, fill, stroke, strokeWidth);
     const cx = node.x + node.width / 2;
     const cy = node.y + node.height / 2;
     this.leaf(
@@ -411,25 +448,26 @@ export class SvgBackend implements RenderBackend {
     );
   }
 
-  drawLine(node: DocNode, stroke = "#000", strokeWidth = 1): void {
+  drawLine(node: DocNode, stroke?: ResolvedPaint, strokeWidth = 1): void {
     // 与 canvas 一致：线段不吃旋转
+    const strokeRef = this.paintRef(stroke) ?? "#000000";
     this.parts.push(
-      `<line x1="${num(node.x)}" y1="${num(node.y)}" x2="${num(node.x + node.width)}" y2="${num(node.y + node.height)}" stroke="${escapeAttr(stroke)}" stroke-width="${num(strokeWidth)}"/>`,
+      `<line x1="${num(node.x)}" y1="${num(node.y)}" x2="${num(node.x + node.width)}" y2="${num(node.y + node.height)}" stroke="${strokeRef}" stroke-width="${num(strokeWidth)}"/>`,
     );
   }
 
-  drawPath(node: DocNode, vector: VectorPath, fill?: string, stroke?: string, strokeWidth = 1): void {
+  drawPath(node: DocNode, vector: VectorPath, fill?: ResolvedPaint, stroke?: ResolvedPaint, strokeWidth = 1): void {
     const d = vectorPathData(node, vector);
     if (!d) return;
     const dash = stroke ? `stroke-linecap="round" stroke-linejoin="round"` : "";
-    this.leaf(node, `<path d="${d}" ${paintAttrs(fill, stroke, strokeWidth)} ${dash}/>`);
+    this.leaf(node, `<path d="${d}" ${this.paintAttrs(node, fill, stroke, strokeWidth)} ${dash}/>`);
   }
 
   drawPolygon(
     node: DocNode,
     points: ReadonlyArray<{ x: number; y: number }>,
-    fill?: string,
-    stroke?: string,
+    fill?: ResolvedPaint,
+    stroke?: ResolvedPaint,
     strokeWidth = 1,
   ): void {
     if (points.length < 3) return;
@@ -438,10 +476,10 @@ export class SvgBackend implements RenderBackend {
       .join(" ")
       .concat(" Z");
     const dash = stroke ? `stroke-linecap="round" stroke-linejoin="round"` : "";
-    this.leaf(node, `<path d="${d}" ${paintAttrs(fill, stroke, strokeWidth)} ${dash}/>`);
+    this.leaf(node, `<path d="${d}" ${this.paintAttrs(node, fill, stroke, strokeWidth)} ${dash}/>`);
   }
 
-  drawText(node: DocNode, fill = "#000", stroke?: string): void {
+  drawText(node: DocNode, fill?: ResolvedPaint, stroke?: ResolvedPaint): void {
     const style = node.style;
     const size = fontSizeOf(style);
     const spacing = letterSpacingPx(style);
@@ -463,14 +501,16 @@ export class SvgBackend implements RenderBackend {
     }
 
     const fontFamily = fontFamilyOf(style);
+    const fillRef = this.paintRef(fill);
+    const strokeRef = this.paintRef(stroke);
     const fontAttrs = [
       `font-family="${escapeAttr(fontFamily)}"`,
       `font-size="${num(size)}"`,
       `font-weight="${num(style.fontWeight ?? 400)}"`,
       style.fontStyle === "italic" ? `font-style="italic"` : "",
       spacing ? `letter-spacing="${num(spacing)}"` : "",
-      fill ? `fill="${escapeAttr(fill)}"` : `fill="none"`,
-      stroke ? `stroke="${escapeAttr(stroke)}" stroke-width="${num(style.strokeWidth ?? 1)}"` : "",
+      fillRef ? `fill="${fillRef}"` : `fill="none"`,
+      strokeRef ? `stroke="${strokeRef}" stroke-width="${num(style.strokeWidth ?? 1)}"` : "",
       `xml:space="preserve"`,
     ]
       .filter(Boolean)
@@ -527,7 +567,7 @@ export class SvgBackend implements RenderBackend {
         const dy = style.textDecoration === "underline" ? size * 0.14 : -size * 0.28;
         const width = Math.max(1, size * 0.06);
         lines.push(
-          `<line x1="${num(drawX)}" y1="${num(baseline + dy)}" x2="${num(drawX + Math.max(line.width, totalWidth))}" y2="${num(baseline + dy)}" stroke="${escapeAttr(fill)}" stroke-width="${num(width)}"/>`,
+          `<line x1="${num(drawX)}" y1="${num(baseline + dy)}" x2="${num(drawX + Math.max(line.width, totalWidth))}" y2="${num(baseline + dy)}" stroke="${this.paintSolid(fill)}" stroke-width="${num(width)}"/>`,
         );
       }
 

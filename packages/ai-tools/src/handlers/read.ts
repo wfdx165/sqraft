@@ -1,7 +1,12 @@
 // 工具名直接分派；每个分支保持原实现，ctx 提供 store 与宿主能力。
-import type { DocNode, MatchField, NodeId } from "../shared";
-import { PADDING_SIDE_KEYS, READ_DEPTH_DEFAULT, READ_DEPTH_MAX, READ_LIMIT_DEFAULT, READ_LIMIT_MAX, SEARCH_TYPES, clampIntArg, collectSlice, countSubtree, diagnose, firstPageId, getPages, getRootComponents, pageOfNode, pathOf, resolveNumericLayout, snippetOf, worldRect } from "../shared";
+import type { DocNode, MatchField, NodeId, Paint } from "../shared";
+import { PADDING_SIDE_KEYS, READ_DEPTH_DEFAULT, READ_DEPTH_MAX, READ_LIMIT_DEFAULT, READ_LIMIT_MAX, SEARCH_TYPES, clampIntArg, collectSlice, countSubtree, diagnose, firstPageId, getPages, getRootComponents, isGradientPaint, pageOfNode, pathOf, resolveNumericLayout, snippetOf, worldRect } from "../shared";
 import type { Handler } from "../types";
+
+/** 只取纯色引用的 Token；渐变（stop 里的 Token 不在这个字段语义内）返回 undefined。 */
+function tokenOf(paint: Paint | null | undefined): string | undefined {
+  return paint && !isGradientPaint(paint) ? paint.token : undefined;
+}
 
 /** `read_document` */
 export const handleReadDocument: Handler = async (ctx, args) => {
@@ -35,10 +40,28 @@ export const handleReadDocument: Handler = async (ctx, args) => {
           ? { propertyDefs: c.propertyDefs.map((d) => ({ id: d.id, type: d.type, name: d.name })) }
           : {}),
       }));
+      // 组件集合也是根节点：只给摘要，看内部用 scope=subtree
+      const componentSets = Object.values(ctx.store.doc.nodes)
+        .filter((node) => node.type === "componentSet")
+        .map((set) => ({
+          setId: set.id,
+          name: set.name,
+          variantProperties: (set.variantProperties ?? []).map((def) => ({
+            id: def.id,
+            name: def.name,
+            values: def.values,
+          })),
+          variants: Object.entries(set.variantMap ?? {}).map(([key, id]) => ({
+            componentId: id,
+            name: ctx.store.doc.nodes[id]?.name,
+            key,
+          })),
+        }));
       return JSON.stringify({
         scope,
         pages,
         components,
+        ...(componentSets.length ? { componentSets } : {}),
         tokenCount,
         truncated: false,
         hasMore: false,
@@ -133,7 +156,7 @@ export const handleSearchNodes: Handler = async (ctx, args) => {
     }
     const limit = clampIntArg(args.limit, 20, 1, 200, "limit");
     const includeHidden = args.includeHidden === true;
-    let roots: Array<{ id: NodeId; kind: "page" | "component" }>;
+    let roots: Array<{ id: NodeId; kind: "page" | "component" | "componentSet" }>;
     if (pageFilter) {
       const page = ctx.store.doc.nodes[pageFilter];
       if (!page) throw new Error(`页面 ${pageFilter} 不存在`);
@@ -144,6 +167,10 @@ export const handleSearchNodes: Handler = async (ctx, args) => {
       roots = [
         ...getPages(ctx.store.doc).map((page) => ({ id: page.id, kind: "page" as const })),
         ...getRootComponents(ctx.store.doc).map((c) => ({ id: c.id, kind: "component" as const })),
+        ...ctx.store.doc.rootIds
+          .map((id) => ctx.store.doc.nodes[id])
+          .filter((node) => node?.type === "componentSet")
+          .map((node) => ({ id: node.id, kind: "componentSet" as const })),
       ];
     }
     const needleName = name?.toLowerCase() ?? "";
@@ -172,14 +199,14 @@ export const handleSearchNodes: Handler = async (ctx, args) => {
         }
       }
       if (fillToken) {
-        if (node.style.fill?.token !== fillToken) return null;
+        if (tokenOf(node.style.fill) !== fillToken) return null;
         if (!field) {
           field = "fillToken";
           snippet = fillToken;
         }
       }
       if (strokeToken) {
-        if (node.style.stroke?.token !== strokeToken) return null;
+        if (tokenOf(node.style.stroke) !== strokeToken) return null;
         if (!field) {
           field = "strokeToken";
           snippet = strokeToken;
@@ -196,7 +223,7 @@ export const handleSearchNodes: Handler = async (ctx, args) => {
     };
     const hits: Array<Record<string, unknown>> = [];
     let hasMore = false;
-    const visit = (id: NodeId, root: { id: NodeId; kind: "page" | "component" }): boolean => {
+    const visit = (id: NodeId, root: { id: NodeId; kind: "page" | "component" | "componentSet" }): boolean => {
       const node: DocNode | undefined = ctx.store.doc.nodes[id];
       if (!node) return true;
       // 隐藏节点整棵跳过：看不见的东西不该出现在搜索结果里

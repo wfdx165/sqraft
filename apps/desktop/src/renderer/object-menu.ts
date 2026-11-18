@@ -2,13 +2,14 @@
  * 画布与左栏共用的右键菜单内容：页面一套、元素一套（规格见 ai-native-polish 票 17）。
  * 只读文档状态 + 调已有动作，不自己写文档。
  */
-import type { DocNode, NodeId } from "@sqraft/core";
+import { newId, type DocNode, type NodeId } from "@sqraft/core";
 import { openContextMenu, type ContextMenuItem } from "./context-menu";
 import { copySelectionAction } from "./canvas/node-clipboard";
 import { canDeletePage, deletePage } from "./canvas/page-actions";
 import { enterPresenter } from "./presenter";
 import { keyOf } from "./shortcuts";
-import { docStore, hooks, select, ui } from "./store";
+import { dispatch, docStore, hooks, select, ui } from "./store";
+import { duplicateVariant } from "./variant-actions";
 import { t } from "./i18n";
 
 /** 节点所属页面（页面才是 rootIds 里的那一层）。 */
@@ -94,7 +95,41 @@ export function openNodeMenu(nodeId: NodeId, position: { x: number; y: number })
       disabled: !onlyOne,
       run: () => hooks.startRenameOf(nodeId),
     },
-    { label: t("common.delete"), hint: "Del", danger: true, run: () => hooks.deleteSelectionNow() },
   ];
+
+  // 2+ 根级主组件：组成组件集合（ADR-0038）
+  const rootComponents = ids
+    .map((id) => docStore.doc.nodes[id])
+    .filter((entry): entry is DocNode => entry?.type === "component" && entry.parentId === null);
+  if (rootComponents.length >= 2) {
+    items.push({
+      label: t("objectMenu.combineVariants"),
+      separator: true,
+      run: () => {
+        const setId = newId();
+        try {
+          dispatch(
+            { type: "variant.combine", params: { nodeIds: rootComponents.map((c) => c.id), setId } },
+            "variant-combine",
+          );
+          select([setId]);
+        } catch {
+          /* 命名不合规等由命令层拒绝 */
+        }
+      },
+    });
+  }
+
+  // 单个变体：复制出一个新变体（组合自动取空闲值，之后可改名）
+  const single = ids.length === 1 ? docStore.doc.nodes[ids[0]] : null;
+  const set = single?.parentId ? docStore.doc.nodes[single.parentId] : null;
+  if (single?.type === "component" && set?.type === "componentSet") {
+    items.push({
+      label: t("objectMenu.addVariant"),
+      run: () => duplicateVariant(set.id, single.id),
+    });
+  }
+
+  items.push({ label: t("common.delete"), hint: "Del", danger: true, separator: true, run: () => hooks.deleteSelectionNow() });
   openContextMenu(position, items);
 }

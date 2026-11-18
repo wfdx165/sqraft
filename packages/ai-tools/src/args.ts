@@ -1,7 +1,7 @@
 /** 工具参数 → 命令参数的解析与校验（与 schema 分离：schema 只给客户端看，校验在这里真的执行）。 */
 
-import type { CornerRadius, DocNode, DocState, DocStore, Effect, LayoutSpec, NodeId, NodeStyle, Padding, VectorAnchor } from "@sqraft/core";
-import { CORNER_RADIUS_KEYS, DEFAULT_PAGE_HEIGHT, DEFAULT_PAGE_WIDTH, NUMERIC_TOKEN_FIELDS, NUMERIC_TOKEN_OF_LITERAL, PADDING_SIDE_KEYS, colorDistance, createLayoutSpec, createNode, firstPageId, makeAnchor, nextPageName, walkSubtree } from "@sqraft/core";
+import type { CornerRadius, DocNode, DocState, DocStore, Effect, GradientPaint, GradientStop, LayoutSpec, NodeId, NodeStyle, Padding, VectorAnchor } from "@sqraft/core";
+import { CORNER_RADIUS_KEYS, DEFAULT_PAGE_HEIGHT, DEFAULT_PAGE_WIDTH, NUMERIC_TOKEN_FIELDS, NUMERIC_TOKEN_OF_LITERAL, PADDING_SIDE_KEYS, colorDistance, createLayoutSpec, createNode, firstPageId, isGradientPaint, makeAnchor, nextPageName, walkSubtree } from "@sqraft/core";
 
 export function readPoints(value: unknown): VectorAnchor[] | null {
   if (value === undefined) return null;
@@ -23,11 +23,59 @@ export function readPoints(value: unknown): VectorAnchor[] | null {
   });
 }
 
+/** 渐变入参 → 模型渐变：坐标 0–1，stop 颜色是 {token} 或 {value} / 纯字符串。 */
+export function readGradient(value: unknown, field: string): GradientPaint {
+  if (!value || typeof value !== "object") throw new Error(`${field} 必须是对象`);
+  const raw = value as Record<string, unknown>;
+  const type = String(raw.type ?? "");
+  if (!["linear", "radial", "angular", "diamond"].includes(type)) {
+    throw new Error(`${field}.type 只能是 linear / radial / angular / diamond`);
+  }
+  const point = (input: unknown, name: string): { x: number; y: number } => {
+    if (!input || typeof input !== "object") throw new Error(`${field}.${name} 需要 {x,y}`);
+    const p = input as Record<string, unknown>;
+    const x = Number(p.x);
+    const y = Number(p.y);
+    if (!Number.isFinite(x) || !Number.isFinite(y)) throw new Error(`${field}.${name} 的 x/y 必须是数值`);
+    return { x, y };
+  };
+  if (!Array.isArray(raw.stops) || raw.stops.length < 2 || raw.stops.length > 16) {
+    throw new Error(`${field}.stops 需要 2–16 个色标`);
+  }
+  const stops: GradientStop[] = raw.stops.map((entry, i) => {
+    if (!entry || typeof entry !== "object") throw new Error(`${field}.stops[${i}] 必须是对象`);
+    const stop = entry as Record<string, unknown>;
+    const offset = Number(stop.offset);
+    if (!Number.isFinite(offset)) throw new Error(`${field}.stops[${i}].offset 必须是数值`);
+    const colorRaw = stop.color;
+    let color: GradientStop["color"];
+    if (typeof colorRaw === "string") color = { value: colorRaw };
+    else if (colorRaw && typeof colorRaw === "object") {
+      const colorObj = colorRaw as Record<string, unknown>;
+      if (typeof colorObj.token === "string" && colorObj.token) color = { token: colorObj.token };
+      else if (typeof colorObj.value === "string" && colorObj.value) color = { value: colorObj.value };
+      else throw new Error(`${field}.stops[${i}].color 需要 {token} 或 {value}`);
+    } else {
+      throw new Error(`${field}.stops[${i}].color 需要 {token} 或 {value}`);
+    }
+    return { offset: Math.min(1, Math.max(0, offset)), color };
+  });
+  return {
+    type: type as GradientPaint["type"],
+    from: point(raw.from, "from"),
+    to: point(raw.to, "to"),
+    ...(raw.focus !== undefined ? { focus: point(raw.focus, "focus") } : {}),
+    stops,
+  };
+}
+
 export function applyStyleTokens(style: NodeStyle, args: Record<string, unknown>): void {
-  // Token 优先；没有 Token 时才用字面量（设计系统由用户自己定，不强制）
+  // 优先级：Token > 渐变 > 字面量（设计系统由用户自己定，不强制）
   if (args.fillToken !== undefined) style.fill = { token: String(args.fillToken) };
+  else if (args.fillGradient !== undefined) style.fill = readGradient(args.fillGradient, "fillGradient");
   else if (typeof args.fill === "string") style.fill = { value: args.fill };
   if (args.strokeToken !== undefined) style.stroke = { token: String(args.strokeToken) };
+  else if (args.strokeGradient !== undefined) style.stroke = readGradient(args.strokeGradient, "strokeGradient");
   else if (typeof args.stroke === "string") style.stroke = { value: args.stroke };
   if (args.strokeWidth !== undefined) style.strokeWidth = Math.max(0, Number(args.strokeWidth));
 }
@@ -50,10 +98,28 @@ export function assertToken(store: DocStore, token: string | undefined, field: s
 export function assertNoLiteralColors(store: DocStore, args: Record<string, unknown>): void {
   if (store.doc.strictTokens !== true) return;
   for (const field of ["fill", "stroke"] as const) {
-    if (args[field] === undefined) continue;
+    const tokenKey = field === "fill" ? "fillToken" : "strokeToken";
+    const gradientKey = field === "fill" ? "fillGradient" : "strokeGradient";
     // 与字面量同时给 Token：ADR-0024 的"Token 优先"，不算越界
-    if (args[field === "fill" ? "fillToken" : "strokeToken"] !== undefined) continue;
+    if (args[tokenKey] !== undefined) continue;
+    if (args[gradientKey] !== undefined) {
+      const gradient = readGradient(args[gradientKey], gradientKey);
+      if (gradient.stops.some((stop) => !stop.color.token)) {
+        throw new Error(`TOKEN_REQUIRED: ${gradientKey} stops must reference tokens in strict mode.`);
+      }
+      continue;
+    }
+    if (args[field] === undefined) continue;
     throw new Error(nearestColorTokensMessage(store, field, args[field]));
+  }
+}
+
+/** 渐变 stop 里引用的 Token 必须存在（与 fillToken 同一套校验）。 */
+export function assertGradientTokens(store: DocStore, args: Record<string, unknown>): void {
+  for (const field of ["fillGradient", "strokeGradient"] as const) {
+    if (args[field] === undefined) continue;
+    const gradient = readGradient(args[field], field);
+    for (const stop of gradient.stops) assertToken(store, stop.color.token, field);
   }
 }
 
@@ -260,7 +326,7 @@ export function effectsFrom(value: unknown): Effect[] {
 export function assertEffectTokens(store: DocStore, effects: Effect[] | undefined): void {
   for (const effect of effects ?? []) {
     if (effect.type === "drop-shadow" || effect.type === "inner-shadow") {
-      assertToken(store, effect.color.token, "effects.fillToken");
+      if (!isGradientPaint(effect.color)) assertToken(store, effect.color.token, "effects.fillToken");
     }
   }
 }

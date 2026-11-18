@@ -1,6 +1,6 @@
 // 工具名直接分派；每个分支保持原实现，ctx 提供 store 与宿主能力。
 import type { DocNode, NodeId, Rect, ScreenshotRegion } from "../shared";
-import { diagnose, firstPageId, getPages, resolvePaint, round2, worldRect } from "../shared";
+import { diagnose, firstPageId, getPages, isGradientPaint, resolvePaint, round2, worldRect } from "../shared";
 import type { Handler } from "../types";
 
 /** `export_as`：导出成数据（不写剪贴板、不写盘）。 */
@@ -56,6 +56,30 @@ function pngSize(dataUrl: string): { width: number; height: number } {
     return { width: view.getUint32(16), height: view.getUint32(20) };
 }
 
+/** `import_svg`：只收源码，不读磁盘；失败时给出可执行的建议。 */
+export const handleImportSvg: Handler = async (ctx, args) => {
+    if (!ctx.host?.importSvg) throw new Error("当前宿主不支持导入 SVG");
+    const svg = typeof args.svg === "string" ? args.svg : "";
+    if (!svg.trim()) throw new Error("svg 不能为空");
+    if (new TextEncoder().encode(svg).length > 5 * 1024 * 1024) {
+      throw new Error("SVG 源码超过 5MB，请先精简，或用 create_node 的 image 参数传入位图");
+    }
+    const pageId = (args.pageId as NodeId | undefined) ?? ctx.getActivePageId?.() ?? firstPageId(ctx.store.doc);
+    if (!pageId || !ctx.store.doc.nodes[pageId]) throw new Error("pageId 不存在");
+    const x = typeof args.x === "number" ? args.x : undefined;
+    const y = typeof args.y === "number" ? args.y : undefined;
+    const result = await ctx.host.importSvg({ svg, pageId, x, y });
+    if (!result) throw new Error("导入失败：SVG 含无法栅格化的结构，请先用 create_node 的 image 参数传入位图");
+    return JSON.stringify({
+      ok: true,
+      frameId: result.frameId,
+      width: result.width,
+      height: result.height,
+      ...(result.rasterized.length ? { rasterized: result.rasterized } : {}),
+      ...(result.missingFonts.length ? { missingFonts: result.missingFonts } : {}),
+    });
+};
+
 /** `screenshot` */
 export const handleScreenshot: Handler = async (ctx, args) => {
     const region = args.region as ScreenshotRegion | undefined;
@@ -87,6 +111,17 @@ export const handleScreenshot: Handler = async (ctx, args) => {
     }
     const areaBox: Rect = { x: area.x, y: area.y, width: area.width, height: area.height };
     const MAX_TEXT_NODES = 200;
+    /** 渐变没法压成一个色值：给类型与解析后的色标，避免 agent 把渐变读成"无填充"。 */
+    const gradientSummary = (paint: DocNode["style"]["fill"]) => {
+      if (!isGradientPaint(paint)) return undefined;
+      return {
+        type: paint.type,
+        stops: paint.stops.map((stop) => ({
+          offset: stop.offset,
+          color: resolvePaint(ctx.store.doc, stop.color) ?? null,
+        })),
+      };
+    };
     const rows: Array<Record<string, unknown>> = [];
     const included = new Set<NodeId>();
     let textTruncated = false;
@@ -120,6 +155,8 @@ export const handleScreenshot: Handler = async (ctx, args) => {
           opacity: node.opacity,
           fill: resolvePaint(ctx.store.doc, node.style.fill) ?? null,
           stroke: resolvePaint(ctx.store.doc, node.style.stroke) ?? null,
+          ...(gradientSummary(node.style.fill) ? { fillGradient: gradientSummary(node.style.fill) } : {}),
+          ...(gradientSummary(node.style.stroke) ? { strokeGradient: gradientSummary(node.style.stroke) } : {}),
           text: node.type === "text" ? (node.text ?? "") : null,
         });
         included.add(node.id);

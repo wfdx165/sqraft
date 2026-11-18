@@ -10,6 +10,7 @@ import {
   imageCropOf,
   maskPlan,
   resolvePaint,
+  resolvePaintSpec,
   resolveNumericStyle,
   polygonPoints,
   subtreeWorldBounds,
@@ -26,14 +27,16 @@ function drawSelf(
   vectorOverride?: VectorPath,
   options?: { mask?: boolean },
 ): void {
-  const fill = resolvePaint(ctx.doc, node.style.fill);
+  const fill = resolvePaintSpec(ctx.doc, node.style.fill);
   // 蒙版只取形状的填充：描边会让"裁出来的边"多出一圈，和 Figma 不一致
-  const stroke = options?.mask ? undefined : resolvePaint(ctx.doc, node.style.stroke);
+  const stroke = options?.mask ? undefined : resolvePaintSpec(ctx.doc, node.style.stroke);
+  const black = { type: "solid" as const, color: "#000" };
   switch (node.type) {
     // 画板、矩形、组件、实例、插槽共用同一套样式规则：有填充才画底色
     case "frame":
     case "rect":
     case "component":
+    case "componentSet":
     case "instance":
     case "slot":
       backend.drawRect(node, fill, stroke, node.style.strokeWidth, cornerRadiusOf(node.style));
@@ -42,11 +45,11 @@ function drawSelf(
       backend.drawEllipse(node, fill, stroke, node.style.strokeWidth);
       break;
     case "line":
-      if (node.vector) backend.drawPath(node, node.vector, undefined, stroke ?? "#000", node.style.strokeWidth ?? 1);
-      else backend.drawLine(node, stroke ?? "#000", node.style.strokeWidth ?? 1);
+      if (node.vector) backend.drawPath(node, node.vector, undefined, stroke ?? black, node.style.strokeWidth ?? 1);
+      else backend.drawLine(node, stroke ?? black, node.style.strokeWidth ?? 1);
       break;
     case "text":
-      backend.drawText(node, fill ?? "#000", stroke);
+      backend.drawText(node, fill ?? black, stroke);
       break;
     case "path": {
       const vector = vectorOverride ?? node.vector;
@@ -238,7 +241,9 @@ function drawNode(
   }
   if (!cached && styled.children.length > 0) {
     backend.pushTransform(geo.x, geo.y, styled.rotation, geo.width, geo.height);
-    const clipped = styled.clip && (styled.type === "frame" || styled.type === "component" || styled.type === "instance");
+    const clipped =
+      styled.clip &&
+      (styled.type === "frame" || styled.type === "component" || styled.type === "componentSet" || styled.type === "instance");
     if (clipped) backend.pushClip(0, 0, geo.width, geo.height, cornerRadiusOf(styled.style));
     drawChildren(backend, ctx, styled.children, options);
     if (clipped) backend.popClip();
@@ -265,8 +270,8 @@ function tooSmallToSee(node: DocNode, pixelRatio: number): boolean {
 function singlePaint(ctx: RenderContext, node: DocNode): boolean {
   if (node.children.length > 0) return false;
   if (node.type === "image") return true;
-  const fill = resolvePaint(ctx.doc, node.style.fill);
-  const stroke = resolvePaint(ctx.doc, node.style.stroke);
+  const fill = resolvePaintSpec(ctx.doc, node.style.fill);
+  const stroke = resolvePaintSpec(ctx.doc, node.style.stroke);
   // 下划线 / 删除线是单独一笔，与字形重叠：同样不能走捷径
   if (node.type === "text") return !stroke && (!node.style.textDecoration || node.style.textDecoration === "none");
   return !(fill && stroke);
@@ -354,7 +359,7 @@ export function rootDrawPlan(
     if (!node) continue;
     if (node.type === "page") {
       if (!onlyPageIds || onlyPageIds.includes(id)) pages.push(node);
-    } else if (node.type === "component" && !onlyPageIds) {
+    } else if ((node.type === "component" || node.type === "componentSet") && !onlyPageIds) {
       components.push(node);
     }
   }
@@ -460,8 +465,8 @@ function drawPage(backend: RenderBackend, ctx: RenderContext, page: DocNode, opt
     geo.x !== page.x || geo.y !== page.y || geo.width !== page.width || geo.height !== page.height
       ? { ...page, ...geo }
       : page,
-    resolvePaint(doc, page.style.fill) ?? "#ffffff",
-    "rgba(15,23,42,0.10)",
+    resolvePaintSpec(doc, page.style.fill) ?? { type: "solid", color: "#ffffff" },
+    { type: "solid", color: "rgba(15,23,42,0.10)" },
     1,
     { topLeft: 0, topRight: 0, bottomRight: 0, bottomLeft: 0 },
     true,

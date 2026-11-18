@@ -13,6 +13,8 @@ import {
   type CornerRadius,
   type DocNode,
   type Rect,
+  type ResolvedGradient,
+  type ResolvedPaint,
   type VectorPath,
 } from "@sqraft/core";
 import type { RenderBackend, RenderEffect, RenderShadowEffect, ResolvedImage, Viewport } from "./backend";
@@ -24,6 +26,11 @@ function intersectRect(a: Rect, b: Rect): Rect {
   const right = Math.min(a.x + a.width, b.x + b.width);
   const bottom = Math.min(a.y + a.height, b.y + b.height);
   return { x, y, width: Math.max(1, right - x), height: Math.max(1, bottom - y) };
+}
+
+/** 把已解析的 stop 逐个加进 canvas 渐变（顺序与夹取由 core 保证）。 */
+function addColorStops(gradient: CanvasGradient, stops: ReadonlyArray<{ offset: number; color: string }>): void {
+  for (const stop of stops) gradient.addColorStop(Math.min(1, Math.max(0, stop.offset)), stop.color);
 }
 
 /** 节点包围盒在父坐标系里的轴对齐外接矩形，并按效果外扩量放大。 */
@@ -781,10 +788,86 @@ export class Canvas2DBackend implements RenderBackend {
     g.closePath();
   }
 
+  /** 把纯色/渐变解析成可直接赋给 fillStyle / strokeStyle 的对象。 */
+  private paintStyle(paint: ResolvedPaint | undefined, node: DocNode): string | CanvasGradient | CanvasPattern | null {
+    if (!paint) return null;
+    if (paint.type === "solid") return paint.color;
+    const g = paint.gradient;
+    const ax = node.x + g.from.x * node.width;
+    const ay = node.y + g.from.y * node.height;
+    const bx = node.x + g.to.x * node.width;
+    const by = node.y + g.to.y * node.height;
+    switch (g.type) {
+      case "linear": {
+        const gradient = this.ctx.createLinearGradient(ax, ay, bx, by);
+        addColorStops(gradient, g.stops);
+        return gradient;
+      }
+      case "radial": {
+        const fx = node.x + (g.focus?.x ?? g.from.x) * node.width;
+        const fy = node.y + (g.focus?.y ?? g.from.y) * node.height;
+        const radius = Math.hypot(bx - ax, by - ay) || Math.max(1, Math.min(Math.abs(node.width), Math.abs(node.height)) / 2);
+        const gradient = this.ctx.createRadialGradient(fx, fy, 0, ax, ay, radius);
+        addColorStops(gradient, g.stops);
+        return gradient;
+      }
+      case "angular": {
+        const angle = Math.atan2(by - ay, bx - ax);
+        const gradient = this.ctx.createConicGradient(angle, ax, ay);
+        addColorStops(gradient, g.stops);
+        return gradient;
+      }
+      case "diamond":
+        return this.diamondPattern(g, node);
+      default:
+        return null;
+    }
+  }
+
+  /**
+   * diamond：四象限各一条线性渐变，先在离屏画布铺满节点包围盒，再用 pattern 贴到任意形状上。
+   * 不用逐形状 clip，文字/路径也能共用同一套。
+   */
+  private diamondPattern(g: ResolvedGradient, node: DocNode): CanvasPattern | null {
+    const w = Math.max(1, Math.abs(node.width));
+    const h = Math.max(1, Math.abs(node.height));
+    const scale = Math.min(3, Math.max(1, Math.abs(this.ctx.getTransform().a) || 1));
+    const width = Math.max(1, Math.round(w * scale));
+    const height = Math.max(1, Math.round(h * scale));
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+
+    const cx = Math.min(1, Math.max(0, g.from.x)) * width;
+    const cy = Math.min(1, Math.max(0, g.from.y)) * height;
+    const halfW = Math.max(1, Math.max(cx, width - cx));
+    const halfH = Math.max(1, Math.max(cy, height - cy));
+    const k = 1 / (1 / (halfW * halfW) + 1 / (halfH * halfH));
+    for (const sx of [1, -1]) {
+      for (const sy of [1, -1]) {
+        const gradient = ctx.createLinearGradient(cx, cy, cx + (sx * k) / halfW, cy + (sy * k) / halfH);
+        addColorStops(gradient, g.stops);
+        ctx.save();
+        ctx.beginPath();
+        ctx.rect(sx > 0 ? cx : 0, sy > 0 ? cy : 0, sx > 0 ? width - cx : cx, sy > 0 ? height - cy : cy);
+        ctx.clip();
+        ctx.fillStyle = gradient;
+        ctx.fillRect(0, 0, width, height);
+        ctx.restore();
+      }
+    }
+
+    const pattern = this.ctx.createPattern(canvas, "no-repeat");
+    if (pattern) pattern.setTransform(new DOMMatrix([1 / scale, 0, 0, 1 / scale, node.x, node.y]));
+    return pattern;
+  }
+
   drawRect(
     node: DocNode,
-    fill?: string,
-    stroke?: string,
+    fill?: ResolvedPaint,
+    stroke?: ResolvedPaint,
     strokeWidth = 1,
     radius: CornerRadius = ZERO_CORNER_RADIUS,
     shadow = false,
@@ -794,27 +877,31 @@ export class Canvas2DBackend implements RenderBackend {
     this.applyRotation(node);
     ctx.beginPath();
     this.roundedPath(ctx, node.x, node.y, node.width, node.height, radius);
-    if (fill) {
+    const fillStyle = fill ? this.paintStyle(fill, node) : null;
+    if (fillStyle) {
       if (shadow) {
         ctx.shadowColor = "rgba(15, 23, 42, 0.16)";
         ctx.shadowBlur = 32;
         ctx.shadowOffsetY = 10;
       }
-      ctx.fillStyle = fill;
+      ctx.fillStyle = fillStyle;
       ctx.fill();
       ctx.shadowColor = "transparent";
       ctx.shadowBlur = 0;
       ctx.shadowOffsetY = 0;
     }
     if (stroke) {
-      ctx.strokeStyle = stroke;
-      ctx.lineWidth = strokeWidth;
-      ctx.stroke();
+      const style = this.paintStyle(stroke, node);
+      if (style) {
+        ctx.strokeStyle = style;
+        ctx.lineWidth = strokeWidth;
+        ctx.stroke();
+      }
     }
     ctx.restore();
   }
 
-  drawEllipse(node: DocNode, fill?: string, stroke?: string, strokeWidth = 1): void {
+  drawEllipse(node: DocNode, fill?: ResolvedPaint, stroke?: ResolvedPaint, strokeWidth = 1): void {
     const ctx = this.ctx;
     ctx.save();
     this.applyRotation(node);
@@ -829,30 +916,39 @@ export class Canvas2DBackend implements RenderBackend {
       Math.PI * 2,
     );
     if (fill) {
-      ctx.fillStyle = fill;
-      ctx.fill();
+      const style = this.paintStyle(fill, node);
+      if (style) {
+        ctx.fillStyle = style;
+        ctx.fill();
+      }
     }
     if (stroke) {
-      ctx.strokeStyle = stroke;
+      const style = this.paintStyle(stroke, node);
+      if (style) {
+        ctx.strokeStyle = style;
+        ctx.lineWidth = strokeWidth;
+        ctx.stroke();
+      }
+    }
+    ctx.restore();
+  }
+
+  drawLine(node: DocNode, stroke?: ResolvedPaint, strokeWidth = 1): void {
+    const ctx = this.ctx;
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(node.x, node.y);
+    ctx.lineTo(node.x + node.width, node.y + node.height);
+    const lineStyle = stroke ? this.paintStyle(stroke, node) : null;
+    if (lineStyle) {
+      ctx.strokeStyle = lineStyle;
       ctx.lineWidth = strokeWidth;
       ctx.stroke();
     }
     ctx.restore();
   }
 
-  drawLine(node: DocNode, stroke = "#000", strokeWidth = 1): void {
-    const ctx = this.ctx;
-    ctx.save();
-    ctx.beginPath();
-    ctx.moveTo(node.x, node.y);
-    ctx.lineTo(node.x + node.width, node.y + node.height);
-    ctx.strokeStyle = stroke;
-    ctx.lineWidth = strokeWidth;
-    ctx.stroke();
-    ctx.restore();
-  }
-
-  drawPath(node: DocNode, vector: VectorPath, fill?: string, stroke?: string, strokeWidth = 1): void {
+  drawPath(node: DocNode, vector: VectorPath, fill?: ResolvedPaint, stroke?: ResolvedPaint, strokeWidth = 1): void {
     const anchors = vector.anchors;
     if (anchors.length < 2) return;
     const ctx = this.ctx;
@@ -876,15 +972,21 @@ export class Canvas2DBackend implements RenderBackend {
     }
     if (vector.closed) ctx.closePath();
     if (fill) {
-      ctx.fillStyle = fill;
-      ctx.fill();
+      const style = this.paintStyle(fill, node);
+      if (style) {
+        ctx.fillStyle = style;
+        ctx.fill();
+      }
     }
     if (stroke) {
-      ctx.strokeStyle = stroke;
-      ctx.lineWidth = strokeWidth;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.stroke();
+      const style = this.paintStyle(stroke, node);
+      if (style) {
+        ctx.strokeStyle = style;
+        ctx.lineWidth = strokeWidth;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.stroke();
+      }
     }
     ctx.restore();
   }
@@ -892,8 +994,8 @@ export class Canvas2DBackend implements RenderBackend {
   drawPolygon(
     node: DocNode,
     points: ReadonlyArray<{ x: number; y: number }>,
-    fill?: string,
-    stroke?: string,
+    fill?: ResolvedPaint,
+    stroke?: ResolvedPaint,
     strokeWidth = 1,
   ): void {
     if (points.length < 3) return;
@@ -907,20 +1009,26 @@ export class Canvas2DBackend implements RenderBackend {
     for (let i = 1; i < points.length; i++) ctx.lineTo(ox + points[i].x, oy + points[i].y);
     ctx.closePath();
     if (fill) {
-      ctx.fillStyle = fill;
-      ctx.fill();
+      const style = this.paintStyle(fill, node);
+      if (style) {
+        ctx.fillStyle = style;
+        ctx.fill();
+      }
     }
     if (stroke) {
-      ctx.strokeStyle = stroke;
-      ctx.lineWidth = strokeWidth;
-      ctx.lineCap = "round";
-      ctx.lineJoin = "round";
-      ctx.stroke();
+      const style = this.paintStyle(stroke, node);
+      if (style) {
+        ctx.strokeStyle = style;
+        ctx.lineWidth = strokeWidth;
+        ctx.lineCap = "round";
+        ctx.lineJoin = "round";
+        ctx.stroke();
+      }
     }
     ctx.restore();
   }
 
-  drawText(node: DocNode, fill = "#000", stroke?: string): void {
+  drawText(node: DocNode, fill?: ResolvedPaint, stroke?: ResolvedPaint): void {
     const ctx = this.ctx;
     const style = node.style;
     ctx.save();
@@ -955,9 +1063,11 @@ export class Canvas2DBackend implements RenderBackend {
 
     ctx.textBaseline = "alphabetic";
     ctx.textAlign = "left";
-    ctx.fillStyle = fill;
-    if (stroke) {
-      ctx.strokeStyle = stroke;
+    const fillStyle = fill ? this.paintStyle(fill, node) : null;
+    const strokeStyle = stroke ? this.paintStyle(stroke, node) : null;
+    if (fillStyle) ctx.fillStyle = fillStyle;
+    if (strokeStyle) {
+      ctx.strokeStyle = strokeStyle;
       ctx.lineWidth = style.strokeWidth ?? 1;
     }
 
@@ -965,7 +1075,7 @@ export class Canvas2DBackend implements RenderBackend {
       if (!text) return 0;
       if (spacing === 0 && spacingExtra === 0) {
         ctx.fillText(text, x, baseline);
-        if (stroke) ctx.strokeText(text, x, baseline);
+        if (strokeStyle) ctx.strokeText(text, x, baseline);
         return withSpacing(text);
       }
       let cursor = x;
@@ -1015,13 +1125,15 @@ export class Canvas2DBackend implements RenderBackend {
       if (style.textDecoration === "underline" || style.textDecoration === "strikethrough") {
         const total = Math.max(line.width, drawn);
         const dy = style.textDecoration === "underline" ? size * 0.14 : -size * 0.28;
-        ctx.beginPath();
-        ctx.strokeStyle = fill;
-        ctx.lineWidth = Math.max(1, size * 0.06);
-        ctx.moveTo(drawX, baseline + dy);
-        ctx.lineTo(drawX + total, baseline + dy);
-        ctx.stroke();
-        if (stroke) ctx.strokeStyle = stroke;
+        if (fillStyle) {
+          ctx.beginPath();
+          ctx.strokeStyle = fillStyle;
+          ctx.lineWidth = Math.max(1, size * 0.06);
+          ctx.moveTo(drawX, baseline + dy);
+          ctx.lineTo(drawX + total, baseline + dy);
+          ctx.stroke();
+        }
+        if (strokeStyle) ctx.strokeStyle = strokeStyle;
       }
 
       y += layout.lineHeight;

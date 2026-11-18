@@ -10,7 +10,7 @@ import { effectPadding } from "./effects";
 export type NodeId = string;
 
 /** 当前文件格式版本：新增字段时 +1，并在 migrate 里补一段迁移。 */
-export const CURRENT_FORMAT_VERSION = 9;
+export const CURRENT_FORMAT_VERSION = 10;
 
 /** 节点类型的运行时真源（类型与搜索白名单都从这里取，避免两处手抄）。 */
 export const NODE_TYPES = [
@@ -26,16 +26,53 @@ export const NODE_TYPES = [
   "text",
   "image",
   "component",
+  "componentSet",
   "instance",
   "slot",
 ] as const;
 
 export type NodeType = (typeof NODE_TYPES)[number];
 
-/** 颜色引用：必须是 Token 引用或字面量。AI 工具层禁止字面量（见 ai-tools）。 */
-export interface Paint {
+/** 文档根节点允许的类型：页面、主组件、组件集合（ADR-0025 / ADR-0038）。 */
+export function isRootNodeType(type: NodeType): boolean {
+  return type === "page" || type === "component" || type === "componentSet";
+}
+
+/** 纯色引用：Token 或字面量。 */
+export interface SolidPaint {
   token?: string;
   value?: string;
+}
+
+export type GradientType = "linear" | "radial" | "angular" | "diamond";
+
+/** 渐变的一个色标；颜色只能是纯色（不能再嵌渐变）。 */
+export interface GradientStop {
+  /** 0–1，相对节点包围盒 */
+  offset: number;
+  color: SolidPaint;
+}
+
+/**
+ * 渐变引用：坐标全部相对节点包围盒（0–1），节点移动/缩放/旋转时跟随。
+ * `linear` 用 from→to；`radial`/`angular`/`diamond` 用 from 作中心、to 作边界/角度/半宽。
+ */
+export interface GradientPaint {
+  type: GradientType;
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+  focus?: { x: number; y: number };
+  stops: GradientStop[];
+}
+
+export type Paint = SolidPaint | GradientPaint;
+
+export function isGradientPaint(paint: Paint | null | undefined): paint is GradientPaint {
+  return Boolean(paint && "stops" in paint && Array.isArray((paint as GradientPaint).stops));
+}
+
+export function isSolidPaint(paint: Paint | null | undefined): paint is SolidPaint {
+  return Boolean(paint) && !isGradientPaint(paint);
 }
 
 /** 组件属性定义：从母版图层创建，绑定一个字段。 */
@@ -47,6 +84,16 @@ export interface ComponentPropertyDef {
   type: "text" | "boolean" | "instance";
   /** 绑定的母版节点 id */
   targetMainId: NodeId;
+}
+
+/**
+ * 组件集合上的枚举变体属性（ADR-0038）。
+ * `values` 的顺序只影响 UI 展示；组合键按属性在 `variantProperties` 里的顺序拼接。
+ */
+export interface VariantPropertyDef {
+  id: string;
+  name: string;
+  values: string[];
 }
 
 /** 四角圆角（模型只存四角；统一值是 UI 快捷）。 */
@@ -244,6 +291,10 @@ export interface DocNode {
   sides?: number;
   /** 组件接口定义：仅 component 使用 */
   propertyDefs?: ComponentPropertyDef[];
+  /** 变体属性定义：仅 componentSet 使用（ADR-0038） */
+  variantProperties?: VariantPropertyDef[];
+  /** 组合键（属性顺序、值以 \u001f 连接）→ 变体组件 id；仅 componentSet 使用 */
+  variantMap?: Record<string, NodeId>;
   /** 实例属性值：propId → 值（仅 instance） */
   propValues?: Record<string, string | boolean | NodeId>;
   /** 实例覆盖：mainId → 字段补丁（仅 instance） */
@@ -313,7 +364,7 @@ export function newId(): NodeId {
 }
 
 export function createNode(type: NodeType, patch: Partial<DocNode> = {}): DocNode {
-  const container = type === "frame" || type === "component";
+  const container = type === "frame" || type === "component" || type === "componentSet";
   return {
     id: newId(),
     type,
@@ -377,15 +428,64 @@ export function createDocWithPage(name = "页面 1"): DocState {
   return doc;
 }
 
-/** 解析 Paint → 具体 CSS 值。 */
+/** 解析纯色 Paint → 具体 CSS 值；渐变返回 undefined（用 resolvePaintSpec 拿完整描述）。 */
 export function resolvePaint(state: DocState, paint: Paint | null | undefined): string | undefined {
-  if (!paint) return undefined;
+  if (!paint || isGradientPaint(paint)) return undefined;
   if (paint.token) {
     const entry = state.tokens[paint.token];
     if (!entry) return "#ff00ff"; // 缺失 Token 用洋红示警
     return String(entry.value);
   }
   return paint.value;
+}
+
+export interface ResolvedGradientStop {
+  offset: number;
+  color: string;
+}
+
+export interface ResolvedGradient {
+  type: GradientType;
+  from: { x: number; y: number };
+  to: { x: number; y: number };
+  focus?: { x: number; y: number };
+  stops: ResolvedGradientStop[];
+}
+
+export type ResolvedPaint =
+  | { type: "solid"; color: string }
+  | { type: "gradient"; gradient: ResolvedGradient };
+
+function clamp01(value: number): number {
+  return Math.min(1, Math.max(0, Number.isFinite(value) ? value : 0));
+}
+
+/** 把 Paint 解析成后端可绘制的东西：纯色字符串或已解析 stop 的渐变。 */
+export function resolvePaintSpec(state: DocState, paint: Paint | null | undefined): ResolvedPaint | undefined {
+  if (!paint) return undefined;
+  if (!isGradientPaint(paint)) {
+    const color = resolvePaint(state, paint);
+    return color ? { type: "solid", color } : undefined;
+  }
+  const stops: ResolvedGradientStop[] = [];
+  for (const stop of paint.stops) {
+    if (!stop || typeof stop.offset !== "number") continue;
+    const color = resolvePaint(state, stop.color);
+    if (!color) continue;
+    stops.push({ offset: clamp01(stop.offset), color });
+  }
+  if (stops.length < 2) return undefined;
+  stops.sort((a, b) => a.offset - b.offset);
+  return {
+    type: "gradient",
+    gradient: {
+      type: paint.type,
+      from: { x: paint.from.x, y: paint.from.y },
+      to: { x: paint.to.x, y: paint.to.y },
+      ...(paint.focus ? { focus: { x: paint.focus.x, y: paint.focus.y } } : {}),
+      stops,
+    },
+  };
 }
 
 /** 子树前序遍历（含自身）。 */
@@ -424,12 +524,14 @@ export function componentAreaOrigin(state: DocState): { x: number; y: number } {
   return { x: left, y: bottom + PAGE_GAP };
 }
 
-/** 新建主组件的落点：组件区单行横排，排到已有母版最右侧之后再留一个间距。 */
+/** 新建主组件的落点：组件区单行横排，排到已有母版/组件集合最右侧之后再留一个间距。 */
 export function nextComponentPosition(state: DocState): { x: number; y: number } {
   const origin = componentAreaOrigin(state);
-  const components = getRootComponents(state);
-  if (components.length === 0) return origin;
-  return { x: Math.max(...components.map((c) => c.x + c.width)) + PAGE_GAP, y: origin.y };
+  const roots = state.rootIds
+    .map((id) => state.nodes[id])
+    .filter((node) => node?.type === "component" || node?.type === "componentSet");
+  if (roots.length === 0) return origin;
+  return { x: Math.max(...roots.map((c) => c.x + c.width)) + PAGE_GAP, y: origin.y };
 }
 
 /** 生成不重复的页面默认名："页面 N"；界面可传本地化前缀。 */

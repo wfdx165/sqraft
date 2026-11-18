@@ -22,6 +22,7 @@ const CODE_KEYS: Record<string, MessageKey> = {
   "core.slot.mustBeMain": "core.slot.mustBeMain",
   "core.slot.onlyInstance": "core.slot.onlyInstance",
   "core.component.missing": "core.component.missing",
+  "core.variant.inUse": "core.variant.inUse",
 };
 
 /**

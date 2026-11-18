@@ -125,6 +125,24 @@ describe("AI 工具：导出与布局检查", () => {
     await expect(run("export_as", { format: "png", pageId: "missing" })).rejects.toThrow(/pageId/);
   });
 
+
+  it("import_svg 交给宿主并返回 frame 信息", async () => {
+    const store = new DocStore(createDocWithPage());
+    const pageId = firstPageId(store.doc)!;
+    const run = makeExecutor(store, async () => "", () => pageId, undefined, {
+      newDocument: async () => true,
+      openDocument: async () => true,
+      importSvg: async () => ({ frameId: "frame-1", width: 120, height: 80, rasterized: ["filter-card"], missingFonts: ["Brand Sans"] }),
+    });
+
+    const result = await call(run, "import_svg", { svg: "<svg/>" });
+    expect(result.frameId).toBe("frame-1");
+    expect(result.width).toBe(120);
+    expect(result.rasterized).toEqual(["filter-card"]);
+    expect(result.missingFonts).toEqual(["Brand Sans"]);
+
+    await expect(run("import_svg", { svg: "   " })).rejects.toThrow(/svg/);
+  });
   it("inspect_layout 返回世界坐标与布局参数", async () => {
     const { store, run, pageId } = setup();
     const frame = createNode("frame", { parentId: pageId, x: 100, y: 50, width: 200, height: 100 });
@@ -217,6 +235,41 @@ describe("AI 工具：screenshot 文本替代视图", () => {
       parentId: frame.nodeId,
     });
     expect(String(res.hint)).toMatch(/format:"image"/);
+  });
+
+  it("文本视图把渐变报成类型 + 解析后的色标", async () => {
+    const { run } = textRun();
+    await call(run, "define_token", { path: "color/a", type: "color", value: "#22c55e" });
+    const rect = await call(run, "create_node", {
+      kind: "rect",
+      name: "渐变",
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 60,
+      fillGradient: {
+        type: "linear",
+        from: { x: 0, y: 0 },
+        to: { x: 1, y: 0 },
+        stops: [
+          { offset: 0, color: { token: "color/a" } },
+          { offset: 1, color: { value: "#06b6d4" } },
+        ],
+      },
+    });
+    const res = await call(run, "screenshot", {
+      format: "text",
+      region: { x: 0, y: 0, width: 120, height: 80 },
+    });
+    const row = (res.nodes as Array<Record<string, unknown>>).find((n) => n.id === rect.nodeId)!;
+    expect(row.fill).toBeNull();
+    expect(row.fillGradient).toEqual({
+      type: "linear",
+      stops: [
+        { offset: 0, color: "#22c55e" },
+        { offset: 1, color: "#06b6d4" },
+      ],
+    });
   });
 
   it("默认区域是当前页页面框，页外的节点不进来；悬空 Token 暴露成洋红", async () => {

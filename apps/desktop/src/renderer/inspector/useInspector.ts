@@ -5,9 +5,13 @@ import {
   createEffect,
   createLayoutSpec,
   sanitizeEffect,
+  findComponentSet,
   findOuterOverrideOwner,
   findOverrideOwner,
   newId,
+  variantKey,
+  variantValuesOf,
+  type VariantPropertyDef,
   resolvePaint,
   resolveNumericLayout,
   resolveNumericStyle,
@@ -22,10 +26,14 @@ import {
   type ListType,
   type NodeStyle,
   type Padding,
+  type GradientPaint,
   type ShadowEffect,
+  type SolidPaint,
+  type Paint,
   type TextAutoResize,
   type AlignEdge,
   type DistributeAxis,
+  isGradientPaint,
   scaleFactorsTo,
   type Rect,
 } from "@sqraft/core";
@@ -36,6 +44,7 @@ import { firstFamilyOf, fontFamilies, fontWeightsOf, putFont } from "../fonts";
 import { selectionBounds as boundsOf } from "../canvas/selection-bounds";
 import { createTokenBindings } from "./token-bindings";
 import { usePrototype } from "./usePrototype";
+import { duplicateVariant, removeVariant, removeVariantValue, setVariant } from "../variant-actions";
 import { t } from "../i18n";
 import { cjkSans, cjkSerif, uiFontStack } from "../font-stack";
 import type { MessageKey } from "../../shared/i18n";
@@ -326,6 +335,7 @@ const NODE_TYPE_KEYS: Partial<Record<string, MessageKey>> = {
   image: "node.image",
   group: "node.group",
   component: "node.component",
+  componentSet: "node.componentSet",
   instance: "node.instance",
   slot: "node.slot",
   page: "node.page",
@@ -398,17 +408,43 @@ function toggleClip(): void {
 
 /* ---------- 颜色 ---------- */
 
+/** 纯色视图：渐变在渐变编辑器落地前先按"自定义色"处理（编辑会替换成纯色）。 */
+function solidOf(paint: NodeStyle["fill"] | NodeStyle["stroke"]): SolidPaint | undefined {
+  return paint && !isGradientPaint(paint) ? paint : undefined;
+}
+
 function fillTokenOf(n: DocNode): string {
-  if (!n.style.fill) return "";
-  return n.style.fill.token ?? "__custom";
+  if (isGradientPaint(n.style.fill)) return "__gradient";
+  const fill = solidOf(n.style.fill);
+  if (!fill) return n.style.fill ? "__custom" : "";
+  return fill.token ?? "__custom";
 }
 
 function strokeTokenOf(n: DocNode): string {
-  if (!n.style.stroke) return "";
-  return n.style.stroke.token ?? "__custom";
+  if (isGradientPaint(n.style.stroke)) return "__gradient";
+  const stroke = solidOf(n.style.stroke);
+  if (!stroke) return n.style.stroke ? "__custom" : "";
+  return stroke.token ?? "__custom";
 }
 
-function colorOf(paint: { token?: string; value?: string } | null | undefined): string {
+/** 纯色 → 两段线性渐变（起点色 = 当前色）。 */
+function defaultGradient(color: string): GradientPaint {
+  return {
+    type: "linear",
+    from: { x: 0, y: 0.5 },
+    to: { x: 1, y: 0.5 },
+    stops: [
+      { offset: 0, color: { value: color } },
+      { offset: 1, color: { value: "#ffffff" } },
+    ],
+  };
+}
+
+function setGradient(kind: "fill" | "stroke", gradient: GradientPaint | null): void {
+  applyStyle((style) => ({ ...style, [kind]: gradient ?? undefined }));
+}
+
+function colorOf(paint: Paint | null | undefined): string {
   const resolved = resolvePaint(docStore.doc, paint) ?? "";
   return /^#[0-9a-fA-F]{6,8}$/.test(resolved) ? resolved.slice(0, 7) : "#000000";
 }
@@ -417,7 +453,14 @@ function setFill(e: Event): void {
   const value = (e.target as HTMLSelectElement).value;
   applyStyle((style) => ({
     ...style,
-    fill: value === "" ? null : value === "__custom" ? { value: resolvedCustom(style.fill ?? undefined) } : { token: value },
+    fill:
+      value === ""
+        ? null
+        : value === "__gradient"
+          ? defaultGradient(resolvedCustom(style.fill ?? undefined))
+          : value === "__custom"
+            ? { value: resolvedCustom(style.fill ?? undefined) }
+            : { token: value },
   }));
 }
 
@@ -425,11 +468,18 @@ function setStroke(e: Event): void {
   const value = (e.target as HTMLSelectElement).value;
   applyStyle((style) => ({
     ...style,
-    stroke: value === "" ? undefined : value === "__custom" ? { value: resolvedCustom(style.stroke) } : { token: value },
+    stroke:
+      value === ""
+        ? undefined
+        : value === "__gradient"
+          ? defaultGradient(resolvedCustom(style.stroke))
+          : value === "__custom"
+            ? { value: resolvedCustom(style.stroke) }
+            : { token: value },
   }));
 }
 
-function resolvedCustom(paint: { token?: string; value?: string } | undefined): string {
+function resolvedCustom(paint: Paint | null | undefined): string {
   const resolved = resolvePaint(docStore.doc, paint);
   return /^#[0-9a-fA-F]{6,8}$/.test(resolved ?? "") ? (resolved as string) : "#000000";
 }
@@ -954,6 +1004,107 @@ const allComponents = computed(() => {
     .map((n) => ({ id: n.id, name: n.name }));
 });
 
+/* ---------- 组件集合 / 枚举变体 ---------- */
+
+const variantInstance = computed<{
+  instance: DocNode;
+  set: DocNode;
+  defs: VariantPropertyDef[];
+  values: string[];
+} | null>(() => {
+  void ui.version;
+  const current = node.value;
+  if (!current || multi.value || current.type !== "instance" || !current.componentId) return null;
+  const set = findComponentSet(docStore.doc, current.componentId);
+  if (!set) return null;
+  const values = variantValuesOf(docStore.doc, set, current.componentId);
+  if (!values) return null;
+  return { instance: current, set, defs: set.variantProperties ?? [], values };
+});
+
+/** 换掉某一项后组合是否还存在；不存在的值在界面上置灰。 */
+function variantOptionAvailable(index: number, value: string): boolean {
+  const view = variantInstance.value;
+  if (!view) return false;
+  const values = view.values.map((entry, i) => (i === index ? value : entry));
+  return Boolean(view.set.variantMap?.[variantKey(values)]);
+}
+
+function onVariantChange(def: VariantPropertyDef, e: Event): void {
+  const view = variantInstance.value;
+  if (!view) return;
+  const value = (e.target as HTMLSelectElement).value;
+  setVariant(view.instance.id, { [def.id]: value });
+}
+
+const variantSetContext = computed<{
+  set: DocNode;
+  defs: VariantPropertyDef[];
+  variants: Array<{ id: string; name: string; values: string[] }>;
+} | null>(() => {
+  void ui.version;
+  const current = node.value;
+  if (!current || multi.value || current.type !== "componentSet") return null;
+  return {
+    set: current,
+    defs: current.variantProperties ?? [],
+    variants: current.children
+      .map((id) => docStore.doc.nodes[id])
+      .filter((entry): entry is DocNode => entry?.type === "component")
+      .map((entry) => ({
+        id: entry.id,
+        name: entry.name,
+        values: variantValuesOf(docStore.doc, current, entry.id) ?? [],
+      })),
+  };
+});
+
+function renameVariantProperty(def: VariantPropertyDef, e: Event): void {
+  const view = variantSetContext.value;
+  const input = e.target as HTMLInputElement;
+  if (!view) return;
+  try {
+    dispatch(
+      { type: "variant.updateProperty", params: { setId: view.set.id, propertyId: def.id, name: input.value } },
+      "variant-property",
+    );
+  } catch {
+    input.value = def.name;
+  }
+}
+
+function renameVariantValue(def: VariantPropertyDef, index: number, e: Event): void {
+  const view = variantSetContext.value;
+  const input = e.target as HTMLInputElement;
+  if (!view) return;
+  const from = def.values[index];
+  try {
+    dispatch(
+      {
+        type: "variant.updateProperty",
+        params: { setId: view.set.id, propertyId: def.id, renameValue: { from, to: input.value } },
+      },
+      "variant-property",
+    );
+  } catch {
+    input.value = from;
+  }
+}
+
+function deleteVariantValue(def: VariantPropertyDef, index: number): void {
+  const view = variantSetContext.value;
+  if (!view) return;
+  removeVariantValue(view.set.id, def.id, def.values[index]);
+}
+
+function addVariantOf(setId: string, sourceId: string): void {
+  duplicateVariant(setId, sourceId);
+}
+
+function deleteVariantOf(setId: string, componentId: string): void {
+  removeVariant(setId, componentId);
+}
+
 function propTypeLabel(type: string): string {
   return type === "text" ? t("prop.text") : type === "boolean" ? t("prop.boolean") : t("prop.instance");
 }
@@ -1190,6 +1341,7 @@ const prototype = usePrototype({ node, multi, lockedChain });
     setStroke,
     resolvedCustom,
     setCustomPaint,
+    setGradient,
     setStrokeWidth,
     supportsEffects,
     effectsOf,
@@ -1301,6 +1453,15 @@ const prototype = usePrototype({ node, multi, lockedChain });
     componentDefs,
     instanceProps,
     allComponents,
+    variantInstance,
+    variantOptionAvailable,
+    onVariantChange,
+    variantSetContext,
+    renameVariantProperty,
+    renameVariantValue,
+    deleteVariantValue,
+    addVariantOf,
+    deleteVariantOf,
     overrideView,
     outerOverrideView,
     // 原型 tab：链接读写与页面滚动设置（usePrototype）

@@ -11,7 +11,7 @@ import {
   type SvgFontFace,
   type Viewport,
 } from "@sqraft/render";
-import { subtreeWorldBounds, type DocNode, type DocState, type NodeId, type Rect } from "@sqraft/core";
+import { isGradientPaint, subtreeWorldBounds, type DocNode, type DocState, type NodeId, type Rect } from "@sqraft/core";
 import { assetBytes } from "../assets";
 import { fontsForSave } from "../fonts";
 import { linkedImage } from "../linked-images";
@@ -52,13 +52,26 @@ function hrefOfImage(image: ResolvedImage): string | null {
   }
 }
 
-/** 导出范围里所有带可见 backdrop-blur 的节点（按世界包围盒栅格化）。 */
-function backdropBlurNodes(doc: DocState, request: Pick<ExportRequest, "pageId" | "nodeIds">): DocNode[] {
+/**
+ * 导出范围里需要整棵栅格化的节点：
+ * - 可见的 backdrop-blur（SVG 没有背景快照）；
+ * - angular / diamond 渐变（SVG 没有对应元素；diamond 的四象限只在画布上精确绘制）。
+ */
+function rasterFallbackNodes(doc: DocState, request: Pick<ExportRequest, "pageId" | "nodeIds">): DocNode[] {
   const out: DocNode[] = [];
+  const needsRaster = (node: DocNode): boolean => {
+    if (node.style.effects?.some((e) => e.visible && e.type === "backdrop-blur")) return true;
+    return [node.style.fill, node.style.stroke].some(
+      (paint) => isGradientPaint(paint) && (paint.type === "angular" || paint.type === "diamond"),
+    );
+  };
   const visit = (id: NodeId): void => {
     const node = doc.nodes[id];
     if (!node || !node.visible) return;
-    if (node.style.effects?.some((e) => e.visible && e.type === "backdrop-blur")) out.push(node);
+    if (needsRaster(node)) {
+      out.push(node);
+      return; // 整棵子树都会被位图替换，不再往下找
+    }
     for (const child of node.children) visit(child);
   };
   if (request.nodeIds?.length) {
@@ -80,7 +93,7 @@ export async function renderSvgAsync(doc: DocState, request: ExportRequest): Pro
   // 背景模糊：SVG 没有背景快照，只能整棵子树栅格化后贴回去
   const rasterFallback = new Map<NodeId, { href: string; rect: Rect }>();
   const rasterized: string[] = [];
-  for (const node of backdropBlurNodes(doc, request)) {
+  for (const node of rasterFallbackNodes(doc, request)) {
     const box = subtreeWorldBounds(doc, node.id);
     if (!box) continue;
     const href = await renderPngAsync(doc, {

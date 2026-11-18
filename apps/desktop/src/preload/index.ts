@@ -4,6 +4,9 @@ import {
   type AppInfo,
   type AppLogLevel,
   type CloseRequest,
+  type ExportMatrixRequest,
+  type ExportMatrixResult,
+  type ExportSettings,
   type FetchImageResult,
   type LanguageState,
   type McpCallRequest,
@@ -42,6 +45,9 @@ const api: SqraftApi = {
     saveAs: (request: SaveAsRequest) => ipcRenderer.invoke(CHANNELS.fileSaveAs, request) as Promise<SaveAsResult>,
     exportFile: (request: { suggestedName: string; bytes: Uint8Array; format: "png" | "svg" }) =>
       ipcRenderer.invoke(CHANNELS.fileExport, request) as Promise<SaveAsResult>,
+    exportMatrix: (request: ExportMatrixRequest) =>
+      ipcRenderer.invoke(CHANNELS.fileExportMatrix, request) as Promise<ExportMatrixResult>,
+    exportSettings: () => ipcRenderer.invoke(CHANNELS.fileExportSettings) as Promise<ExportSettings>,
   },
   dialog: {
     unsaved: () => ipcRenderer.invoke(CHANNELS.dialogUnsaved) as Promise<UnsavedChoice>,

@@ -10,11 +10,12 @@ import WelcomeView from "./components/WelcomeView.vue";
 import ConnectionStatus from "./components/ConnectionStatus.vue";
 import AboutPanel from "./components/AboutPanel.vue";
 import SettingsHost from "./components/SettingsHost.vue";
+import ExportMatrixDialog from "./components/ExportMatrixDialog.vue";
 import Presenter from "./components/Presenter.vue";
 import ContextMenu from "./components/ContextMenu.vue";
 import Toast from "./components/Toast.vue";
 import TokenPicker from "./components/TokenPicker.vue";
-import { hooks, ui } from "./store";
+import { exportMatrixUi, hooks, ui } from "./store";
 import { bindingRev, installShortcuts, keyOf, registerShortcuts, runAction, type ActionId } from "./shortcuts";
 import { openSettings, settingsUi } from "./settings";
 import { closeDocument, installFileSession, newDocument, syncTitle } from "./file-session";
@@ -41,6 +42,7 @@ const MENU_ACTIONS: ActionId[] = [
   "file.exportPng2",
   "file.exportPng4",
   "file.exportSvg",
+  "file.exportMatrix",
   "file.closeDoc",
   "edit.copy",
   "edit.cut",
@@ -132,6 +134,9 @@ onMounted(() => {
     "file.exportPng2": () => hooks.exportSelectionAs("png", 2),
     "file.exportPng4": () => hooks.exportSelectionAs("png", 4),
     "file.exportSvg": () => hooks.exportSelectionAs("svg", 1),
+    "file.exportMatrix": () => {
+      exportMatrixUi.open = true;
+    },
     "view.present": () => togglePresenter(),
     "palette.open": () => togglePalette(),
     "file.exampleLogin": () => void openExample("login"),
@@ -189,6 +194,7 @@ watchEffect(() => {
 
     <CommandPalette v-if="paletteUi.open" />
     <AboutPanel v-if="aboutOpen" @close="aboutOpen = false" />
+    <ExportMatrixDialog v-if="exportMatrixUi.open" @close="exportMatrixUi.open = false" />
     <SettingsHost v-if="settingsUi.open" />
     <Toast />
     <TokenPicker />
