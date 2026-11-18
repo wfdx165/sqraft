@@ -1,9 +1,9 @@
 <script setup lang="ts">
 /**
- * 快捷键面板：居中的对话框（不是贴着工具条的小浮层）。
- * 点击键位就地录制；Esc、点遮罩或右上角 × 关闭；冲突/保留键当场拒绝并提示。
+ * 快捷键分类：由设置外壳承载，自身只负责列表、录制与冲突提示。
+ * 点击键位就地录制；Esc 或右上角 × 关闭设置；冲突/保留键当场拒绝。
  */
-import { computed, onBeforeUnmount, onMounted, ref } from "vue";
+import { computed, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   ACTIONS,
   FIXED_HINTS,
@@ -19,6 +19,7 @@ import {
   type ActionGroup,
 } from "../shortcuts";
 import { t } from "../i18n";
+import { closeSettings, settingsUi } from "../settings";
 import Icon from "./Icon.vue";
 
 const confirmReset = ref(false);
@@ -33,9 +34,15 @@ const groups = computed<{ group: ActionGroup; items: typeof ACTIONS }[]>(() =>
 const changed = computed(() => ACTIONS.some((a) => !isDefault(a.id)));
 
 function close() {
-  shortcutUi.open = false;
+  closeSettings();
   stopRecord();
 }
+
+/** 切到别的分类时不能把录制态带过去，否则键盘会被这一栏继续吃掉。 */
+watch(
+  () => settingsUi.section,
+  () => stopRecord(),
+);
 
 function startRecord(id: (typeof ACTIONS)[number]["id"]) {
   shortcutUi.recording = id;
@@ -49,6 +56,8 @@ function stopRecord() {
 
 /** 录制期间吃掉所有按键；Esc 取消，非法组合留在录制态等下一次。 */
 function onKeydownCapture(e: KeyboardEvent) {
+  // 四个分类常驻（v-show），切走后这一栏的录制/关闭逻辑不能继续吃按键
+  if (settingsUi.section !== "shortcuts") return;
   if (shortcutUi.recording) {
     e.preventDefault();
     e.stopPropagation();
@@ -94,18 +103,19 @@ onMounted(() => {
 onBeforeUnmount(() => {
   window.removeEventListener("keydown", onKeydownCapture, true);
   window.clearTimeout(confirmTimer);
+  // 关闭设置（外壳 v-if 卸载）时录制态必须复位，否则重开后捕获监听会继续吞按键
+  stopRecord();
 });
 </script>
 
 <template>
-  <div class="kb-overlay" @pointerdown.self="close">
-    <div class="kb-dialog glass" role="dialog" :aria-label="t('shortcuts.title')" @pointerdown.stop>
+  <div class="kb-embedded">
+    <div class="kb-dialog" role="group" :aria-label="t('shortcuts.title')">
       <header class="head">
         <div class="titles">
           <span class="title">{{ t("shortcuts.title") }}</span>
           <span class="hint">{{ shortcutUi.recording ? t("shortcuts.recordHint") : t("shortcuts.editHint") }}</span>
         </div>
-        <button class="close" :aria-label="t('common.close')" @click="close"><Icon name="close" :size="14" /></button>
       </header>
 
       <div class="cols">
@@ -143,31 +153,18 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
-/* 全屏遮罩：面板从工具条里挪出来，因此可以真正居中（工具条带 translate，会吃掉 fixed） */
-.kb-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 60;
-  display: grid;
-  place-items: center;
-  background: var(--mask);
-  backdrop-filter: blur(2px);
-  animation: veil-in 140ms var(--ease);
+/* 设置外壳已经给了遮罩与滚动容器，这里只铺满分类内容区 */
+.kb-embedded {
+  height: 100%;
+  display: flex;
 }
 
 .kb-dialog {
-  width: 480px;
-  max-width: calc(100vw - 48px);
-  max-height: 72vh;
+  flex: 1;
+  min-height: 0;
   display: flex;
   flex-direction: column;
-  border-radius: 16px;
-  padding: 14px 16px 12px;
-  background: rgba(252, 252, 253, 0.96);
-  box-shadow:
-    0 32px 80px rgba(0, 0, 0, 0.28),
-    0 2px 8px rgba(0, 0, 0, 0.12);
-  animation: dialog-in 160ms var(--ease);
+  padding: 0;
 }
 
 @keyframes veil-in {
@@ -208,27 +205,6 @@ onBeforeUnmount(() => {
 .hint {
   font-size: 10.5px;
   color: var(--text-faint);
-}
-
-.close {
-  display: grid;
-  place-items: center;
-  width: 24px;
-  height: 24px;
-  flex: none;
-  border: none;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-faint);
-  cursor: pointer;
-  transition:
-    background var(--dur-fast) var(--ease),
-    color var(--dur-fast) var(--ease);
-}
-
-.close:hover {
-  background: var(--tint-5);
-  color: var(--text);
 }
 
 /* 两列：按分组顺序自然流动（左列满了接右列），分组不被拆开 */

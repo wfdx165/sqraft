@@ -9,6 +9,7 @@ import { fileURLToPath } from "node:url";
 import {
   CHANNELS,
   type McpCallResult,
+  type McpClientsSyncEvent,
   type McpSetupInfo,
   type McpStatus,
   type McpToolInfo,
@@ -18,6 +19,8 @@ import { logError, logInfo, logWarn } from "./log";
 import { isValidPort, MCP_DEFAULT_PORT, MCP_FALLBACK_STEPS } from "./port";
 import { startMcpServer, type McpRuntime } from "./server";
 import { collectSetupInfo } from "./setup";
+import { createClientService, type ClientService } from "./clients/service";
+import { isMcpClientId, type McpClientId } from "../../shared/mcp-clients";
 import { t } from "../i18n";
 import { AGENT_TEXT } from "../../shared/agent-text";
 
@@ -29,6 +32,8 @@ let driftFrom: number | null = null;
 let appVersion = "0.0.0";
 let tools: McpToolInfo[] = [];
 let sequence = 0;
+/** 懒建：userData / home 只有在 app ready 之后才可靠。 */
+let clientService: ClientService | null = null;
 
 /** 与渲染层 `MAX_ASSET_BYTES` 对齐的读盘上限（主进程拿不到渲染层常量）。 */
 const MAX_CLIPBOARD_BYTES = 20 * 1024 * 1024;
@@ -99,10 +104,43 @@ function broadcastStatus(): void {
   }
 }
 
+function clientServiceInstance(): ClientService {
+  if (!clientService) {
+    clientService = createClientService({
+      ctx: {
+        home: app.getPath("home"),
+        platform: process.platform,
+        env: process.env,
+        userDataDir: app.getPath("userData"),
+      },
+      url: () => setupInfo().url,
+      listening: () => runtime !== null,
+      sessions: () => runtime?.clients() ?? [],
+    });
+  }
+  return clientService;
+}
+
+/** 渲染层只传 id；路径与命令在主进程按 adapter 表解析。 */
+function requireClientId(value: unknown): McpClientId {
+  if (!isMcpClientId(value)) throw new Error("unknown mcp client");
+  return value;
+}
+
 export function registerMcpChannels(): void {
   ipcMain.handle(CHANNELS.mcpSetup, () => setupInfo());
   ipcMain.handle(CHANNELS.mcpStatusQuery, () => currentStatus());
   ipcMain.handle(CHANNELS.mcpSetPort, (_event, port: unknown) => setMcpPort(port));
+  ipcMain.handle(CHANNELS.mcpClients, () => clientServiceInstance().snapshot());
+  ipcMain.handle(CHANNELS.mcpClientsAttach, (_event, id: unknown) =>
+    clientServiceInstance().attach(requireClientId(id)),
+  );
+  ipcMain.handle(CHANNELS.mcpClientsDetach, (_event, id: unknown) =>
+    clientServiceInstance().detach(requireClientId(id)),
+  );
+  ipcMain.handle(CHANNELS.mcpClientsReplace, (_event, id: unknown) =>
+    clientServiceInstance().attach(requireClientId(id), "replace"),
+  );
 
   ipcMain.on(CHANNELS.appCopyText, (_event, text: string) => {
     clipboard.writeText(String(text));
@@ -259,6 +297,24 @@ async function startServer(): Promise<void> {
   await writeRuntimeInfo();
   // 服务可能在页面挂载之后才就绪：主动推一次，欢迎页不必轮询
   broadcastStatus();
+  // 端口漂移后把清单里的客户端配置跟上；失败只提示，不阻塞启动
+  void syncClientConfigs();
+}
+
+/** 端口变化后的自动同步：只处理所有权清单里的条目。 */
+async function syncClientConfigs(): Promise<void> {
+  if (!runtime) return;
+  try {
+    const result = await clientServiceInstance().sync(runtime.url);
+    if (result.updated > 0 || result.failed > 0) {
+      const event: McpClientsSyncEvent = result;
+      for (const window of BrowserWindow.getAllWindows()) {
+        window.webContents.send(CHANNELS.mcpClientsSynced, event);
+      }
+    }
+  } catch (error) {
+    logWarn(null, "client sync failed", { error: String(error) });
+  }
 }
 
 export async function startMcp(version: string): Promise<void> {

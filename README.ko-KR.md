@@ -61,6 +61,8 @@ http://127.0.0.1:7331/mcp
 
 앱은 계속 실행 중이어야 합니다(명령줄 도구가 없고, 클라이언트가 앱을 실행하지도 않습니다). 포트가 사용 중이면 다음 빈 포트로 옮겨가며, 실제 주소는 환영 화면과 **Sqraft → MCP 설정…**(Windows는 파일 메뉴)에 표시됩니다.
 
+**Sqraft → MCP 설정…**을 열고 사용하는 클라이언트를 체크하세요. Sqraft는 자신의 `sqraft` 항목만 쓰고, 쓰기 전에 백업하며, 포트가 바뀌면 주소를 동기화합니다. 쓴 뒤에는 클라이언트를 재시작하세요. 클라이언트가 감지되지 않거나 CLI가 없거나 설정을 쓸 수 없으면 아래 스니펫을 사용하세요. Windows 원클릭 설정은 구현되었지만 실기 검증은 아직입니다. 스니펫은 항상 사용할 수 있습니다.
+
 <details>
 <summary>Claude Code</summary>
 
@@ -92,6 +94,43 @@ claude mcp add --transport http sqraft http://127.0.0.1:7331/mcp
 ```jsonc
 {
   "mcpServers": {
+    "sqraft": { "url": "http://127.0.0.1:7331/mcp" }
+  }
+}
+```
+
+</details>
+
+
+<details>
+<summary>Codex</summary>
+
+```toml
+[mcp_servers.sqraft]
+url = "http://127.0.0.1:7331/mcp"
+```
+
+</details>
+
+<details>
+<summary>VS Code</summary>
+
+```jsonc
+{
+  "mcpServers": {
+    "sqraft": { "type": "http", "url": "http://127.0.0.1:7331/mcp" }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary>Zed</summary>
+
+```jsonc
+{
+  "context_servers": {
     "sqraft": { "url": "http://127.0.0.1:7331/mcp" }
   }
 }

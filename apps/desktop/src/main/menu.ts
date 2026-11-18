@@ -11,6 +11,7 @@ import { app, BrowserWindow, dialog, ipcMain, Menu, shell, type MenuItemConstruc
 import { basename } from "node:path";
 import { CHANNELS } from "../shared/ipc";
 import { formatBinding } from "../shared/binding";
+import { commandOf, COMMANDS, isCommandId, type CommandId } from "../shared/commands";
 import { clearImageCache } from "./image-cache";
 import { logFileDir } from "./log-file";
 import { t } from "./i18n";
@@ -26,27 +27,10 @@ export function setRecentFiles(files: string[]): void {
   rebuildMenu();
 }
 
-const DEFAULT_BINDINGS: Record<string, string> = {
-  "file.new": "⌘N",
-  "file.closeDoc": "⌘W",
-  "file.open": "⌘O",
-  "file.save": "⌘S",
-  "file.saveAs": "⇧⌘S",
-  "file.exportPng": "⌘⇧E",
-  "edit.copy": "⌘C",
-  "edit.cut": "⌘X",
-  "edit.undo": "⌘Z",
-  "edit.redo": "⌘⇧Z",
-  "view.zoomIn": "⌘+",
-  "view.zoomOut": "⌘−",
-  "view.zoomReset": "⌘0",
-  "view.fit": "⇧1",
-  "view.fitAll": "⇧2",
-  "view.toggleGrid": "⌘'",
-  "view.toggleSnap": "⌘⌥'",
-  "view.toggleGuides": "⌘;",
-  "view.present": "⌥⌘Enter",
-};
+/** 默认键位只有一份：注册表。 */
+const DEFAULT_BINDINGS: Record<string, string> = Object.fromEntries(
+  COMMANDS.flatMap((command) => (command.default ? [[command.id, command.default]] : [])),
+);
 
 /** `⌘⇧Z` → Electron accelerator（只用于 macOS 的展示）。 */
 function toAccelerator(binding: string): string | undefined {
@@ -64,8 +48,11 @@ function keyOf(action: string): string {
 
 /**
  * 生成一个动作菜单项：macOS 显示快捷键但不注册，其他平台把键位写进标签。
+ * 文案来自注册表（`menuLabelKey` 优先），不再由调用方各传一份。
  */
-function actionItem(action: string, label: string, mac: boolean): MenuItemConstructorOptions {
+function actionItem(action: CommandId, mac: boolean): MenuItemConstructorOptions {
+  const command = commandOf(action);
+  const label = t(command.menuLabelKey ?? command.labelKey);
   const accelerator = toAccelerator(keyOf(action));
   const item: MenuItemConstructorOptions = {
     // 非 mac 把键位写进标签；Windows 显示 Ctrl/Alt/Shift，不能把 ⌘ 直接甩给用户
@@ -85,7 +72,7 @@ function actionItem(action: string, label: string, mac: boolean): MenuItemConstr
 /** 「设置…」：macOS 快捷键 ⌘,；其他平台用 Ctrl+, 写进文件菜单。 */
 function settingsItem(mac: boolean): MenuItemConstructorOptions {
   return {
-    label: t("menu.settings"),
+    label: t(commandOf("app.settings").labelKey),
     accelerator: mac ? "Command+," : "CommandOrControl+,",
     click: () => {
       const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
@@ -97,12 +84,53 @@ function settingsItem(mac: boolean): MenuItemConstructorOptions {
 /** 「配置 MCP…」：入口归到应用菜单的「设置…」旁边（非 mac 放「文件」菜单）。 */
 function mcpSetupItem(): MenuItemConstructorOptions {
   return {
-    label: t("menu.configureMcp"),
+    label: t(commandOf("app.mcpSetup").labelKey),
     click: () => {
       const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
       target?.webContents.send(CHANNELS.menuCommand, "app.mcpSetup");
     },
   };
+}
+
+/** 清图片缓存 + 结果对话框；菜单与 ⌘K 共用。 */
+async function clearImageCacheWithDialog(): Promise<void> {
+  const bytes = await clearImageCache();
+  const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  const options: Electron.MessageBoxOptions = {
+    type: "info",
+    buttons: [t("common.ok")],
+    message:
+      bytes > 0
+        ? t("menu.imageCacheCleared", { mb: Math.max(1, Math.round(bytes / 1024 / 1024)) })
+        : t("menu.imageCacheEmpty"),
+  };
+  if (target) await dialog.showMessageBox(target, options);
+  else await dialog.showMessageBox(options);
+}
+
+async function openLogsDir(): Promise<void> {
+  const dir = logFileDir();
+  if (dir) await shell.openPath(dir);
+}
+
+/**
+ * 主进程专属命令的统一入口（⌘K 走 `app:run-command`）。
+ * UI 类命令回发给渲染层，走与菜单点击完全相同的路径；文件/日志类命令在主进程执行。
+ */
+export async function runMainCommand(id: CommandId): Promise<boolean> {
+  if (commandOf(id).owner !== "main") return false;
+  if (id === "app.clearImageCache") {
+    await clearImageCacheWithDialog();
+    return true;
+  }
+  if (id === "app.openLogsDir") {
+    await openLogsDir();
+    return true;
+  }
+  const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  if (!target) return false;
+  target.webContents.send(CHANNELS.menuCommand, id);
+  return true;
 }
 
 /**
@@ -155,7 +183,7 @@ export function buildTemplate(
       label: app.name,
       submenu: [
         {
-          label: t("menu.about"),
+          label: t(commandOf("app.about").labelKey),
           click: () => {
             const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
             target?.webContents.send(CHANNELS.menuCommand, "app.about");
@@ -178,33 +206,20 @@ export function buildTemplate(
   template.push({
     label: t("menu.file"),
     submenu: [
-      actionItem("file.new", t("menu.new"), mac),
-      actionItem("file.open", t("menu.open"), mac),
-      actionItem("file.insertImage", t("menu.insertImage"), mac),
-      actionItem("file.save", t("menu.save"), mac),
-      actionItem("file.saveAs", t("menu.saveAs"), mac),
-      actionItem("file.exportPng", t("menu.exportPng"), mac),
+      actionItem("file.new", mac),
+      actionItem("file.open", mac),
+      actionItem("file.insertImage", mac),
+      actionItem("file.save", mac),
+      actionItem("file.saveAs", mac),
+      actionItem("file.exportPng", mac),
       { type: "separator" },
       ...(mac ? [] : [settingsItem(mac), mcpSetupItem()]),
       ...(mac ? [] : [{ type: "separator" as const }]),
       {
         // 链接图片的字节不在文件里，只能靠本机缓存：给一个手动清理入口（上限 500MB，LRU 自动淘汰）
-        label: t("menu.clearImageCache"),
+        label: t(commandOf("app.clearImageCache").labelKey),
         click: () => {
-          void (async () => {
-            const bytes = await clearImageCache();
-            const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
-            const options: Electron.MessageBoxOptions = {
-              type: "info",
-              buttons: [t("common.ok")],
-              message:
-                bytes > 0
-                  ? t("menu.imageCacheCleared", { mb: Math.max(1, Math.round(bytes / 1024 / 1024)) })
-                  : t("menu.imageCacheEmpty"),
-            };
-            if (target) await dialog.showMessageBox(target, options);
-            else await dialog.showMessageBox(options);
-          })();
+          void clearImageCacheWithDialog();
         },
       },
       { type: "separator" },
@@ -222,7 +237,7 @@ export function buildTemplate(
               })),
       },
       { type: "separator" },
-      actionItem("file.closeDoc", t("menu.closeDoc"), mac),
+      actionItem("file.closeDoc", mac),
       { type: "separator" },
       closeWindowItem(t("menu.closeWindow")),
       ...(mac ? [] : [{ role: "quit" as const, label: t("menu.quit") }]),
@@ -232,31 +247,31 @@ export function buildTemplate(
   template.push({
     label: t("menu.edit"),
     submenu: [
-      actionItem("edit.undo", t("menu.undo"), mac),
-      actionItem("edit.redo", t("menu.redo"), mac),
+      actionItem("edit.undo", mac),
+      actionItem("edit.redo", mac),
       { type: "separator" },
-      actionItem("edit.cut", t("menu.cut"), mac),
-      actionItem("edit.copy", t("menu.copy"), mac),
-      actionItem("edit.paste", t("menu.paste"), mac),
-      actionItem("edit.selectAll", t("menu.selectAll"), mac),
+      actionItem("edit.cut", mac),
+      actionItem("edit.copy", mac),
+      actionItem("edit.paste", mac),
+      actionItem("edit.selectAll", mac),
     ],
   });
 
   template.push({
     label: t("menu.view"),
     submenu: [
-      actionItem("view.zoomIn", t("menu.zoomIn"), mac),
-      actionItem("view.zoomOut", t("menu.zoomOut"), mac),
-      actionItem("view.zoomReset", t("menu.zoomReset"), mac),
+      actionItem("view.zoomIn", mac),
+      actionItem("view.zoomOut", mac),
+      actionItem("view.zoomReset", mac),
       { type: "separator" },
-      actionItem("view.fit", t("menu.fit"), mac),
-      actionItem("view.fitAll", t("menu.fitAll"), mac),
+      actionItem("view.fit", mac),
+      actionItem("view.fitAll", mac),
       { type: "separator" },
-      actionItem("view.toggleGrid", t("menu.showGrid"), mac),
-      actionItem("view.toggleSnap", t("menu.enableSnap"), mac),
-      actionItem("view.toggleGuides", t("menu.showGuides"), mac),
+      actionItem("view.toggleGrid", mac),
+      actionItem("view.toggleSnap", mac),
+      actionItem("view.toggleGuides", mac),
       { type: "separator" },
-      actionItem("view.present", t("menu.present"), mac),
+      actionItem("view.present", mac),
       { type: "separator" },
       { role: "togglefullscreen", label: t("menu.enterFullscreen") },
     ],
@@ -287,7 +302,7 @@ export function buildTemplate(
   const help: MenuItemConstructorOptions[] = [
     {
       // 更新是半静默的（ADR-0029）：自动检查之外，给一个"我现在就想查"的入口
-      label: t("menu.checkUpdates"),
+      label: t(commandOf("app.checkUpdates").labelKey),
       click: () => {
         const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
         target?.webContents.send(CHANNELS.menuCommand, "app.checkUpdates");
@@ -295,10 +310,9 @@ export function buildTemplate(
     },
     {
       // 打包版从 Finder 启动时日志只落文件，入口要能被找到
-      label: t("menu.openLogs"),
+      label: t(commandOf("app.openLogsDir").labelKey),
       click: () => {
-        const dir = logFileDir();
-        if (dir) void shell.openPath(dir);
+        void openLogsDir();
       },
     },
   ];
@@ -306,7 +320,7 @@ export function buildTemplate(
   help.push(
     { type: "separator" },
     {
-      label: t("menu.about"),
+      label: t(commandOf("app.about").labelKey),
       click: () => {
         const target = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
         target?.webContents.send(CHANNELS.menuCommand, "app.about");
@@ -328,5 +342,9 @@ export function registerMenuChannels(): void {
   ipcMain.on(CHANNELS.menuSetBindings, (_event, next: Record<string, string>) => {
     bindings = { ...next };
     rebuildMenu();
+  });
+  ipcMain.handle(CHANNELS.appRunCommand, (_event, id: unknown) => {
+    if (!isCommandId(id) || commandOf(id).owner !== "main") return false;
+    return runMainCommand(id);
   });
 }

@@ -6,12 +6,10 @@ import InspectorPanel from "./components/InspectorPanel.vue";
 import CanvasView from "./components/CanvasView.vue";
 import DesignSystemPanel from "./components/DesignSystemPanel.vue";
 import ComponentsPanel from "./components/ComponentsPanel.vue";
-import ShortcutsPanel from "./components/ShortcutsPanel.vue";
 import WelcomeView from "./components/WelcomeView.vue";
 import ConnectionStatus from "./components/ConnectionStatus.vue";
-import McpSetupPanel from "./components/McpSetupPanel.vue";
 import AboutPanel from "./components/AboutPanel.vue";
-import SettingsPanel from "./components/SettingsPanel.vue";
+import SettingsHost from "./components/SettingsHost.vue";
 import ExportPngDialog from "./components/ExportPngDialog.vue";
 import Presenter from "./components/Presenter.vue";
 import ContextMenu from "./components/ContextMenu.vue";
@@ -19,9 +17,14 @@ import Toast from "./components/Toast.vue";
 import TokenPicker from "./components/TokenPicker.vue";
 import { exportUi, hooks, ui } from "./store";
 import { openExportDefault } from "./export-actions";
-import { bindingRev, installShortcuts, keyOf, registerShortcuts, runAction, shortcutUi, type ActionId } from "./shortcuts";
+import { bindingRev, installShortcuts, keyOf, registerShortcuts, runAction, type ActionId } from "./shortcuts";
+import { openSettings, settingsUi } from "./settings";
 import { closeDocument, installFileSession, newDocument, syncTitle } from "./file-session";
 import { installMcpHost } from "./mcp-host";
+import { installMcpClientsSync } from "./mcp-clients";
+import { paletteUi, togglePalette } from "./palette";
+import { openExample } from "./examples";
+import CommandPalette from "./components/CommandPalette.vue";
 import { pasteFromClipboard } from "./paste";
 import { copySelectionAction, cutSelectionAction } from "./canvas/node-clipboard";
 import { checkForUpdates, installUpdates } from "./update";
@@ -53,9 +56,7 @@ const MENU_ACTIONS: ActionId[] = [
   "view.present",
 ];
 
-const mcpSetupOpen = ref(false);
 const aboutOpen = ref(false);
-const settingsOpen = ref(false);
 const platform = window.sqraft.platform;
 
 /** 切换语言后窗口标题里的「未命名 / Untitled」也要跟着变；画布标签字体也随语言换栈。 */
@@ -64,17 +65,31 @@ watch(locale, () => {
   hooks.requestRedraw();
 });
 
+/** 设置与「关于」都是模态：设置打开时收起关于，避免 Esc 一次关两层。 */
+watch(
+  () => settingsUi.open,
+  (open) => {
+    if (open) aboutOpen.value = false;
+  },
+);
+
 let uninstall = () => {};
 let uninstallMenu = () => {};
 let uninstallDoc = () => {};
+let uninstallClientsSync = () => {};
 onMounted(() => {
   uninstall = installShortcuts();
   installFileSession();
   installMcpHost();
+  uninstallClientsSync = installMcpClientsSync();
   installUpdates();
   uninstallMenu = window.sqraft.menu.onCommand((action) => {
     if (action === "app.mcpSetup") {
-      mcpSetupOpen.value = true;
+      openSettings("mcp");
+      return;
+    }
+    if (action === "app.shortcuts") {
+      openSettings("shortcuts");
       return;
     }
     if (action === "app.about") {
@@ -82,7 +97,7 @@ onMounted(() => {
       return;
     }
     if (action === "app.settings") {
-      settingsOpen.value = true;
+      openSettings();
       return;
     }
     if (action === "app.checkUpdates") {
@@ -103,6 +118,10 @@ onMounted(() => {
     "edit.cut": () => void cutSelectionAction(),
     "file.exportPng": () => openExportDefault(),
     "view.present": () => togglePresenter(),
+    "palette.open": () => togglePalette(),
+    "file.exampleLogin": () => void openExample("login"),
+    "file.exampleCards": () => void openExample("cards"),
+    "file.exampleUmbra": () => void openExample("umbra"),
     "edit.selectAll": () => {
       const el = document.activeElement as HTMLElement | null;
       const editing = !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
@@ -115,6 +134,7 @@ onBeforeUnmount(() => {
   uninstall();
   uninstallMenu();
   uninstallDoc();
+  uninstallClientsSync();
 });
 
 watchEffect(() => {
@@ -148,15 +168,13 @@ watchEffect(() => {
         <InspectorPanel />
       </aside>
     </template>
-    <WelcomeView v-else @open-mcp-setup="mcpSetupOpen = true" />
+    <WelcomeView v-else @open-mcp-setup="openSettings('mcp')" />
     <ConnectionStatus v-if="ui.docOpen" />
     <Presenter v-if="ui.docOpen && ui.presenter" />
 
-    <!-- 快捷键面板：居中对话框，放在根节点以避免被工具条的 translate 约束 -->
-    <ShortcutsPanel v-if="shortcutUi.open" />
-    <McpSetupPanel v-if="mcpSetupOpen" @close="mcpSetupOpen = false" />
+    <CommandPalette v-if="paletteUi.open" />
     <AboutPanel v-if="aboutOpen" @close="aboutOpen = false" />
-    <SettingsPanel v-if="settingsOpen" @close="settingsOpen = false" />
+    <SettingsHost v-if="settingsUi.open" />
     <ExportPngDialog v-if="exportUi.open" />
     <Toast />
     <TokenPicker />

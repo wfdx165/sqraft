@@ -1,37 +1,31 @@
 <script setup lang="ts">
 /**
- * 欢迎页：以 MCP 接入为主位（ADR-0021）。
- * 上半回答"服务在不在、能干什么、怎么接上"，下半才是新建/打开与最近文件。
+ * 欢迎页：状态 + 已检测到的客户端（可一键接入）+ 新建/打开/最近文件。
+ * 完整清单与手动片段在配置面板里（ADR-0036）。
  */
-import { computed, onMounted, ref } from "vue";
+import { computed, onMounted, ref, watch } from "vue";
 import { newDocument, openDocument, openDocumentPath } from "../file-session";
 import { MCP_TOOL_COUNT, mcpUi } from "../mcp-host";
 import { mcpSetup } from "../mcp-setup";
+import { MCP_CLIENT_LABELS, mcpClients, mcpClientsUi } from "../mcp-clients";
 import { t } from "../i18n";
-import {
-  MCP_CLIENTS,
-  actionText,
-  clientSnippet,
-  statusLine,
-  welcomeMcpState,
-  type McpClient,
-} from "../mcp-welcome";
+import { statusLine, welcomeMcpState } from "../mcp-welcome";
+import { openExample } from "../examples";
+import PromptList from "./PromptList.vue";
+import type { McpClientId } from "../../shared/mcp-clients";
 
 const emit = defineEmits<{ "open-mcp-setup": [] }>();
 
 const recent = ref<{ path: string; name: string }[]>([]);
-const info = mcpSetup.info;
-const copied = ref(false);
 const message = ref("");
-const client = ref<McpClient>("claude");
+const info = mcpSetup.info;
+const snapshot = computed(() => mcpClientsUi.snapshot);
 
 const state = computed(() => welcomeMcpState(info.value, mcpUi.clients));
 const statusText = computed(() => (mcpUi.busy ? t("welcome.busy") : statusLine(mcpUi)));
-const snippet = computed(() => clientSnippet(info.value, client.value));
+const detected = computed(() => (snapshot.value?.clients ?? []).filter((client) => client.detected));
 const driftText = computed(() =>
-  mcpUi.driftFrom
-    ? t("welcome.drift", { from: mcpUi.driftFrom, to: mcpUi.port })
-    : "",
+  mcpUi.driftFrom ? t("welcome.drift", { from: mcpUi.driftFrom, to: mcpUi.port }) : "",
 );
 
 async function refreshRecent(): Promise<void> {
@@ -40,38 +34,37 @@ async function refreshRecent(): Promise<void> {
 
 onMounted(() => {
   void refreshRecent();
-  // 与配置面板共用同一份配置：面板里改完端口会直接反映到这里
   void mcpSetup.ensure().then((next) => {
+    if (!next) message.value = t("welcome.readFailed");
+  });
+  void mcpClients.ensure().then((next) => {
     if (!next) message.value = t("welcome.readFailed");
   });
 });
 
+// 会话数变化时刷新四态（连接/断开都能反映到客户端行）
+watch(
+  () => mcpUi.clients.length,
+  () => {
+    void mcpClients.ensure(true);
+  },
+);
+
 async function openRecent(path: string): Promise<void> {
   await openDocumentPath(path);
-  // 失效条目会被主进程剔除，回来后重新取一次
   await refreshRecent();
 }
 
-function copySnippet(): void {
-  if (!snippet.value) return;
-  window.sqraft.app.copyText(snippet.value);
-  copied.value = true;
-  window.setTimeout(() => {
-    if (copied.value) copied.value = false;
-  }, 1400);
+async function attach(id: McpClientId): Promise<void> {
+  const result = await mcpClients.attach(id);
+  if (!result?.ok) message.value = result?.issue?.message ?? mcpClientsUi.error;
+  else message.value = "";
 }
 
-/** 三态主按钮：服务没起来去查端口，没人连就复制片段，已连接则没有动作 */
-function runPrimary(): void {
-  if (state.value === "offline") emit("open-mcp-setup");
-  else if (state.value === "idle") copySnippet();
-}
-
-/** 切换客户端预设：外壳不同，指向同一个端点 */
-function switchClient(next: McpClient): void {
-  if (client.value === next) return;
-  client.value = next;
-  copied.value = false;
+async function detach(id: McpClientId): Promise<void> {
+  const result = await mcpClients.detach(id);
+  if (!result?.ok) message.value = result?.issue?.message ?? mcpClientsUi.error;
+  else message.value = "";
 }
 </script>
 
@@ -93,39 +86,62 @@ function switchClient(next: McpClient): void {
         </div>
         <p class="capability">{{ t("welcome.capability", { count: MCP_TOOL_COUNT }) }}</p>
 
-        <div class="clients" role="tablist" :aria-label="t('welcome.clients')">
-          <button
-            v-for="item in MCP_CLIENTS"
-            :key="item.id"
-            class="client"
-            :class="{ on: client === item.id }"
-            role="tab"
-            :aria-selected="client === item.id"
-            type="button"
-            @click="switchClient(item.id)"
-          >
-            {{ item.id === "generic" ? t("mcp.clientGeneric") : item.label }}
-          </button>
+        <div v-if="detected.length > 0" class="client-list">
+          <div class="client-title">{{ t("mcp.clients.detected") }}</div>
+          <div v-for="client in detected" :key="client.id" class="client-row">
+            <span class="client-name">{{ MCP_CLIENT_LABELS[client.id] }}</span>
+            <span class="badge" :class="client.state">
+              {{
+                client.state === "connected"
+                  ? t("mcp.clients.connected")
+                  : client.state === "written"
+                    ? t("mcp.clients.written")
+                    : t("mcp.clients.absent")
+              }}
+            </span>
+            <span class="spacer" />
+            <button
+              v-if="client.state === 'written' || client.state === 'connected'"
+              class="pill ghost"
+              :disabled="mcpClientsUi.busy === client.id"
+              @click="detach(client.id)"
+            >
+              {{ t("mcp.clients.detach") }}
+            </button>
+            <button
+              v-else-if="client.issue?.code !== 'CONFLICT'"
+              class="pill"
+              :disabled="mcpClientsUi.busy === client.id || !snapshot?.listening"
+              @click="attach(client.id)"
+            >
+              {{ client.url ? t("mcp.clients.reattach") : t("mcp.clients.attach") }}
+            </button>
+            <button v-else class="pill ghost" @click="emit('open-mcp-setup')">
+              {{ t("mcp.clients.issue") }}
+            </button>
+          </div>
         </div>
-
-        <div class="command">
-          <code :title="snippet">{{ snippet }}</code>
-          <button class="copy" type="button" :disabled="!snippet" @click="copySnippet">
-            {{ copied ? t("common.copied") : t("common.copy") }}
+        <div v-else class="client-empty">
+          <p>{{ t("mcp.clients.noneDetected") }}</p>
+          <button class="pill ghost" @click="emit('open-mcp-setup')">
+            {{ t("mcp.clients.all") }}
           </button>
         </div>
 
         <p v-if="driftText" class="warn">{{ driftText }}</p>
 
         <div class="mcp-actions">
-          <button v-if="state !== 'connected'" class="install" type="button" @click="runPrimary">
-            {{ actionText(state) }}
+          <span v-if="state === 'connected'" class="ready">{{ t("welcome.connected") }}</span>
+          <button v-else-if="state === 'offline'" class="pill" @click="emit('open-mcp-setup')">
+            {{ t("mcp.action.offline") }}
           </button>
-          <span v-else class="ready">{{ t("welcome.connected") }}</span>
+          <span v-else class="ready">{{ t("welcome.attachHint") }}</span>
           <button class="link" type="button" @click="emit('open-mcp-setup')">{{ t("welcome.mcpSetup") }}</button>
         </div>
 
         <p v-if="message" class="message">{{ message }}</p>
+
+        <PromptList v-if="state === 'connected'" compact />
       </section>
 
       <div class="divider" />
@@ -134,6 +150,15 @@ function switchClient(next: McpClient): void {
         <div class="actions">
           <button class="primary" type="button" @click="newDocument">{{ t("welcome.newDoc") }}</button>
           <button class="ghost" type="button" @click="openDocument">{{ t("welcome.open") }}</button>
+        </div>
+
+        <div class="examples">
+          <div class="recent-title">{{ t("welcome.examples") }}</div>
+          <div class="actions">
+            <button class="pill ghost" type="button" @click="openExample('login')">{{ t("example.login") }}</button>
+            <button class="pill ghost" type="button" @click="openExample('cards')">{{ t("example.cards") }}</button>
+            <button class="pill ghost" type="button" @click="openExample('umbra')">{{ t("example.umbra") }}</button>
+          </div>
         </div>
 
         <div v-if="recent.length > 0" class="recent">
@@ -239,75 +264,86 @@ function switchClient(next: McpClient): void {
   color: var(--text-dim);
 }
 
-.clients {
+.client-list {
   display: flex;
+  flex-direction: column;
   gap: 2px;
-  margin-bottom: -4px;
 }
 
-.client {
-  border: none;
-  background: transparent;
-  color: var(--text-faint);
-  font-family: inherit;
+.client-title {
   font-size: 11px;
-  padding: 3px 9px;
-  border-radius: 6px;
-  cursor: pointer;
-  transition: color var(--dur-fast, 120ms) var(--ease, ease);
+  color: var(--text-faint);
+  margin-bottom: 2px;
 }
 
-.client:hover {
-  color: var(--text);
-}
-
-.client.on {
-  color: var(--text);
-  background: var(--glass-strong);
-}
-
-.command {
+.client-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 8px 8px 8px 10px;
-  border-radius: var(--radius-sm, 8px);
-  background: var(--tint-4);
-  border: 1px solid var(--hairline);
+  padding: 4px 0;
 }
 
-.command code {
-  flex: 1;
-  min-width: 0;
-  font-family: var(--mono);
-  font-size: 11.5px;
+.client-name {
+  font-size: 12.5px;
   color: var(--text);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  /* 右侧渐隐：提示还有内容，但不让它撑破卡片 */
-  mask-image: linear-gradient(to right, #000 calc(100% - 20px), transparent);
+  min-width: 88px;
 }
 
-.copy {
-  flex: none;
-  border: 1px solid var(--hairline-strong);
-  background: transparent;
+.spacer {
+  flex: 1;
+}
+
+.badge {
+  font-size: 10.5px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--hairline);
+  color: var(--text-faint);
+}
+
+.badge.connected {
+  color: #15803d;
+  border-color: #86efac;
+  background: #f0fdf4;
+}
+
+.badge.written {
+  color: var(--text);
+  border-color: var(--hairline-strong);
+}
+
+.client-empty p {
+  margin: 0 0 6px;
+  font-size: 11.5px;
   color: var(--text-dim);
-  border-radius: 6px;
+  line-height: 1.5;
+}
+
+.pill {
+  border: 1px solid var(--hairline-strong);
+  background: var(--glass);
+  color: var(--text);
+  border-radius: 7px;
   padding: 3px 9px;
   font-family: inherit;
   font-size: 11px;
   cursor: pointer;
+  flex: none;
 }
 
-.copy:hover {
-  color: var(--text);
+.pill:hover:not(:disabled) {
+  background: var(--glass-strong);
 }
 
-.copy:disabled {
+.pill:disabled {
   opacity: 0.5;
   cursor: default;
+}
+
+.pill.ghost {
+  border-color: var(--hairline);
+  background: transparent;
+  color: var(--text-dim);
 }
 
 .mcp-actions {
@@ -315,28 +351,6 @@ function switchClient(next: McpClient): void {
   align-items: center;
   justify-content: space-between;
   gap: 14px;
-}
-
-.install {
-  flex: none;
-  border: 1px solid var(--hairline-strong);
-  background: var(--glass);
-  color: var(--text);
-  border-radius: 9px;
-  padding: 6px 12px;
-  font-family: inherit;
-  font-size: 12px;
-  cursor: pointer;
-  transition: background var(--dur-fast, 120ms) var(--ease, ease);
-}
-
-.install:hover:not(:disabled) {
-  background: var(--glass-strong);
-}
-
-.install:disabled {
-  opacity: 0.6;
-  cursor: default;
 }
 
 .ready {
@@ -384,6 +398,7 @@ function switchClient(next: McpClient): void {
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
 }
 

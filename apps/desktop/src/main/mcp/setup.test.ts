@@ -37,6 +37,13 @@ describe("MCP 接入片段", () => {
         servers: { sqraft: { type: "remote", url: "http://127.0.0.1:7331/mcp" } },
       },
     });
+    expect(JSON.parse(info.vscodeJson)).toEqual({
+      mcpServers: { sqraft: { type: "http", url: "http://127.0.0.1:7331/mcp" } },
+    });
+    expect(JSON.parse(info.zedJson)).toEqual({
+      context_servers: { sqraft: { url: "http://127.0.0.1:7331/mcp" } },
+    });
+    expect(info.codexToml).toBe('[mcp_servers.sqraft]\nurl = "http://127.0.0.1:7331/mcp"\n');
   });
 
   it("把状态字段原样带出去（渲染层据此显示告警）", () => {

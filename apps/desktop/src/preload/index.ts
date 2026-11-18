@@ -8,6 +8,9 @@ import {
   type LanguageState,
   type McpCallRequest,
   type McpCallResult,
+  type McpClientsSnapshot,
+  type McpClientsSyncEvent,
+  type McpAttachResult,
   type McpSetupInfo,
   type McpStatus,
   type McpToolInfo,
@@ -22,6 +25,8 @@ import {
   type UpdateState,
 } from "../shared/ipc";
 import type { LanguagePreference, Locale } from "../shared/i18n";
+import type { McpClientId } from "../shared/mcp-clients";
+import type { CommandId } from "../shared/commands";
 
 /**
  * 渲染层能接触到的全部主进程能力，只有这一处。
@@ -52,6 +57,15 @@ const api: SqraftApi = {
     setTools: (tools: McpToolInfo[]) => ipcRenderer.send(CHANNELS.mcpSetTools, tools),
     setup: () => ipcRenderer.invoke(CHANNELS.mcpSetup) as Promise<McpSetupInfo>,
     setPort: (port: number | null) => ipcRenderer.invoke(CHANNELS.mcpSetPort, port) as Promise<McpSetupInfo>,
+    clients: () => ipcRenderer.invoke(CHANNELS.mcpClients) as Promise<McpClientsSnapshot>,
+    attachClient: (id: McpClientId) => ipcRenderer.invoke(CHANNELS.mcpClientsAttach, id) as Promise<McpAttachResult>,
+    detachClient: (id: McpClientId) => ipcRenderer.invoke(CHANNELS.mcpClientsDetach, id) as Promise<McpAttachResult>,
+    replaceClient: (id: McpClientId) => ipcRenderer.invoke(CHANNELS.mcpClientsReplace, id) as Promise<McpAttachResult>,
+    onClientsSynced: (handler: (event: McpClientsSyncEvent) => void) => {
+      const listener = (_event: Electron.IpcRendererEvent, next: McpClientsSyncEvent) => handler(next);
+      ipcRenderer.on(CHANNELS.mcpClientsSynced, listener);
+      return () => ipcRenderer.removeListener(CHANNELS.mcpClientsSynced, listener);
+    },
     onStatus: (handler: (status: McpStatus) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, status: McpStatus) => handler(status);
       ipcRenderer.on(CHANNELS.mcpStatus, listener);
@@ -67,6 +81,8 @@ const api: SqraftApi = {
     check: (manual?: boolean) => ipcRenderer.invoke(CHANNELS.updateCheck, manual === true) as Promise<UpdateState>,
     restart: () => ipcRenderer.invoke(CHANNELS.updateRestart) as Promise<void>,
     download: () => ipcRenderer.invoke(CHANNELS.updateDownload) as Promise<boolean>,
+    setAutoDownload: (enabled: boolean) =>
+      ipcRenderer.invoke(CHANNELS.updateSetAutoDownload, enabled === true) as Promise<UpdateState>,
     onState: (handler: (state: UpdateState) => void) => {
       const listener = (_event: Electron.IpcRendererEvent, next: UpdateState) => handler(next);
       ipcRenderer.on(CHANNELS.updateChanged, listener);
@@ -83,6 +99,7 @@ const api: SqraftApi = {
   },
   app: {
     info: () => ipcRenderer.invoke(CHANNELS.appInfo) as Promise<AppInfo>,
+    runCommand: (id: CommandId) => ipcRenderer.invoke(CHANNELS.appRunCommand, id) as Promise<boolean>,
     setLanguage: (preference: LanguagePreference) =>
       ipcRenderer.invoke(CHANNELS.appSetLanguage, preference) as Promise<LanguageState>,
     onLanguageChange: (handler: (locale: Locale) => void) => {

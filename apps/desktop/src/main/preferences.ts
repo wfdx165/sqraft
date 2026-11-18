@@ -23,9 +23,9 @@ export interface Preferences {
   update?: UpdatePreferences;
 }
 
-/** 更新状态里需要跨启动记住的部分：节流时间、已下载版本、7 天提醒去过重。 */
+/** 更新状态里需要跨启动记住的部分：最小检查间隔、已下载版本、7 天提醒去过重。 */
 export interface UpdatePreferences {
-  /** 上次自动检查时间（毫秒）：24 小时内不再自动查 */
+  /** 上次自动检查时间（毫秒）：两次自动检查之间至少隔 4 小时 */
   lastCheckAt?: number;
   /** 已下载完成、等待安装的版本 */
   readyVersion?: string;
@@ -35,6 +35,8 @@ export interface UpdatePreferences {
   remindedVersion?: string;
   /** 上次安装失败的版本：自动检查不再反复重下同一个坏包（手动检查仍放行） */
   failedVersion?: string;
+  /** 自动下载开关：缺省 = true；关闭后只提示新版本，由用户手动下载 */
+  autoDownload?: boolean;
 }
 
 /** MCP 端口偏好：显式端口优先；自动模式记住上次成功的端口，避免每次重启重新漂移。 */
@@ -107,6 +109,7 @@ function sanitizeUpdate(value: unknown): UpdatePreferences | undefined {
   if (typeof raw.readySince === "number" && Number.isFinite(raw.readySince)) next.readySince = raw.readySince;
   if (typeof raw.remindedVersion === "string" && raw.remindedVersion) next.remindedVersion = raw.remindedVersion;
   if (typeof raw.failedVersion === "string" && raw.failedVersion) next.failedVersion = raw.failedVersion;
+  if (typeof raw.autoDownload === "boolean") next.autoDownload = raw.autoDownload;
   return Object.keys(next).length > 0 ? next : undefined;
 }
 

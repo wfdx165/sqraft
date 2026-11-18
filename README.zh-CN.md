@@ -61,6 +61,8 @@ http://127.0.0.1:7331/mcp
 
 应用需要保持运行（没有命令行工具，也不会由客户端拉起）。端口被占用时会自动顺延，实际地址在欢迎页和 **Sqraft → 配置 MCP…**（Windows 在文件菜单）里。
 
+打开 **Sqraft → 配置 MCP…**，勾选你在用的客户端。Sqraft 只写入自己的 `sqraft` 条目，写前备份，端口变化时同步更新；写完重启客户端即可。没检测到客户端、找不到命令行工具或配置不可写时，用下面的片段手动配置。Windows 的一键接入已实现但尚未实机验证，手动片段始终可用。
+
 <details>
 <summary>Claude Code</summary>
 
@@ -92,6 +94,43 @@ claude mcp add --transport http sqraft http://127.0.0.1:7331/mcp
 ```jsonc
 {
   "mcpServers": {
+    "sqraft": { "url": "http://127.0.0.1:7331/mcp" }
+  }
+}
+```
+
+</details>
+
+
+<details>
+<summary>Codex</summary>
+
+```toml
+[mcp_servers.sqraft]
+url = "http://127.0.0.1:7331/mcp"
+```
+
+</details>
+
+<details>
+<summary>VS Code</summary>
+
+```jsonc
+{
+  "mcpServers": {
+    "sqraft": { "type": "http", "url": "http://127.0.0.1:7331/mcp" }
+  }
+}
+```
+
+</details>
+
+<details>
+<summary>Zed</summary>
+
+```jsonc
+{
+  "context_servers": {
     "sqraft": { "url": "http://127.0.0.1:7331/mcp" }
   }
 }

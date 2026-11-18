@@ -19,6 +19,7 @@ export const updateUi = reactive<UpdateState>({
   message: null,
   readyAt: null,
   supported: false,
+  autoDownload: true,
 });
 
 function apply(next: UpdateState): void {
@@ -74,6 +75,15 @@ export async function downloadUpdate(): Promise<void> {
   }
 }
 
+/** 设置 → 高级：自动下载开关。关闭后只提示新版本，下次检查生效。 */
+export async function setAutoDownload(enabled: boolean): Promise<void> {
+  try {
+    apply(await window.sqraft.update.setAutoDownload(enabled));
+  } catch (error) {
+    showToast(error instanceof Error ? error.message : String(error), "error");
+  }
+}
+
 /** 关于面板的一句话状态 */
 export function updateStatusText(): string {
   switch (updateUi.phase) {
@@ -89,6 +99,8 @@ export function updateStatusText(): string {
       return t("update.ready", { version: updateUi.latestVersion ?? "" });
     case "available":
       return t("update.available", { version: updateUi.latestVersion ?? "" });
+    case "waiting":
+      return t("update.waiting", { version: updateUi.latestVersion ?? "" });
     case "up-to-date":
       return t("update.upToDate");
     case "error":
