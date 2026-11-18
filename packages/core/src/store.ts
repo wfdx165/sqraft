@@ -3,7 +3,7 @@
  * 确定性 + 可逆 + 可批量；GUI、AI、撤销重做全部走这里。
  */
 
-import type { ComponentPropertyDef, DocNode, DocState, NodeId } from "./model";
+import type { ComponentPropertyDef, DocNode, DocState, NodeId, TokenEntry, TokenType } from "./model";
 import { createNode, isRootNodeType, walkSubtree, worldRect } from "./model";
 import { AppError } from "./errors";
 import { applyTokenCommand } from "./token-commands";
@@ -116,7 +116,7 @@ export type Command =
   | { type: "instance.swap"; params: { instanceId: NodeId; componentId: NodeId } }
   /** 实例脱离为普通画板；嵌套实例与插槽内容保留 */
   | { type: "component.detach"; params: { instanceId: NodeId } }
-  | { type: "token.define"; params: { path: string; tokenType: "color" | "number"; value: string | number } }
+  | { type: "token.define"; params: { path: string; tokenType: TokenType; value: TokenEntry["value"] } }
   /** 删除 Token（新建的 Token 撤销时用它回滚，避免留下孤儿条目） */
   | { type: "token.delete"; params: { path: string } }
   /** 改名是原子操作：token 条目与所有节点引用一起改，只占一步撤销 */

@@ -2,7 +2,15 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { addRecent, loadPreferences, normalizeExportSettings, removeRecent, savePreferences } from "./preferences";
+import {
+  MAX_GRADIENT_PRESETS,
+  addRecent,
+  loadPreferences,
+  normalizeExportSettings,
+  removeRecent,
+  sanitizeGradientPresets,
+  savePreferences,
+} from "./preferences";
 import { isValidPort } from "./mcp/port";
 
 const dirs: string[] = [];
@@ -96,5 +104,42 @@ describe("MCP 端口偏好", () => {
 
     await writeFile(file, JSON.stringify({ recentFiles: [], mcp: { port: 80, autoPort: "x" } }));
     expect((await loadPreferences(file)).mcp).toBeUndefined();
+  });
+});
+
+describe("渐变预设", () => {
+  const gradient = (from: string, to: string) => ({
+    type: "linear" as const,
+    from: { x: 0, y: 0.5 },
+    to: { x: 1, y: 0.5 },
+    stops: [
+      { offset: 0, color: { value: from } },
+      { offset: 1, color: { value: to } },
+    ],
+  });
+
+  it("只保留形状合法的值，并夹到上限", () => {
+    const list = [
+      gradient("#000000", "#ffffff"),
+      { type: "conic", from: { x: 0, y: 0 }, to: { x: 1, y: 1 }, stops: [] },
+      { type: "linear", from: { x: "0", y: 0 }, to: { x: 1, y: 1 }, stops: [] },
+      "nope",
+    ];
+    expect(sanitizeGradientPresets(list)).toHaveLength(1);
+
+    const many = Array.from({ length: 40 }, () => gradient("#111111", "#222222"));
+    expect(sanitizeGradientPresets(many)).toHaveLength(MAX_GRADIENT_PRESETS);
+  });
+
+  it("非数组输入返回空", () => {
+    expect(sanitizeGradientPresets(undefined)).toEqual([]);
+    expect(sanitizeGradientPresets({})).toEqual([]);
+  });
+
+  it("写盘后能原样读回", async () => {
+    const file = join(await tempDir(), "preferences.json");
+    const presets = [gradient("#6366f1", "#a855f7")];
+    await savePreferences(file, { recentFiles: [], gradientPresets: presets });
+    expect((await loadPreferences(file)).gradientPresets).toEqual(presets);
   });
 });

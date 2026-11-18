@@ -2,6 +2,7 @@
  * 主进程与渲染层之间的唯一契约：通道名 + 请求/响应形状。
  * preload 按这里的类型实现 `window.sqraft`，渲染层只依赖 `SqraftApi`。
  */
+import type { GradientValue } from "@sqraft/core";
 import type { LanguagePreference, Locale, MessageKey } from "./i18n";
 import type { McpClientChannel, McpClientId, McpClientIssueCode } from "./mcp-clients";
 import type { CommandId } from "./commands";
@@ -338,6 +339,12 @@ export interface SqraftApi {
     /** 文档是否打开、是否在演示：主进程据此置灰菜单项 */
     setState(state: MenuState): void;
   };
+  prefs: {
+    /** 用户保存的渐变预设（上限由主进程夹取；不存名字，只存渐变值） */
+    gradientPresets(): Promise<GradientValue[]>;
+    /** 覆写用户预设，返回夹取后的结果（超出上限的部分被丢弃） */
+    setGradientPresets(presets: GradientValue[]): Promise<GradientValue[]>;
+  };
   app: {
     info(): Promise<AppInfo>;
     /** 执行主进程专属命令（设置 / MCP 面板 / 清缓存 / 日志目录 / 关于 / 检查更新） */
@@ -394,6 +401,8 @@ export const CHANNELS = {
   fileExport: "file:export",
   fileExportMatrix: "file:export-matrix",
   fileExportSettings: "file:export-settings",
+  prefsGradientPresets: "prefs:gradient-presets",
+  prefsSetGradientPresets: "prefs:set-gradient-presets",
   fileOpenPath: "file:open-path",
   fileOpenRequest: "file:open-request",
   fileDropped: "file:dropped",

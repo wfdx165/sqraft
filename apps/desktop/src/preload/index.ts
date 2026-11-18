@@ -29,6 +29,7 @@ import {
   type UpdateState,
 } from "../shared/ipc";
 import type { LanguagePreference, Locale } from "../shared/i18n";
+import type { GradientValue } from "@sqraft/core";
 import type { McpClientId } from "../shared/mcp-clients";
 import type { CommandId } from "../shared/commands";
 
@@ -48,6 +49,11 @@ const api: SqraftApi = {
     exportMatrix: (request: ExportMatrixRequest) =>
       ipcRenderer.invoke(CHANNELS.fileExportMatrix, request) as Promise<ExportMatrixResult>,
     exportSettings: () => ipcRenderer.invoke(CHANNELS.fileExportSettings) as Promise<ExportSettings>,
+  },
+  prefs: {
+    gradientPresets: () => ipcRenderer.invoke(CHANNELS.prefsGradientPresets) as Promise<GradientValue[]>,
+    setGradientPresets: (presets: GradientValue[]) =>
+      ipcRenderer.invoke(CHANNELS.prefsSetGradientPresets, presets) as Promise<GradientValue[]>,
   },
   dialog: {
     unsaved: () => ipcRenderer.invoke(CHANNELS.dialogUnsaved) as Promise<UnsavedChoice>,

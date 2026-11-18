@@ -1,5 +1,14 @@
 // 工具名直接分派；每个分支保持原实现，ctx 提供 store 与宿主能力。
-import { blockedDeleteMessage, planTokenDelete, tokenColorOf, tokenNumberOf, tokenPathOf } from "../shared";
+import {
+  assertToken,
+  blockedDeleteMessage,
+  planTokenDelete,
+  tokenColorOf,
+  tokenGradientOf,
+  tokenNumberOf,
+  tokenPathOf,
+  type GradientValue,
+} from "../shared";
 import type { Handler } from "../types";
 
 /** `get_tokens` */
@@ -22,16 +31,29 @@ export const handleDefineToken: Handler = async (ctx, args) => {
         `Token 路径 "${String(args.path ?? "")}" 不合法：至少形如 color/primary，不能含空格或空段`,
       );
     }
-    const type = args.type === "color" || args.type === "number" ? args.type : null;
-    if (!type) throw new Error('type 只能是 "color" 或 "number"');
+    const type =
+      args.type === "color" || args.type === "number" || args.type === "gradient" ? args.type : null;
+    if (!type) throw new Error('type 只能是 "color"、"number" 或 "gradient"');
     const raw = args.value;
-    const value = type === "color" ? tokenColorOf(raw) : tokenNumberOf(raw);
+    const value: string | number | GradientValue | null =
+      type === "color" ? tokenColorOf(raw) : type === "number" ? tokenNumberOf(raw) : tokenGradientOf(raw);
     if (value === null) {
       throw new Error(
         type === "color"
           ? `颜色 "${String(raw ?? "")}" 不合法：需要 #hex、rgb() 或 rgba()`
-          : `数值 "${String(raw ?? "")}" 不合法`,
+          : type === "number"
+            ? `数值 "${String(raw ?? "")}" 不合法`
+            : `渐变 ${JSON.stringify(raw ?? null)} 不合法：需要 { type: "linear" | "radial" | "angular" | "diamond", from, to, stops }，2–16 个色标`,
       );
+    }
+    if (type === "gradient") {
+      const gradient = value as GradientValue;
+      // 严格模式与节点上写字面量渐变同一套规则：色标必须是颜色 Token（ADR-0035 / ADR-0039）
+      if (ctx.store.doc.strictTokens === true && gradient.stops.some((stop) => !stop.color.token)) {
+        throw new Error("TOKEN_REQUIRED: gradient token stops must reference color tokens in strict mode.");
+      }
+      // 色标引用不存在的 Token：当场拒绝，别等到画布上出现洋红
+      for (const stop of gradient.stops) assertToken(ctx.store, stop.color.token, `define_token(${path})`);
     }
     const prev = ctx.store.doc.tokens[path];
     if (prev && prev.type !== type) {
@@ -63,7 +85,7 @@ export const handleDeleteToken: Handler = async (ctx, args) => {
     const detach = args.detach === true || args.detach === "true";
     const plan = planTokenDelete(ctx.store.doc, path, detach);
     if (plan.status === "missing") throw new Error(`Token "${path}" 不存在`);
-    if (plan.status === "blocked") throw new Error(blockedDeleteMessage(ctx.store.doc, path, plan.refs, plan.value));
+    if (plan.status === "blocked") throw new Error(blockedDeleteMessage(ctx.store.doc, path, plan.refs, plan.tokenRefs, plan.value));
 
     try {
       for (const cmd of plan.commands) ctx.store.apply(cmd, "ai:delete_token");

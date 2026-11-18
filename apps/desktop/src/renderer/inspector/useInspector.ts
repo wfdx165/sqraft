@@ -27,6 +27,7 @@ import {
   type NodeStyle,
   type Padding,
   type GradientPaint,
+  type GradientValue,
   type ShadowEffect,
   type SolidPaint,
   type Paint,
@@ -34,6 +35,8 @@ import {
   type AlignEdge,
   type DistributeAxis,
   isGradientPaint,
+  cloneGradientValue,
+  tokenPathOf,
   scaleFactorsTo,
   type Rect,
 } from "@sqraft/core";
@@ -43,9 +46,11 @@ import { putAsset } from "../assets";
 import { firstFamilyOf, fontFamilies, fontWeightsOf, putFont } from "../fonts";
 import { selectionBounds as boundsOf } from "../canvas/selection-bounds";
 import { createTokenBindings } from "./token-bindings";
+import { gradientTokenPathOf, gradientValueOf } from "./gradient-source";
 import { usePrototype } from "./usePrototype";
 import { duplicateVariant, removeVariant, removeVariantValue, setVariant } from "../variant-actions";
 import { t } from "../i18n";
+import { localizeError } from "../errors";
 import { cjkSans, cjkSerif, uiFontStack } from "../font-stack";
 import type { MessageKey } from "../../shared/i18n";
 
@@ -324,6 +329,15 @@ const tokenNames = computed(() => {
   return Object.keys(docStore.doc.tokens).filter((k) => docStore.doc.tokens[k].type === "color");
 });
 
+/** 填充 / 描边可以引用的 Token：纯色与渐变（数值 Token 不行）。 */
+const paintTokenNames = computed(() => {
+  void ui.version;
+  return Object.keys(docStore.doc.tokens).filter((k) => {
+    const type = docStore.doc.tokens[k]?.type;
+    return type === "color" || type === "gradient";
+  });
+});
+
 /* ---------- 元信息与几何 ---------- */
 
 const NODE_TYPE_KEYS: Partial<Record<string, MessageKey>> = {
@@ -444,9 +458,88 @@ function setGradient(kind: "fill" | "stroke", gradient: GradientPaint | null): v
   applyStyle((style) => ({ ...style, [kind]: gradient ?? undefined }));
 }
 
+/** 该字段当前引用的渐变 Token 路径（没有则 undefined）。 */
+function gradientTokenOf(kind: "fill" | "stroke"): string | undefined {
+  const n = node.value;
+  return n ? gradientTokenPathOf(n.style, kind, docStore.doc.tokens) : undefined;
+}
+
+/** 编辑器要展示的渐变值（引用态展开成 Token 里的值，色标仍保留 Token 引用）。 */
+function gradientOf(kind: "fill" | "stroke"): GradientValue | undefined {
+  const n = node.value;
+  return n ? gradientValueOf(n.style, kind, docStore.doc.tokens) : undefined;
+}
+
+/** 引用态 → 同一份渐变的字面量（断链）。一次撤销步。 */
+function detachGradient(kind: "fill" | "stroke"): void {
+  const gradient = gradientOf(kind);
+  if (!gradient) return;
+  setGradient(kind, cloneGradientValue(gradient));
+}
+
+/* ---------- 存为渐变 Token ---------- */
+
+const gradientTokenForm = ref<"fill" | "stroke" | null>(null);
+const gradientTokenPath = ref("");
+const gradientTokenError = ref("");
+const gradientTokenBusy = ref(false);
+
+function openGradientTokenForm(kind: "fill" | "stroke"): void {
+  gradientTokenForm.value = kind;
+  gradientTokenPath.value = gradientTokenOf(kind) ?? "gradient/new";
+  gradientTokenError.value = "";
+}
+
+function cancelGradientTokenForm(): void {
+  gradientTokenForm.value = null;
+  gradientTokenError.value = "";
+}
+
+/**
+ * 建 Token 与改成引用必须同一条撤销，否则撤销只回得来其中一半。
+ * 失败时表单保持展开、错误留在原地——关掉再报错等于静默失败。
+ */
+async function submitGradientToken(kind: "fill" | "stroke"): Promise<void> {
+  if (gradientTokenBusy.value) return;
+  const n = node.value;
+  const gradient = gradientOf(kind);
+  if (!n || !gradient) return;
+  const path = tokenPathOf(gradientTokenPath.value);
+  if (!path) {
+    gradientTokenError.value = t("tokens.pathError");
+    return;
+  }
+  if (docStore.doc.tokens[path]) {
+    gradientTokenError.value = t("tokens.pathExists");
+    return;
+  }
+  const style = { ...n.style, [kind]: { token: path } } as NodeStyle;
+  gradientTokenBusy.value = true;
+  try {
+    await docStore.transact(t("inspector.gradientSaveAsToken"), () => {
+      dispatch(
+        { type: "token.define", params: { path, tokenType: "gradient", value: cloneGradientValue(gradient) } },
+        "token-define",
+      );
+      dispatch({ type: "node.update", params: { nodeId: n.id, patch: { style } } }, "inspect");
+    });
+    gradientTokenForm.value = null;
+    gradientTokenError.value = "";
+  } catch (error) {
+    gradientTokenError.value = localizeError(error);
+  } finally {
+    gradientTokenBusy.value = false;
+  }
+}
+
 function colorOf(paint: Paint | null | undefined): string {
   const resolved = resolvePaint(docStore.doc, paint) ?? "";
   return /^#[0-9a-fA-F]{6,8}$/.test(resolved) ? resolved.slice(0, 7) : "#000000";
+}
+
+/** 色标从 Token 切回字面量时的起点色（解析不到就黑色）。 */
+function tokenColorOf(path: string): string {
+  return colorOf({ token: path });
 }
 
 function setFill(e: Event): void {
@@ -1337,11 +1430,22 @@ const prototype = usePrototype({ node, multi, lockedChain });
     fillTokenOf,
     strokeTokenOf,
     colorOf,
+    tokenColorOf,
     setFill,
     setStroke,
     resolvedCustom,
     setCustomPaint,
     setGradient,
+    gradientOf,
+    gradientTokenOf,
+    detachGradient,
+    gradientTokenForm,
+    gradientTokenPath,
+    gradientTokenError,
+    gradientTokenBusy,
+    openGradientTokenForm,
+    cancelGradientTokenForm,
+    submitGradientToken,
     setStrokeWidth,
     supportsEffects,
     effectsOf,
@@ -1440,6 +1544,7 @@ const prototype = usePrototype({ node, multi, lockedChain });
     supportsSizing,
     readonly,
     tokenNames,
+    paintTokenNames,
     radiusExpanded,
     paddingExpanded,
     textDraft,

@@ -4,13 +4,16 @@
  */
 import { app, BrowserWindow } from "electron";
 import { join } from "node:path";
+import type { GradientValue } from "@sqraft/core";
 import type { LanguagePreference } from "../shared/i18n";
 import { CHANNELS, type ExportSettings } from "../shared/ipc";
 import {
+  MAX_GRADIENT_PRESETS,
   addRecent,
   loadPreferences,
   normalizeExportSettings,
   removeRecent,
+  sanitizeGradientPresets,
   savePreferences,
   type McpPreferences,
   type Preferences,
@@ -79,6 +82,18 @@ export async function patchUpdatePreferences(patch: Partial<UpdatePreferences>):
   }
   preferences = { ...preferences, update: next };
   await savePreferences(preferencesFile(), preferences);
+}
+
+/** 用户渐变预设（渲染层负责语义校验；这里只夹上限并落盘）。 */
+export function gradientPresetPreferences(): GradientValue[] {
+  return sanitizeGradientPresets(preferences.gradientPresets);
+}
+
+export async function setGradientPresetPreferences(list: unknown): Promise<GradientValue[]> {
+  const next = sanitizeGradientPresets(list).slice(0, MAX_GRADIENT_PRESETS);
+  preferences = { ...preferences, gradientPresets: next };
+  await savePreferences(preferencesFile(), preferences);
+  return next;
 }
 
 /** 多倍率导出的设置（缺省 1×+2×，不带 SVG）。 */

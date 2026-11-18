@@ -127,6 +127,9 @@ export function migrateDoc(state: DocState, fromVersion = state.formatVersion ??
   // 10：Paint 新增可选的渐变形态（linear/radial/angular/diamond）。
   //     纯色结构与旧文件一致，渐变缺省即"没有"，不需要改数据。
   if (version < 10) version = 10;
+  // 11：Token 新增可选的渐变类型（ADR-0039）。旧文件的 color / number Token 结构不变，
+  //     不需要改数据；旧版本读到渐变 Token 会把值当颜色画，所以必须靠版本号拒开。
+  if (version < 11) version = 11;
   state.formatVersion = CURRENT_FORMAT_VERSION;
   return state;
 }

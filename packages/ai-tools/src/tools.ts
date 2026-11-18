@@ -377,13 +377,16 @@ export const tools: ToolDefinition[] = [
   {
     name: "define_token",
     description:
-      "新增或覆盖一个设计 Token。path 形如 color/primary、spacing/md（至少含一个 /，不能有空格或空段）；type=color 时 value 接受 #hex（3/6/8 位）、rgb() / rgba()（带 alpha 也可用 8 位 hex），type=number 时接受有限数值。已存在的同类型路径覆盖取值（可撤销）；不能把已有 Token 改成另一种类型。数值 Token 可被 fontSizeToken / lineHeightToken / letterSpacingToken / paragraphSpacingToken / strokeWidthToken / cornerRadiusTokens / gapToken / crossGapToken / paddingTokens 引用。",
+      "新增或覆盖一个设计 Token。path 形如 color/primary、spacing/md（至少含一个 /，不能有空格或空段）；type=color 时 value 接受 #hex（3/6/8 位）、rgb() / rgba()（带 alpha 也可用 8 位 hex），type=number 时接受有限数值，type=gradient 时 value 传 { type: \"linear\" | \"radial\" | \"angular\" | \"diamond\", from, to, focus?, stops }（坐标相对节点包围盒 0–1，2–16 个色标，色标颜色可引用颜色 Token）。已存在的同类型路径覆盖取值（可撤销）；不能把已有 Token 改成另一种类型。数值 Token 可被 fontSizeToken / lineHeightToken / letterSpacingToken / paragraphSpacingToken / strokeWidthToken / cornerRadiusTokens / gapToken / crossGapToken / paddingTokens 引用；颜色与渐变 Token 可被 fillToken / strokeToken 引用。严格模式下渐变 Token 的色标必须引用颜色 Token。",
     input_schema: {
       type: "object",
       properties: {
         path: { type: "string", description: "Token 路径，如 color/primary" },
-        type: { type: "string", enum: ["color", "number"] },
-        value: { description: "color 传字符串，number 传数字", oneOf: [{ type: "string" }, { type: "number" }] },
+        type: { type: "string", enum: ["color", "number", "gradient"] },
+        value: {
+          description: "color 传字符串，number 传数字，gradient 传 { type, from, to, focus?, stops }",
+          oneOf: [{ type: "string" }, { type: "number" }, { type: "object" }],
+        },
       },
       required: ["path", "type", "value"],
       additionalProperties: false,
@@ -774,7 +777,7 @@ export const tools: ToolDefinition[] = [
   {
     name: "inspect_layout",
     description:
-      "读取页面或指定节点的布局数据：世界坐标几何、是否绝对定位、自动布局参数（方向/gap/padding/wrap）与 hug-fill 行为；布局对象会带 gapToken / crossGapToken / paddingTokens 引用，存在 Token 时 `resolved` 给出解析后的实际 gap / crossGap / padding。同时返回 `diagnostics`：对这一批节点跑与写工具同一套规则（ZERO_SIZE / TEXT_NO_FILL / TEXT_OVERFLOW / TOKEN_MISSING / OUTSIDE_PARENT），描述的是当前状态。只读。",
+      "读取页面或指定节点的布局数据：世界坐标几何、是否绝对定位、自动布局参数（方向/gap/padding/wrap）与 hug-fill 行为；布局对象会带 gapToken / crossGapToken / paddingTokens 引用，存在 Token 时 `resolved` 给出解析后的实际 gap / crossGap / padding。同时返回 `diagnostics`：对这一批节点跑与写工具同一套规则（ZERO_SIZE / TEXT_NO_FILL / TEXT_OVERFLOW / TOKEN_MISSING / TOKEN_TYPE / OUTSIDE_PARENT），描述的是当前状态。只读。",
     input_schema: {
       type: "object",
       properties: {
