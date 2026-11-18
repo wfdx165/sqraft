@@ -247,6 +247,12 @@ export function buildTemplate(
       actionItem("file.insertImage", mac),
       actionItem("file.save", mac),
       actionItem("file.saveAs", mac),
+      actionItem("file.exportPng", mac),
+      actionItem("file.new", mac),
+      actionItem("file.open", mac),
+      actionItem("file.insertImage", mac),
+      actionItem("file.save", mac),
+      actionItem("file.saveAs", mac),
       {
         label: t("menu.exportAs"),
         enabled: menuState.docOpen && !menuState.presenting,

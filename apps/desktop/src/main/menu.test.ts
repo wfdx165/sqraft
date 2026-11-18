@@ -15,6 +15,9 @@ vi.mock("electron", () => ({
 
 vi.mock("./image-cache", () => ({ clearImageCache: vi.fn(async () => 0) }));
 
+const { buildTemplate, runMainCommand, registerMenuChannels } = await import("./menu");
+vi.mock("./image-cache", () => ({ clearImageCache: vi.fn(async () => 0) }));
+
 const { buildTemplate, runMainCommand, registerMenuChannels, setMenuState } = await import("./menu");
 const { setMainLanguage } = await import("./i18n");
 
@@ -174,6 +177,52 @@ describe("应用菜单", () => {
 
   it("开发者工具：没有窗口时静默返回", () => {
     expect(() => clickItem(devtoolsItem("darwin"))).not.toThrow();
+  });
+});
+
+describe("主进程命令派发", () => {
+  it("只处理 owner === main 的命令", async () => {
+    expect(await runMainCommand("file.save")).toBe(false);
+    expect(await runMainCommand("edit.undo")).toBe(false);
+  });
+
+  it("没有窗口时转发类命令返回 false", async () => {
+    windows = [];
+    expect(await runMainCommand("app.settings")).toBe(false);
+  });
+
+  it("有窗口时把 UI 类命令发回渲染层", async () => {
+    const sent: string[] = [];
+    windows = [{ webContents: { send: (_channel: string, action: string) => sent.push(action) } }];
+    try {
+      expect(await runMainCommand("app.settings")).toBe(true);
+    } finally {
+      windows = [];
+    }
+    expect(sent).toEqual(["app.settings"]);
+  });
+
+  it("日志目录命令在主进程直接执行并返回 true", async () => {
+    expect(await runMainCommand("app.openLogsDir")).toBe(true);
+  });
+
+  it("清缓存命令走主进程对话框并返回 true", async () => {
+    const { dialog } = await import("electron");
+    expect(await runMainCommand("app.clearImageCache")).toBe(true);
+    expect(vi.mocked(dialog.showMessageBox)).toHaveBeenCalled();
+  });
+
+  it("IPC handler 拒绝未知 id 与非 main 命令", async () => {
+    const { ipcMain } = await import("electron");
+    const { CHANNELS } = await import("../shared/ipc");
+    registerMenuChannels();
+    const entry = vi
+      .mocked(ipcMain.handle)
+      .mock.calls.find((call) => call[0] === CHANNELS.appRunCommand);
+    const handler = entry?.[1] as ((event: unknown, id: unknown) => unknown) | undefined;
+    expect(handler).toBeTypeOf("function");
+    expect(handler!({}, "bogus")).toBe(false);
+    expect(handler!({}, "file.save")).toBe(false);
   });
 });
 
