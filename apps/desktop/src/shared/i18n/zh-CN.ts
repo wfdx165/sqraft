@@ -142,6 +142,7 @@ export const zhCN = {
   "svgImport.missingFonts": "缺少字体：{fonts}（已用回退字体显示）",
   "svgImport.fallback": "这份 SVG 含暂不支持的特性，已按图片导入",
   "svgImport.rasterized": "{count} 个元素暂不支持，已按图片导入",
+  "svgImport.warnings": "{count} 个元素被忽略或跳过，明细见日志",
   "exportMatrix.title": "导出多倍率",
   "exportMatrix.scales": "PNG 倍率",
   "exportMatrix.includeSvg": "同时导出 SVG",

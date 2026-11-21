@@ -1,7 +1,30 @@
 // 工具名直接分派；每个分支保持原实现，ctx 提供 store 与宿主能力。
 import type { DocNode, NodeId, Rect, ScreenshotRegion } from "../shared";
 import { diagnose, firstPageId, getPages, isGradientPaint, resolvePaint, round2, worldRect } from "../shared";
-import type { Handler } from "../types";
+import type { Handler, SvgImportFailure, SvgImportFailureReason } from "../types";
+
+/** 整份导入失败时给 agent 的文案：每种原因都能指向下一步动作（{limit} 由宿主给出）。 */
+const SVG_IMPORT_FAILURE: Record<SvgImportFailureReason, string> = {
+  "invalid-svg": "SVG 不是合法的 XML，或根节点不是 <svg>，请先检查文件",
+  "no-size": "SVG 缺少有效尺寸（width/height 或 viewBox），无法确定画板大小",
+  "empty-content": "SVG 没有可导入的图形内容（可能只有 script / foreignObject 等被忽略的元素），请改用图片导入",
+  "node-limit": "SVG 超过 {limit} 个节点上限，请拆分后分次导入，或改用图片",
+  "raster-limit": "SVG 超过 {limit} 个栅格化元素上限，请简化后重试，或改用图片",
+};
+
+/** 失败原因 → 可执行文案；带上被忽略的元素摘要，agent 才知道是"没内容"还是"内容被丢了"。 */
+function svgImportErrorMessage(failure: SvgImportFailure): string {
+  const limit = "limit" in failure ? failure.limit : 0;
+  let message = SVG_IMPORT_FAILURE[failure.reason].replace("{limit}", String(limit));
+  const ignored = (failure.warnings ?? []).filter(
+    (warning) => warning.code === "IGNORED_TAG" || warning.code === "UNSUPPORTED_ELEMENT",
+  );
+  if (ignored.length > 0) {
+    const names = [...new Set(ignored.map((warning) => warning.element))].slice(0, 3).join("、");
+    message += `（已忽略 ${ignored.length} 个元素：${names}）`;
+  }
+  return message;
+}
 
 /** `export_as`：导出成数据（不写剪贴板、不写盘）。 */
 export const handleExportAs: Handler = async (ctx, args) => {
@@ -69,7 +92,7 @@ export const handleImportSvg: Handler = async (ctx, args) => {
     const x = typeof args.x === "number" ? args.x : undefined;
     const y = typeof args.y === "number" ? args.y : undefined;
     const result = await ctx.host.importSvg({ svg, pageId, x, y });
-    if (!result) throw new Error("导入失败：SVG 含无法栅格化的结构，请先用 create_node 的 image 参数传入位图");
+    if (!result.ok) throw new Error(svgImportErrorMessage(result));
     return JSON.stringify({
       ok: true,
       frameId: result.frameId,
@@ -77,6 +100,7 @@ export const handleImportSvg: Handler = async (ctx, args) => {
       height: result.height,
       ...(result.rasterized.length ? { rasterized: result.rasterized } : {}),
       ...(result.missingFonts.length ? { missingFonts: result.missingFonts } : {}),
+      ...(result.warnings.length ? { warnings: result.warnings } : {}),
     });
 };
 

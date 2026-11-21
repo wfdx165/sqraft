@@ -142,6 +142,7 @@ export const enUS: Record<keyof typeof zhCN, string> = {
   "svgImport.missingFonts": "Missing fonts: {fonts} (showing with fallbacks)",
   "svgImport.fallback": "This SVG uses features that are not supported yet; it was imported as an image.",
   "svgImport.rasterized": "{count} element(s) are not supported yet and were imported as images.",
+  "svgImport.warnings": "{count} element(s) were ignored or skipped; see the log for details.",
   "exportMatrix.title": "Export Multiple Scales",
   "exportMatrix.scales": "PNG scales",
   "exportMatrix.includeSvg": "Also export SVG",

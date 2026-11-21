@@ -142,6 +142,7 @@ export const jaJP: Record<keyof typeof zhCN, string> = {
   "svgImport.missingFonts": "フォントが見つかりません：{fonts}（代替フォントで表示します）",
   "svgImport.fallback": "この SVG には未対応の機能が含まれるため、画像として読み込みました",
   "svgImport.rasterized": "{count} 個の要素は未対応のため画像として読み込みました",
+  "svgImport.warnings": "{count} 個の要素を無視またはスキップしました（詳細はログをご確認ください）",
   "exportMatrix.title": "複数倍率で書き出し",
   "exportMatrix.scales": "PNG 倍率",
   "exportMatrix.includeSvg": "SVG も書き出す",

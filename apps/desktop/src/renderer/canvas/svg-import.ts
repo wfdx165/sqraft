@@ -1,10 +1,11 @@
 /**
  * SVG 导入（R12）：把外部 SVG 解析成 Sqraft 节点。
  *
- * 只处理「能映射」的子集：形状、路径、文本、分组、use、纯色与线性/径向渐变；
- * 样式按 presentation attributes 继承（fill / stroke / stroke-width / font-*）。
+ * 只处理「能映射」的子集：形状、路径、文本、分组、use/symbol、a/switch、嵌套 svg、
+ * 纯色与线性/径向渐变；样式按 presentation attributes 继承（fill / stroke / stroke-width / font-*）。
  * 无法映射的元素（filter/mask/pattern、userSpaceOnUse 渐变、多子路径填充等）
- * 逐元素栅格化成图片贴回原位；整份无法解析时才由调用方降级为一张图片。
+ * 逐元素栅格化成图片贴回原位；script / foreignObject 等直接丢弃并记 warnings。
+ * 只有非法 XML、缺尺寸、空内容或节点/栅格上限才整份失败。
  * 解析坐标统一换算到当前页面坐标系。
  */
 import {
@@ -19,39 +20,36 @@ import {
   type VectorAnchor,
   type VectorPath,
 } from "@sqraft/core";
+import type { SvgImportFailureReason, SvgImportWarning } from "@sqraft/ai-tools";
 import { putAsset } from "../assets";
 import { parsePathData } from "./svg-path";
 import { fontFamilies } from "../fonts";
 import { sanitizeSvgStyleText, sanitizeSvgSubtree } from "./svg-sanitize";
-
-/** 2×3 仿射矩阵：[a b c d e f]，与 SVG matrix() 同序。 */
-type Mat = [number, number, number, number, number, number];
+import {
+  IGNORED_SVG_TAGS,
+  TRANSPARENT_SVG_TAGS,
+  multiplyMat as multiply,
+  symbolTransform,
+  viewportTransform,
+  type Mat,
+} from "./svg-import-rules";
 
 const IDENTITY: Mat = [1, 0, 0, 1, 0, 0];
 const SVG_NS = "http://www.w3.org/2000/svg";
 
-export interface SvgImportResult {
+export interface ParsedSvg {
   width: number;
   height: number;
   nodes: DocNode[];
-  warnings: string[];
-  /** 被逐元素栅格化的元素名 */
   rasterized: string[];
   missingFonts: string[];
+  /** 逐元素降级/忽略的提示（导入成功时也可能非空） */
+  warnings: SvgImportWarning[];
 }
 
-export type SvgImportOutcome = { status: "ok"; result: SvgImportResult } | { status: "fallback"; reason: string };
-
-function multiply(m: Mat, n: Mat): Mat {
-  return [
-    m[0] * n[0] + m[2] * n[1],
-    m[1] * n[0] + m[3] * n[1],
-    m[0] * n[2] + m[2] * n[3],
-    m[1] * n[2] + m[3] * n[3],
-    m[0] * n[4] + m[2] * n[5] + m[4],
-    m[1] * n[4] + m[3] * n[5] + m[5],
-  ];
-}
+export type ParseSvgOutcome =
+  | { status: "ok"; result: ParsedSvg }
+  | { status: "fallback"; reason: SvgImportFailureReason; limit?: number; warnings: SvgImportWarning[] };
 
 function applyPoint(m: Mat, x: number, y: number): { x: number; y: number } {
   return { x: m[0] * x + m[2] * y + m[4], y: m[1] * x + m[3] * y + m[5] };
@@ -65,6 +63,22 @@ function scaleOf(m: Mat): number {
 function parseNumberList(value: string | null): number[] {
   if (!value) return [];
   return (value.match(/-?\d*\.?\d+(?:[eE][+-]?\d+)?/g) ?? []).map(Number);
+}
+
+/** 数字属性；缺省/非法一律 0（视口变换把 0 当作"没给"回落到 viewBox）。 */
+function numberAttr(element: Element, name: string): number {
+  const value = Number(element.getAttribute(name) ?? 0);
+  return Number.isFinite(value) ? value : 0;
+}
+
+/** `<switch>` 只取第一个可渲染子元素。 */
+function firstRenderableChild(element: Element): Element | null {
+  for (const child of Array.from(element.children)) {
+    const tag = child.tagName.toLowerCase();
+    if (IGNORED_SVG_TAGS.has(tag) || NON_RENDERING.has(tag)) continue;
+    return child;
+  }
+  return null;
 }
 
 function parseTransform(value: string | null): Mat {
@@ -144,16 +158,32 @@ interface ParseContext {
   root: Element;
   /** viewBox 的起点与尺寸；节点坐标 = 根用户坐标 − 起点 */
   viewBox: { x: number; y: number; width: number; height: number };
-  warnings: string[];
+  warnings: SvgImportWarning[];
   rasterized: string[];
   missingFonts: Set<string>;
   knownFonts: Set<string>;
   depth: number;
   nodes: DocNode[];
+  /** 正在展开的 symbol id：`use` 环引用时不至于指数展开 */
+  expanding: Set<string>;
+  /** 整份导入失败的原因（节点/栅格上限）；单个元素的失败只记 warning */
+  failure: { reason: SvgImportFailureReason; limit?: number } | null;
 }
 
 const MAX_DEPTH = 32;
 const MAX_NODES = 3000;
+const MAX_RASTERIZED = 200;
+const MAX_WARNINGS = 50;
+
+/** 提示里用 id 优先，没有 id 就用标签名。 */
+function elementLabel(element: Element): string {
+  return element.getAttribute("id") || element.tagName.toLowerCase();
+}
+
+function addWarning(ctx: ParseContext, code: SvgImportWarning["code"], element: Element, message: string): void {
+  if (ctx.warnings.length >= MAX_WARNINGS) return;
+  ctx.warnings.push({ code, element: elementLabel(element), message });
+}
 
 /** CSS 通用字族：任何系统都有，不算"缺字体"。 */
 const GENERIC_FAMILIES = new Set([
@@ -336,7 +366,6 @@ function unsupported(element: Element, styles: Map<string, string>): string | nu
   const tag = element.tagName.toLowerCase();
   if (["filter", "mask", "pattern"].some((name) => attr(element, styles, name))) return `${tag} filter/mask/pattern`;
   if (attr(element, styles, "clip-path") && tag !== "svg") return `${tag} clip-path`;
-  if (tag === "foreignobject" || tag === "symbol" || tag === "marker") return tag;
   return null;
 }
 
@@ -533,6 +562,127 @@ const NON_RENDERING = new Set([
   "marker",
 ]);
 
+/** 容器类：svg / g / a / switch。返回 false 表示整组交给栅格化。 */
+async function parseContainer(
+  ctx: ParseContext,
+  element: Element,
+  tag: string,
+  matrix: Mat,
+  styles: Map<string, string>,
+  inherited: InheritedStyle,
+): Promise<boolean> {
+  // 嵌套 <svg>：x/y 平移 + width/height × viewBox 缩放；根 svg 已经由调用方算好 base
+  const childMatrix =
+    tag === "svg" && element !== ctx.root
+      ? multiply(
+          matrix,
+          viewportTransform(
+            {
+              x: numberAttr(element, "x"),
+              y: numberAttr(element, "y"),
+              width: numberAttr(element, "width"),
+              height: numberAttr(element, "height"),
+            },
+            {
+              viewBox: parseNumberList(element.getAttribute("viewBox")),
+              preserveAspectRatio: element.getAttribute("preserveAspectRatio"),
+            },
+          ),
+        )
+      : matrix;
+  // 继承样式跟着子节点的坐标系走：容器上声明的 font-size / stroke-width 才会吃到 viewBox 缩放
+  const merged = mergeInherited(ctx, element, styles, childMatrix, inherited);
+  const opacity = opacityOf(attr(element, styles, "opacity"));
+  const before = ctx.nodes.length;
+  // switch 只渲染第一个可渲染分支（规范语义），其余分支不展开
+  const children =
+    tag === "switch"
+      ? [firstRenderableChild(element)].filter((child): child is Element => !!child)
+      : Array.from(element.children);
+  let failed = false;
+  ctx.depth += 1;
+  for (const child of children) {
+    if (!(await parseElement(ctx, child, childMatrix, merged))) {
+      failed = true;
+      break;
+    }
+  }
+  ctx.depth -= 1;
+  if (failed) {
+    // 子树里已经有节点落进结果：整组回退，交给栅格化，避免重复
+    ctx.nodes.length = before;
+    return false;
+  }
+  if (opacity < 1) {
+    for (let i = before; i < ctx.nodes.length; i += 1) {
+      const node = ctx.nodes[i]!;
+      node.opacity = (node.opacity ?? 1) * opacity;
+    }
+  }
+  return true;
+}
+
+/** `<use>`：本地引用展开；指向 symbol 时按 viewBox 缩放并防环引用。 */
+async function parseUse(
+  ctx: ParseContext,
+  element: Element,
+  matrix: Mat,
+  inherited: InheritedStyle,
+): Promise<boolean> {
+  const href = element.getAttribute("href") ?? element.getAttributeNS("http://www.w3.org/1999/xlink", "href");
+  if (!href || !href.startsWith("#")) {
+    addWarning(ctx, "MISSING_USE_TARGET", element, "external <use> targets are not supported");
+    return true;
+  }
+  const id = href.slice(1);
+  const target = ctx.doc.getElementById(id);
+  if (!target) {
+    addWarning(ctx, "MISSING_USE_TARGET", element, `<use> target #${id} was not found`);
+    return true;
+  }
+  // use 的 x/y 是平移；对形状目标只有平移，对 symbol/svg 目标才参与缩放
+  const placed = multiply(matrix, [1, 0, 0, 1, numberAttr(element, "x"), numberAttr(element, "y")]);
+  if (target.tagName.toLowerCase() !== "symbol") return parseElement(ctx, target, placed, inherited);
+
+  if (ctx.expanding.has(id)) {
+    addWarning(ctx, "MISSING_USE_TARGET", element, `<use> cycle through #${id} was skipped`);
+    return true;
+  }
+  // symbol 自带 viewBox：把内容装进 use 给出的宽高框（缺省回落到 symbol 尺寸）
+  const childMatrix = multiply(
+    matrix,
+    symbolTransform(
+      {
+        x: numberAttr(element, "x"),
+        y: numberAttr(element, "y"),
+        width: numberAttr(element, "width"),
+        height: numberAttr(element, "height"),
+      },
+      {
+        viewBox: parseNumberList(target.getAttribute("viewBox")),
+        preserveAspectRatio: target.getAttribute("preserveAspectRatio"),
+        width: numberAttr(target, "width"),
+        height: numberAttr(target, "height"),
+      },
+    ),
+  );
+  // 用子节点坐标系合并 symbol 自己的样式，symbol 上的字号/线宽才会跟着缩放
+  const symbolInherited = mergeInherited(ctx, target, styleMap(target), childMatrix, inherited);
+  ctx.expanding.add(id);
+  const before = ctx.nodes.length;
+  try {
+    for (const child of Array.from(target.children)) {
+      await parseElement(ctx, child, childMatrix, symbolInherited);
+    }
+  } finally {
+    ctx.expanding.delete(id);
+  }
+  if (ctx.nodes.length === before) {
+    addWarning(ctx, "EMPTY_SYMBOL", target, `<symbol id="${id}"> produced no nodes`);
+  }
+  return true;
+}
+
 /** 解析一个元素（含递归）。返回 false 表示无法映射，调用方决定逐元素栅格化。 */
 async function parseNode(
   ctx: ParseContext,
@@ -540,38 +690,36 @@ async function parseNode(
   parentMatrix: Mat,
   inherited: InheritedStyle,
 ): Promise<boolean> {
-  if (ctx.depth > MAX_DEPTH || ctx.nodes.length > MAX_NODES) return false;
+  if (ctx.failure) return false;
+  if (ctx.depth > MAX_DEPTH) {
+    addWarning(ctx, "DEPTH_LIMIT", element, `nesting deeper than ${MAX_DEPTH} levels was skipped`);
+    return true;
+  }
   const tag = element.tagName.toLowerCase();
+  // 可执行内容 / 外部嵌入：丢弃自身，别拖垮整份文件（净化阶段也会剔除）
+  if (IGNORED_SVG_TAGS.has(tag)) {
+    addWarning(ctx, "IGNORED_TAG", element, `<${tag}> was dropped`);
+    return true;
+  }
   if (NON_RENDERING.has(tag)) return true;
+  // 上限只统计真正会落成节点的元素：定义类/被忽略的标签不该把整份判成超限
+  if (ctx.nodes.length >= MAX_NODES) {
+    ctx.failure = { reason: "node-limit", limit: MAX_NODES };
+    return false;
+  }
   const styles = styleMap(element);
   if (unsupported(element, styles)) return false;
   const matrix = multiply(parentMatrix, transformOf(element));
+
+  if (tag === "svg" || tag === "g" || TRANSPARENT_SVG_TAGS.has(tag)) {
+    return parseContainer(ctx, element, tag, matrix, styles, inherited);
+  }
   // 元素自身的 fill/stroke/font-* 覆盖继承值，其余沿用父级
   const merged = mergeInherited(ctx, element, styles, matrix, inherited);
 
   switch (tag) {
-    case "svg":
-    case "g": {
-      const opacity = opacityOf(attr(element, styles, "opacity"));
-      const before = ctx.nodes.length;
-      ctx.depth += 1;
-      for (const child of Array.from(element.children)) {
-        if (!(await parseElement(ctx, child, matrix, merged))) {
-          ctx.depth -= 1;
-          // 子树里已经有节点落进结果：整组回退，交给栅格化，避免重复
-          ctx.nodes.length = before;
-          return false;
-        }
-      }
-      ctx.depth -= 1;
-      if (opacity < 1) {
-        for (let i = before; i < ctx.nodes.length; i += 1) {
-          const node = ctx.nodes[i]!;
-          node.opacity = (node.opacity ?? 1) * opacity;
-        }
-      }
-      return true;
-    }
+    case "use":
+      return parseUse(ctx, element, matrix, merged);
     case "rect": {
       const style = baseStyle(merged);
       const opacity = opacityOf(attr(element, styles, "opacity"));
@@ -658,21 +806,14 @@ async function parseNode(
       return textOf(ctx, element, styles, matrix, merged);
     case "image":
       return imageNode(ctx, element, styles, matrix);
-    case "use": {
-      const href = element.getAttribute("href") ?? element.getAttributeNS("http://www.w3.org/1999/xlink", "href");
-      if (!href || !href.startsWith("#")) return false;
-      const target = ctx.doc.getElementById(href.slice(1));
-      if (!target) return false;
-      return parseElement(ctx, target, matrix, merged);
-    }
     default:
       return false;
   }
 }
 
-/** 逐元素降级用：这些标签自身不是图形，不能单独栅格化。 */
+/** 逐元素降级用：这些标签可以整块拍平成图片（容器也在内，根 <svg filter> 才有兜底）。 */
 const RASTERABLE = new Set([
-  "g", "rect", "circle", "ellipse", "line", "polyline", "polygon", "path", "text", "image", "use",
+  "svg", "g", "a", "switch", "rect", "circle", "ellipse", "line", "polyline", "polygon", "path", "text", "image", "use",
 ]);
 
 /** 解析失败时退一步：把这一棵子树渲染成图片贴回原位置（整元素级降级）。 */
@@ -687,7 +828,17 @@ async function parseElement(
   } catch {
     // 无法映射的渐变等：落到整元素栅格化，不让一份 SVG 因一个元素整份失败
   }
-  return rasterizeElement(ctx, element, parentMatrix);
+  if (ctx.failure) return false;
+  if (await rasterizeElement(ctx, element, parentMatrix)) return true;
+  if (ctx.failure) return false;
+  // 单个元素救不回来：只丢它自己并留下提示——整份失败只留给语法、尺寸与上限
+  addWarning(
+    ctx,
+    "UNSUPPORTED_ELEMENT",
+    element,
+    `<${element.tagName.toLowerCase()}> could not be converted or rasterized and was skipped`,
+  );
+  return true;
 }
 
 function measureElement(ctx: ParseContext, element: Element, parentMatrix: Mat): { x: number; y: number; width: number; height: number } | null {
@@ -746,7 +897,14 @@ function standaloneSvg(
 async function rasterizeElement(ctx: ParseContext, element: Element, parentMatrix: Mat): Promise<boolean> {
   const tag = element.tagName.toLowerCase();
   if (!RASTERABLE.has(tag)) return false;
-  if (ctx.rasterized.length >= 200 || ctx.nodes.length > MAX_NODES) return false;
+  if (ctx.rasterized.length >= MAX_RASTERIZED) {
+    ctx.failure = { reason: "raster-limit", limit: MAX_RASTERIZED };
+    return false;
+  }
+  if (ctx.nodes.length >= MAX_NODES) {
+    ctx.failure = { reason: "node-limit", limit: MAX_NODES };
+    return false;
+  }
   const box = measureElement(ctx, element, parentMatrix);
   if (!box) return false;
   const pixels = box.width * box.height * 4;
@@ -793,18 +951,18 @@ async function rasterizeElement(ctx: ParseContext, element: Element, parentMatri
 }
 
 /** 解析入口：返回节点、尺寸与提示；无法映射时让调用方按图片插入。 */
-export async function parseSvg(text: string): Promise<SvgImportOutcome> {
+export async function parseSvg(text: string): Promise<ParseSvgOutcome> {
   const parser = new DOMParser();
   const doc = parser.parseFromString(text, "image/svg+xml");
   const root = doc.documentElement;
   if (!root || root.tagName.toLowerCase() !== "svg" || doc.querySelector("parsererror")) {
-    return { status: "fallback", reason: "invalid-svg" };
+    return { status: "fallback", reason: "invalid-svg", warnings: [] };
   }
 
   const viewBox = parseNumberList(root.getAttribute("viewBox"));
   const width = viewBox[2] ?? Number(root.getAttribute("width")) ?? 0;
   const height = viewBox[3] ?? Number(root.getAttribute("height")) ?? 0;
-  if (!(width > 0) || !(height > 0)) return { status: "fallback", reason: "no-size" };
+  if (!(width > 0) || !(height > 0)) return { status: "fallback", reason: "no-size", warnings: [] };
 
   const ctx: ParseContext = {
     doc,
@@ -816,19 +974,28 @@ export async function parseSvg(text: string): Promise<SvgImportOutcome> {
     knownFonts: new Set(fontFamilies().map((family) => family.toLowerCase())),
     depth: 0,
     nodes: [],
+    expanding: new Set(),
+    failure: null,
   };
   const base: Mat = viewBox.length >= 4 ? [1, 0, 0, 1, -(viewBox[0] ?? 0), -(viewBox[1] ?? 0)] : IDENTITY;
   const ok = await parseElement(ctx, root, base, {});
-  if (!ok) return { status: "fallback", reason: "unsupported-feature" };
+  if (!ok) {
+    const failure = ctx.failure ?? { reason: "empty-content" as const };
+    return { status: "fallback", ...failure, warnings: ctx.warnings };
+  }
+  // 合法但只有被忽略的内容（script / foreignObject / 空 symbol）：交给调用方按图片兜底
+  if (ctx.nodes.length === 0) {
+    return { status: "fallback", reason: "empty-content", warnings: ctx.warnings };
+  }
   return {
     status: "ok",
     result: {
       width,
       height,
       nodes: ctx.nodes,
-      warnings: ctx.warnings,
       rasterized: ctx.rasterized,
       missingFonts: [...ctx.missingFonts],
+      warnings: ctx.warnings,
     },
   };
 }

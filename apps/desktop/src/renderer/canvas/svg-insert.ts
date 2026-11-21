@@ -3,6 +3,7 @@
  * 解析失败 → fallback（调用方决定按图片插入还是报错）；成功时整份一个撤销步。
  */
 import { createNode, type NodeId } from "@sqraft/core";
+import type { SvgImportFailureReason, SvgImportWarning } from "@sqraft/ai-tools";
 import { docStore } from "../store";
 import { parseSvg } from "./svg-import";
 
@@ -12,11 +13,12 @@ export interface SvgInsertResult {
   height: number;
   rasterized: string[];
   missingFonts: string[];
+  warnings: SvgImportWarning[];
 }
 
 export type SvgInsertOutcome =
   | { status: "ok"; result: SvgInsertResult }
-  | { status: "fallback"; reason: string }
+  | { status: "fallback"; reason: SvgImportFailureReason; limit?: number; warnings: SvgImportWarning[] }
   | { status: "error"; message: string };
 
 export interface SvgInsertRequest {
@@ -33,8 +35,8 @@ export async function insertSvgFrame(request: SvgInsertRequest): Promise<SvgInse
   if (!page || page.type !== "page") return { status: "error", message: "page not found" };
 
   const outcome = await parseSvg(request.text);
-  if (outcome.status === "fallback") return { status: "fallback", reason: outcome.reason };
-  const { width, height, nodes, rasterized, missingFonts } = outcome.result;
+  if (outcome.status === "fallback") return outcome;
+  const { width, height, nodes, rasterized, missingFonts, warnings } = outcome.result;
 
   const x = request.x ?? Math.round(page.x + (page.width - width) / 2);
   const y = request.y ?? Math.round(page.y + (page.height - height) / 2);
@@ -54,6 +56,6 @@ export async function insertSvgFrame(request: SvgInsertRequest): Promise<SvgInse
   docStore.apply({ type: "node.create", params: { nodes: [frame, ...nodes], parentId: page.id } }, "导入 SVG");
   return {
     status: "ok",
-    result: { frameId: frame.id, width: frame.width, height: frame.height, rasterized, missingFonts },
+    result: { frameId: frame.id, width: frame.width, height: frame.height, rasterized, missingFonts, warnings },
   };
 }

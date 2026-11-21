@@ -142,6 +142,7 @@ export const koKR: Record<keyof typeof zhCN, string> = {
   "svgImport.missingFonts": "글꼴을 찾을 수 없습니다: {fonts} (대체 글꼴로 표시)",
   "svgImport.fallback": "이 SVG에는 아직 지원하지 않는 기능이 있어 이미지로 가져왔습니다",
   "svgImport.rasterized": "{count}개 요소는 아직 지원되지 않아 이미지로 가져왔습니다",
+  "svgImport.warnings": "{count}개 요소를 무시하거나 건너뛰었습니다(자세한 내용은 로그 참고)",
   "exportMatrix.title": "여러 배율로 내보내기",
   "exportMatrix.scales": "PNG 배율",
   "exportMatrix.includeSvg": "SVG도 함께 내보내기",

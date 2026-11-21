@@ -292,16 +292,33 @@ export function installMcpHost(): void {
             x: request.x,
             y: request.y,
           });
-          if (outcome.status !== "ok") return null;
+          if (outcome.status === "error") {
+            // 只会是页面不存在（工具层已校验过），当成语法问题回报
+            return { ok: false, reason: "invalid-svg" };
+          }
+          if (outcome.status === "fallback") {
+            const warnings = outcome.warnings.length ? outcome.warnings : undefined;
+            if (outcome.reason === "node-limit" || outcome.reason === "raster-limit") {
+              return {
+                ok: false,
+                reason: outcome.reason,
+                limit: outcome.limit ?? 0,
+                ...(warnings ? { warnings } : {}),
+              };
+            }
+            return { ok: false, reason: outcome.reason, ...(warnings ? { warnings } : {}) };
+          }
           return {
+            ok: true,
             frameId: outcome.result.frameId,
             width: outcome.result.width,
             height: outcome.result.height,
             rasterized: outcome.result.rasterized,
             missingFonts: outcome.result.missingFonts,
+            warnings: outcome.result.warnings,
           };
         } catch {
-          return null;
+          return { ok: false, reason: "invalid-svg" };
         }
       },
     },

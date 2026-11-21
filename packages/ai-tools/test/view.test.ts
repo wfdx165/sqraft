@@ -132,7 +132,15 @@ describe("AI 工具：导出与布局检查", () => {
     const run = makeExecutor(store, async () => "", () => pageId, undefined, {
       newDocument: async () => true,
       openDocument: async () => true,
-      importSvg: async () => ({ frameId: "frame-1", width: 120, height: 80, rasterized: ["filter-card"], missingFonts: ["Brand Sans"] }),
+      importSvg: async () => ({
+        ok: true,
+        frameId: "frame-1",
+        width: 120,
+        height: 80,
+        rasterized: ["filter-card"],
+        missingFonts: ["Brand Sans"],
+        warnings: [{ code: "IGNORED_TAG", element: "script", message: "<script> was dropped" }],
+      }),
     });
 
     const result = await call(run, "import_svg", { svg: "<svg/>" });
@@ -140,8 +148,70 @@ describe("AI 工具：导出与布局检查", () => {
     expect(result.width).toBe(120);
     expect(result.rasterized).toEqual(["filter-card"]);
     expect(result.missingFonts).toEqual(["Brand Sans"]);
+    expect(result.warnings).toEqual([{ code: "IGNORED_TAG", element: "script", message: "<script> was dropped" }]);
 
     await expect(run("import_svg", { svg: "   " })).rejects.toThrow(/svg/);
+  });
+
+  it("import_svg 把整份失败的原因翻成可执行文案，上限数字来自宿主", async () => {
+    const store = new DocStore(createDocWithPage());
+    const pageId = firstPageId(store.doc)!;
+    const cases = [
+      { failure: { ok: false, reason: "invalid-svg" } as const, expected: /不是合法/ },
+      { failure: { ok: false, reason: "no-size" } as const, expected: /缺少有效尺寸/ },
+      { failure: { ok: false, reason: "empty-content" } as const, expected: /没有可导入/ },
+      { failure: { ok: false, reason: "node-limit", limit: 1234 } as const, expected: /1234 个节点/ },
+      { failure: { ok: false, reason: "raster-limit", limit: 42 } as const, expected: /42 个栅格化/ },
+    ];
+    for (const { failure, expected } of cases) {
+      const run = makeExecutor(store, async () => "", () => pageId, undefined, {
+        newDocument: async () => true,
+        openDocument: async () => true,
+        importSvg: async () => failure,
+      });
+      await expect(run("import_svg", { svg: "<svg/>" })).rejects.toThrow(expected);
+    }
+  });
+
+  it("import_svg 失败时带上被忽略元素的摘要", async () => {
+    const store = new DocStore(createDocWithPage());
+    const pageId = firstPageId(store.doc)!;
+    const run = makeExecutor(store, async () => "", () => pageId, undefined, {
+      newDocument: async () => true,
+      openDocument: async () => true,
+      importSvg: async () => ({
+        ok: false,
+        reason: "empty-content",
+        warnings: [
+          { code: "IGNORED_TAG", element: "script", message: "<script> was dropped" },
+          { code: "IGNORED_TAG", element: "script", message: "<script> was dropped" },
+          { code: "IGNORED_TAG", element: "foreignobject", message: "<foreignobject> was dropped" },
+          { code: "UNSUPPORTED_ELEMENT", element: "foo", message: "<foo> was skipped" },
+        ],
+      }),
+    });
+    await expect(run("import_svg", { svg: "<svg/>" })).rejects.toThrow(/已忽略 4 个元素：script、foreignobject、foo/);
+  });
+
+  it("import_svg 成功但没有降级时省略 warnings", async () => {
+    const store = new DocStore(createDocWithPage());
+    const pageId = firstPageId(store.doc)!;
+    const run = makeExecutor(store, async () => "", () => pageId, undefined, {
+      newDocument: async () => true,
+      openDocument: async () => true,
+      importSvg: async () => ({
+        ok: true,
+        frameId: "frame-1",
+        width: 10,
+        height: 10,
+        rasterized: [],
+        missingFonts: [],
+        warnings: [],
+      }),
+    });
+    const result = await call(run, "import_svg", { svg: "<svg/>" });
+    expect(result.warnings).toBeUndefined();
+    expect(result.rasterized).toBeUndefined();
   });
   it("inspect_layout 返回世界坐标与布局参数", async () => {
     const { store, run, pageId } = setup();

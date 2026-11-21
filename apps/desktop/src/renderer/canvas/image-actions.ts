@@ -9,6 +9,7 @@ import { putAsset } from "../assets";
 import { docStore, select } from "../store";
 import { showToast } from "../toast";
 import { t } from "../i18n";
+import { logWarn } from "../log";
 import { insertSvgFrame } from "./svg-insert";
 
 /** SVG 源文件上限（与导入规格一致）。 */
@@ -91,8 +92,16 @@ export async function insertImages(
         if (inserted.result.rasterized.length > 0) {
           showToast(t("svgImport.rasterized", { count: inserted.result.rasterized.length }), "info");
         }
+        if (inserted.result.warnings.length > 0) {
+          // 明细给日志，界面只提示条数（元素名不值得再翻四语）
+          logWarn("svg import warnings", { file: file.name, warnings: inserted.result.warnings });
+          showToast(t("svgImport.warnings", { count: inserted.result.warnings.length }), "info");
+        }
         cursorX += inserted.result.width + 16;
         continue;
+      }
+      if (inserted.status === "fallback" && inserted.warnings.length > 0) {
+        logWarn("svg fallback warnings", { file: file.name, reason: inserted.reason, warnings: inserted.warnings });
       }
       showToast(t("svgImport.fallback"));
     }

@@ -803,7 +803,7 @@ export const tools: ToolDefinition[] = [
   {
     name: "import_svg",
     description:
-      "把 SVG 源码导入页面成为可编辑节点：形状/路径/文本/线性与径向渐变会转成节点，整份包在一个 frame 里（一个撤销步）。不读磁盘、不访问网络；滤镜/蒙版/pattern/外部引用等无法映射的特性会按元素栅格化成图片，清单返回在 rasterized；只有整份无法解析（非法 XML、无法栅格化的结构）时才报错。严格 Token 模式不约束导入内容。",
+      "把 SVG 源码导入页面成为可编辑节点：形状/路径/文本/线性与径向渐变会转成节点，symbol + use、a / switch 与嵌套 svg 按原变换展开，整份包在一个 frame 里（一个撤销步）。不读磁盘、不访问网络；滤镜/蒙版/pattern 等无法映射的元素按元素栅格化成图片（清单在 rasterized），script / foreignObject / iframe / 动画等直接丢弃（清单在 warnings）。只有非法 XML、缺少尺寸、没有可导入内容或超过 3000 节点 / 200 个栅格化元素时才整份失败。严格 Token 模式不约束导入内容。",
     input_schema: {
       type: "object",
       properties: {
