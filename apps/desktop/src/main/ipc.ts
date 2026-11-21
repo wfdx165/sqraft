@@ -21,6 +21,8 @@ import { basename, dirname, join } from "node:path";
 import { logApp, logRenderer } from "./mcp/log";
 import {
   exportPreferences,
+  gradientPresetPreferences,
+  setGradientPresetPreferences,
   flushPendingOpen,
   forgetRecentFile,
   listRecentFiles,
@@ -230,6 +232,10 @@ export function registerFileChannels(): void {
   );
 
   ipcMain.handle(CHANNELS.fileExportSettings, (): ExportSettings => exportPreferences());
+
+  // 渐变预设：渲染层已验证过语义，这里只夹上限并写 preferences.json
+  ipcMain.handle(CHANNELS.prefsGradientPresets, () => gradientPresetPreferences());
+  ipcMain.handle(CHANNELS.prefsSetGradientPresets, (_event, list: unknown) => setGradientPresetPreferences(list));
 
   // 多倍率导出：渲染层已打成 zip，这里只选一次保存位置、一次原子写
   ipcMain.handle(

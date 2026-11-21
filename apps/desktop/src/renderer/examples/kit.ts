@@ -4,24 +4,70 @@
  */
 import {
   createNode,
+  normalizeVector,
   type DocNode,
   type DocState,
   type Effect,
   type LayoutSpec,
   type NodeStyle,
 } from "@sqraft/core";
+import { parsePathData } from "../canvas/svg-path";
+
+/** 填充：字面量色值或渐变（示例里都写死，不依赖 Token）。 */
+export type PaintInput = string | Paint;
+
+function paintOf(fill: PaintInput | undefined): Paint | null | undefined {
+  if (fill === undefined) return undefined;
+  return typeof fill === "string" ? { value: fill } : fill;
+}
+
+/** 渐变色标：`[offset, color]`，offset 0–1。 */
+export type StopInput = readonly [number, string];
+
+function gradient(
+  type: GradientType,
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  stops: readonly StopInput[],
+): Paint {
+  return {
+    type,
+    from,
+    to,
+    stops: stops.map(([offset, color]) => ({ offset, color: { value: color } })),
+  };
+}
+
+/** 线性渐变：`from` / `to` 是相对包围盒的 0–1 坐标。 */
+export function linear(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  stops: readonly StopInput[],
+): Paint {
+  return gradient("linear", from, to, stops);
+}
+
+/** 径向渐变：`from` 为中心、`to` 决定半径。 */
+export function radial(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+  stops: readonly StopInput[],
+): Paint {
+  return gradient("radial", from, to, stops);
+}
 
 export interface FrameOptions {
   x: number;
   y: number;
   width: number;
   height: number;
-  fill?: string;
+  fill?: PaintInput;
   stroke?: string;
   strokeWidth?: number;
   radius?: number;
   layout?: LayoutSpec;
   clip?: boolean;
+  effects?: Effect[];
 }
 
 export interface TextOptions {
@@ -31,7 +77,9 @@ export interface TextOptions {
   height: number;
   fontSize: number;
   fontWeight?: number;
-  fill?: string;
+  fill?: PaintInput;
+  /** 受控字体栈；不传用渲染层默认 */
+  fontFamily?: string;
   align?: "left" | "center" | "right";
   /** 字距（px）；标题类文案常用 */
   letterSpacing?: number;
@@ -68,9 +116,10 @@ export function frame(name: string, options: FrameOptions): DocNode {
     clip: options.clip ?? true,
     layout: options.layout,
     style: {
-      fill: options.fill ? { value: options.fill } : null,
+      fill: paintOf(options.fill) ?? null,
       stroke: options.stroke ? { value: options.stroke } : undefined,
       strokeWidth: options.stroke ? (options.strokeWidth ?? 1) : undefined,
+      effects: options.effects,
       cornerRadius: options.radius
         ? {
             topLeft: options.radius,
@@ -85,9 +134,10 @@ export function frame(name: string, options: FrameOptions): DocNode {
 
 export function text(name: string, content: string, options: TextOptions): DocNode {
   const style: NodeStyle = {
-    fill: { value: options.fill ?? "#111827" },
+    fill: paintOf(options.fill ?? "#111827") ?? null,
     fontSize: options.fontSize,
     fontWeight: options.fontWeight ?? 400,
+    ...(options.fontFamily ? { fontFamily: options.fontFamily } : {}),
     textAlign: options.align ?? "left",
     ...(options.letterSpacing !== undefined
       ? { letterSpacing: options.letterSpacing, letterSpacingUnit: "px" as const }
@@ -113,7 +163,7 @@ export interface EllipseOptions {
   y: number;
   width: number;
   height: number;
-  fill?: string;
+  fill?: PaintInput;
   stroke?: string;
   strokeWidth?: number;
   opacity?: number;
@@ -129,7 +179,7 @@ export function ellipse(name: string, options: EllipseOptions): DocNode {
     height: options.height,
     opacity: options.opacity ?? 1,
     style: {
-      fill: options.fill ? { value: options.fill } : null,
+      fill: paintOf(options.fill) ?? null,
       stroke: options.stroke ? { value: options.stroke } : undefined,
       strokeWidth: options.stroke ? (options.strokeWidth ?? 1) : undefined,
       effects: options.effects,
@@ -137,9 +187,44 @@ export function ellipse(name: string, options: EllipseOptions): DocNode {
   });
 }
 
+export interface PathOptions {
+  fill?: PaintInput;
+  stroke?: string;
+  strokeWidth?: number;
+}
+
+/**
+ * 从 SVG 的 `d` 建一条路径（示例里直接用设计稿的原始路径）。
+ * 只收单轮廓：多子路径的填充语义与模型不一致，调用方应自己拆开。
+ */
+export function pathFromD(name: string, d: string, options: PathOptions = {}): DocNode {
+  const subpaths = parsePathData(d);
+  if (!subpaths || subpaths.length !== 1) throw new Error(`示例路径 "${name}" 必须是单轮廓`);
+  const first = subpaths[0]!;
+  const { vector, bounds } = normalizeVector(first.anchors, first.closed);
+  return createNode("path", {
+    name,
+    x: bounds.x,
+    y: bounds.y,
+    width: Math.max(1, bounds.width),
+    height: Math.max(1, bounds.height),
+    vector,
+    style: {
+      fill: paintOf(options.fill) ?? null,
+      stroke: options.stroke ? { value: options.stroke } : undefined,
+      strokeWidth: options.stroke ? (options.strokeWidth ?? 1) : undefined,
+    },
+  });
+}
+
 /** 无偏移的暖/冷光晕：靠投影的软边把颜色晕开。 */
 export function glow(color: string, blur: number, spread = 0): Effect {
   return { type: "drop-shadow", visible: true, x: 0, y: 0, blur, spread, color: { value: color } };
+}
+
+/** 带偏移的投影（按钮的落影）。 */
+export function shadow(x: number, y: number, blur: number, color: string, spread = 0): Effect {
+  return { type: "drop-shadow", visible: true, x, y, blur, spread, color: { value: color } };
 }
 
 /** 图层模糊：自身边缘糊开，近似径向渐变的柔光。 */

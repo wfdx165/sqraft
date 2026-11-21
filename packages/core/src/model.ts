@@ -10,7 +10,7 @@ import { effectPadding } from "./effects";
 export type NodeId = string;
 
 /** 当前文件格式版本：新增字段时 +1，并在 migrate 里补一段迁移。 */
-export const CURRENT_FORMAT_VERSION = 10;
+export const CURRENT_FORMAT_VERSION = 11;
 
 /** 节点类型的运行时真源（类型与搜索白名单都从这里取，避免两处手抄）。 */
 export const NODE_TYPES = [
@@ -67,8 +67,40 @@ export interface GradientPaint {
 
 export type Paint = SolidPaint | GradientPaint;
 
+/** 渐变也可以作为 Token 的值（与节点上的 Paint 同形，色标仍是纯色；ADR-0039）。 */
+export type GradientValue = GradientPaint;
+
 export function isGradientPaint(paint: Paint | null | undefined): paint is GradientPaint {
   return Boolean(paint && "stops" in paint && Array.isArray((paint as GradientPaint).stops));
+}
+
+function isPoint(value: unknown): value is { x: number; y: number } {
+  if (!value || typeof value !== "object") return false;
+  const point = value as { x?: unknown; y?: unknown };
+  return Number.isFinite(point.x) && Number.isFinite(point.y);
+}
+
+/** 运行时校验一个渐变值（Token 值来自文件 / agent，必须挡住脏数据）。 */
+export function isGradientValue(value: unknown): value is GradientValue {
+  if (!value || typeof value !== "object") return false;
+  const gradient = value as Partial<GradientValue>;
+  if (gradient.type !== "linear" && gradient.type !== "radial" && gradient.type !== "angular" && gradient.type !== "diamond") {
+    return false;
+  }
+  if (!isPoint(gradient.from) || !isPoint(gradient.to)) return false;
+  if (gradient.focus !== undefined && !isPoint(gradient.focus)) return false;
+  return Array.isArray(gradient.stops);
+}
+
+/** 渐变的深拷贝：同一份值可能被多个节点 / Token 使用，落盘前必须断开引用。 */
+export function cloneGradientValue(gradient: GradientValue): GradientValue {
+  return {
+    type: gradient.type,
+    from: { ...gradient.from },
+    to: { ...gradient.to },
+    ...(gradient.focus ? { focus: { ...gradient.focus } } : {}),
+    stops: gradient.stops.map((stop) => ({ ...stop, color: { ...stop.color } })),
+  };
 }
 
 export function isSolidPaint(paint: Paint | null | undefined): paint is SolidPaint {
@@ -326,9 +358,12 @@ export interface DocNode {
   style: NodeStyle;
 }
 
+/** Token 类型：颜色、数值、渐变（ADR-0039）。 */
+export type TokenType = "color" | "number" | "gradient";
+
 export interface TokenEntry {
-  type: "color" | "number";
-  value: string | number;
+  type: TokenType;
+  value: string | number | GradientValue;
 }
 
 /** 文档里引用的一份字体（字节在 `.sqraft` 的 `fonts/` 里，按内容哈希命名）。 */
@@ -428,12 +463,15 @@ export function createDocWithPage(name = "页面 1"): DocState {
   return doc;
 }
 
-/** 解析纯色 Paint → 具体 CSS 值；渐变返回 undefined（用 resolvePaintSpec 拿完整描述）。 */
+/** 解析纯色 Paint → 具体 CSS 值；渐变（含渐变 Token）返回 undefined（用 resolvePaintSpec 拿完整描述）。 */
 export function resolvePaint(state: DocState, paint: Paint | null | undefined): string | undefined {
   if (!paint || isGradientPaint(paint)) return undefined;
   if (paint.token) {
     const entry = state.tokens[paint.token];
     if (!entry) return "#ff00ff"; // 缺失 Token 用洋红示警
+    // 渐变 Token 没有单一颜色，交给 resolvePaintSpec；数值 Token 塞进填充同样是脏数据
+    if (entry.type === "gradient") return undefined;
+    if (entry.type !== "color") return "#ff00ff";
     return String(entry.value);
   }
   return paint.value;
@@ -463,12 +501,30 @@ function clamp01(value: number): number {
 /** 把 Paint 解析成后端可绘制的东西：纯色字符串或已解析 stop 的渐变。 */
 export function resolvePaintSpec(state: DocState, paint: Paint | null | undefined): ResolvedPaint | undefined {
   if (!paint) return undefined;
-  if (!isGradientPaint(paint)) {
-    const color = resolvePaint(state, paint);
-    return color ? { type: "solid", color } : undefined;
+  if (isGradientPaint(paint)) {
+    const gradient = resolveGradient(state, paint);
+    return gradient ? { type: "gradient", gradient } : undefined;
   }
+  if (paint.token) {
+    const entry = state.tokens[paint.token];
+    if (!entry) return { type: "solid", color: "#ff00ff" };
+    if (entry.type === "gradient") {
+      // Token 值可能来自手改的文件：形状不合法时与"缺失"同样处理
+      if (!isGradientValue(entry.value)) return { type: "solid", color: "#ff00ff" };
+      const gradient = resolveGradient(state, entry.value);
+      return gradient ? { type: "gradient", gradient } : { type: "solid", color: "#ff00ff" };
+    }
+    // 数值 Token 用在填充上：洋红示警（诊断给出 TOKEN_TYPE）
+    if (entry.type !== "color") return { type: "solid", color: "#ff00ff" };
+    return { type: "solid", color: String(entry.value) };
+  }
+  return paint.value ? { type: "solid", color: paint.value } : undefined;
+}
+
+/** 渐变 → 解析后的描述；色标不足 2 个返回 undefined。 */
+export function resolveGradient(state: DocState, gradient: GradientValue): ResolvedGradient | undefined {
   const stops: ResolvedGradientStop[] = [];
-  for (const stop of paint.stops) {
+  for (const stop of gradient.stops) {
     if (!stop || typeof stop.offset !== "number") continue;
     const color = resolvePaint(state, stop.color);
     if (!color) continue;
@@ -477,14 +533,11 @@ export function resolvePaintSpec(state: DocState, paint: Paint | null | undefine
   if (stops.length < 2) return undefined;
   stops.sort((a, b) => a.offset - b.offset);
   return {
-    type: "gradient",
-    gradient: {
-      type: paint.type,
-      from: { x: paint.from.x, y: paint.from.y },
-      to: { x: paint.to.x, y: paint.to.y },
-      ...(paint.focus ? { focus: { x: paint.focus.x, y: paint.focus.y } } : {}),
-      stops,
-    },
+    type: gradient.type,
+    from: { x: gradient.from.x, y: gradient.from.y },
+    to: { x: gradient.to.x, y: gradient.to.y },
+    ...(gradient.focus ? { focus: { x: gradient.focus.x, y: gradient.focus.y } } : {}),
+    stops,
   };
 }
 

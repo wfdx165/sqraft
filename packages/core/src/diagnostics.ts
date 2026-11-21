@@ -17,10 +17,16 @@ import {
   type WorldPoint,
 } from "./model";
 import { layoutText, type MeasureText } from "./text";
-import { tokenPathsOfNode } from "./token-fields";
+import { numericTokenPathsOfNode, paintTokenPathsOfNode, tokenPathsOfNode } from "./token-fields";
 import { resolveNumericLayout, resolveNumericStyle } from "./token-resolve";
 
-export type DiagnosticCode = "ZERO_SIZE" | "TEXT_NO_FILL" | "TEXT_OVERFLOW" | "TOKEN_MISSING" | "OUTSIDE_PARENT";
+export type DiagnosticCode =
+  | "ZERO_SIZE"
+  | "TEXT_NO_FILL"
+  | "TEXT_OVERFLOW"
+  | "TOKEN_MISSING"
+  | "TOKEN_TYPE"
+  | "OUTSIDE_PARENT";
 
 export interface Diagnostic {
   code: DiagnosticCode;
@@ -236,6 +242,38 @@ export function diagnose(doc: DocState, roots: NodeId[], options: DiagnoseOption
             code: "TOKEN_MISSING",
             message: `Token "${path}" is not defined.`,
             hint: "Use get_tokens to list defined tokens, or replace the reference with a literal value.",
+          })
+        ) {
+          return false;
+        }
+      }
+    }
+
+    // 引用存在但类型不对（数值 Token 塞进填充、渐变 Token 塞进字号 …）：画布上会静默回退，必须点出来
+    if (want("TOKEN_TYPE")) {
+      for (const path of paintTokenPathsOfNode(node)) {
+        const entry = doc.tokens[path];
+        if (!entry || entry.type !== "number") continue;
+        if (
+          !emit({
+            ...baseOf(node),
+            code: "TOKEN_TYPE",
+            message: `Token "${path}" is a number token, but this field needs a color or gradient.`,
+            hint: "Reference a color or gradient token, or replace the reference with a literal value.",
+          })
+        ) {
+          return false;
+        }
+      }
+      for (const path of numericTokenPathsOfNode(node)) {
+        const entry = doc.tokens[path];
+        if (!entry || entry.type === "number") continue;
+        if (
+          !emit({
+            ...baseOf(node),
+            code: "TOKEN_TYPE",
+            message: `Token "${path}" is a ${entry.type} token, but this field needs a number.`,
+            hint: "Reference a number token, or replace the reference with a literal value.",
           })
         ) {
           return false;

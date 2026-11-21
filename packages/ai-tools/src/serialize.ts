@@ -1,10 +1,27 @@
 /** read_document / search_nodes 的序列化与作用域工具（纯函数，除 serializeNode 读 store.doc）。 */
 
-import type { DocNode, DocState, DocStore, NodeId } from "@sqraft/core";
-import { walkSubtree } from "@sqraft/core";
+import type { DocNode, DocState, DocStore, GradientValue, NodeId, NodeStyle } from "@sqraft/core";
+import { isGradientPaint, isGradientValue, walkSubtree } from "@sqraft/core";
+
+/**
+ * 填充 / 描边引用了渐变 Token 时，把 Token 里的值展开给 agent。
+ * 只展开渐变：纯色 Token 的值本来就能从 get_tokens 拿到。
+ */
+function gradientTokensOf(doc: DocState, style: NodeStyle): Record<string, GradientValue> {
+  const out: Record<string, GradientValue> = {};
+  for (const kind of ["fill", "stroke"] as const) {
+    const paint = style[kind];
+    if (!paint || isGradientPaint(paint) || !paint.token) continue;
+    const entry = doc.tokens[paint.token];
+    if (entry?.type !== "gradient" || !isGradientValue(entry.value)) continue;
+    out[kind] = entry.value;
+  }
+  return out;
+}
 
 /** 单个节点的序列化投影（read_document 的节点行）。 */
 export function serializeNode(store: DocStore, n: DocNode, depth: number): Record<string, unknown> {
+  const tokenGradients = gradientTokensOf(store.doc, n.style);
   return {
     id: n.id,
     depth,
@@ -23,6 +40,7 @@ export function serializeNode(store: DocStore, n: DocNode, depth: number): Recor
     locked: n.locked,
     clip: n.clip,
     style: n.style,
+    ...(Object.keys(tokenGradients).length > 0 ? { tokenGradients } : {}),
     ...(n.layout ? { layout: n.layout } : {}),
     ...(n.layoutSizingW ? { layoutSizingW: n.layoutSizingW } : {}),
     ...(n.layoutSizingH ? { layoutSizingH: n.layoutSizingH } : {}),

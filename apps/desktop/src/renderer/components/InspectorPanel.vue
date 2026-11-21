@@ -29,6 +29,19 @@ const {
   toggleClip,
   fillTokenOf,
   strokeTokenOf,
+  setGradient,
+  gradientOf,
+  gradientTokenOf,
+  detachGradient,
+  gradientTokenForm,
+  gradientTokenPath,
+  gradientTokenError,
+  gradientTokenBusy,
+  openGradientTokenForm,
+  cancelGradientTokenForm,
+  submitGradientToken,
+  paintTokenNames,
+  tokenColorOf,
   colorOf,
   setFill,
   setStroke,
@@ -577,16 +590,36 @@ const {
               <option value="">{{ t("inspector.none") }}</option>
               <option value="__custom">{{ t("inspector.custom") }}</option>
               <option value="__gradient">{{ t("inspector.gradient") }}</option>
-              <option v-for="t in tokenNames" :key="t" :value="t">{{ t }}</option>
+              <option v-for="t in paintTokenNames" :key="t" :value="t">{{ t }}</option>
             </select>
           </div>
         </div>
+        <div v-if="supportsFill && gradientTokenOf('fill') && !multi" class="gradient-token">
+          <span class="gt-label">{{ t("inspector.gradientFromToken", { path: gradientTokenOf("fill") }) }}</span>
+          <button v-if="gradientOf('fill')" class="mini" :disabled="readonly" @click="detachGradient('fill')">
+            {{ t("inspector.gradientDetach") }}
+          </button>
+          <span v-else class="gt-error">{{ t("inspector.gradientTokenBroken") }}</span>
+        </div>
         <GradientEditor
-          v-if="supportsFill && node.style.fill && 'stops' in node.style.fill"
-          :paint="node.style.fill"
+          v-if="supportsFill && gradientOf('fill') && !multi"
+          :paint="gradientOf('fill')"
           :disabled="readonly"
+          :color-tokens="tokenNames"
+          :color-of-token="tokenColorOf"
           @change="setGradient('fill', $event)"
         />
+        <div v-if="supportsFill && gradientOf('fill') && !gradientTokenOf('fill') && !multi" class="gradient-token">
+          <template v-if="gradientTokenForm === 'fill'">
+            <input v-model="gradientTokenPath" class="gt-input mono" spellcheck="false" />
+            <button class="mini" :disabled="readonly || gradientTokenBusy" @click="submitGradientToken('fill')">{{ t("common.save") }}</button>
+            <button class="mini" @click="cancelGradientTokenForm">{{ t("common.cancel") }}</button>
+          </template>
+          <button v-else class="mini" :disabled="readonly" @click="openGradientTokenForm('fill')">
+            {{ t("inspector.gradientSaveAsToken") }}
+          </button>
+        </div>
+        <p v-if="gradientTokenForm === 'fill' && gradientTokenError" class="gt-error">{{ gradientTokenError }}</p>
         <div v-if="supportsFill && node.style.fill && !node.style.fill.token && !('stops' in node.style.fill)" class="row sub-row">
           <label />
           <input type="color" class="color-input" :value="colorOf(node.style.fill)" :disabled="readonly" @input="setCustomPaint('fill', $event)" />
@@ -626,16 +659,36 @@ const {
               <option value="">{{ t("inspector.none") }}</option>
               <option value="__custom">{{ t("inspector.custom") }}</option>
               <option value="__gradient">{{ t("inspector.gradient") }}</option>
-              <option v-for="t in tokenNames" :key="t" :value="t">{{ t }}</option>
+              <option v-for="t in paintTokenNames" :key="t" :value="t">{{ t }}</option>
             </select>
           </div>
         </div>
+        <div v-if="supportsStroke && gradientTokenOf('stroke') && !multi" class="gradient-token">
+          <span class="gt-label">{{ t("inspector.gradientFromToken", { path: gradientTokenOf("stroke") }) }}</span>
+          <button v-if="gradientOf('stroke')" class="mini" :disabled="readonly" @click="detachGradient('stroke')">
+            {{ t("inspector.gradientDetach") }}
+          </button>
+          <span v-else class="gt-error">{{ t("inspector.gradientTokenBroken") }}</span>
+        </div>
         <GradientEditor
-          v-if="supportsStroke && node.style.stroke && 'stops' in node.style.stroke"
-          :paint="node.style.stroke"
+          v-if="supportsStroke && gradientOf('stroke') && !multi"
+          :paint="gradientOf('stroke')"
           :disabled="readonly"
+          :color-tokens="tokenNames"
+          :color-of-token="tokenColorOf"
           @change="setGradient('stroke', $event)"
         />
+        <div v-if="supportsStroke && gradientOf('stroke') && !gradientTokenOf('stroke') && !multi" class="gradient-token">
+          <template v-if="gradientTokenForm === 'stroke'">
+            <input v-model="gradientTokenPath" class="gt-input mono" spellcheck="false" />
+            <button class="mini" :disabled="readonly || gradientTokenBusy" @click="submitGradientToken('stroke')">{{ t("common.save") }}</button>
+            <button class="mini" @click="cancelGradientTokenForm">{{ t("common.cancel") }}</button>
+          </template>
+          <button v-else class="mini" :disabled="readonly" @click="openGradientTokenForm('stroke')">
+            {{ t("inspector.gradientSaveAsToken") }}
+          </button>
+        </div>
+        <p v-if="gradientTokenForm === 'stroke' && gradientTokenError" class="gt-error">{{ gradientTokenError }}</p>
         <div v-if="supportsStroke && node.style.stroke && !node.style.stroke.token && !('stops' in node.style.stroke)" class="row sub-row">
           <label />
           <input type="color" class="color-input" :value="colorOf(node.style.stroke)" :disabled="readonly" @input="setCustomPaint('stroke', $event)" />
@@ -833,6 +886,50 @@ const {
             <button v-if="hasPropValue(def)" class="mini" @click="setProp(def, null)">{{ t("inspector.reset") }}</button>
           </div>
         </template>
+      </section>
+
+      <section class="block" v-if="variantSetContext">
+        <span class="micro-label">{{ t("inspector.variantProperties") }}</span>
+        <div v-if="!variantSetContext.defs.length" class="row">
+          <span class="muted">{{ t("inspector.noVariantProperties") }}</span>
+        </div>
+        <div v-for="def in variantSetContext.defs" :key="def.id" class="variant-def">
+          <div class="row">
+            <input class="prop-name" :value="def.name" @change="renameVariantProperty(def, $event)" />
+          </div>
+          <div v-for="(value, index) in def.values" :key="value" class="row variant-value">
+            <input class="prop-name" :value="value" @change="renameVariantValue(def, index, $event)" />
+            <button class="mini" @click="deleteVariantValue(def, index)">{{ t("inspector.delete") }}</button>
+          </div>
+        </div>
+        <span class="micro-label">{{ t("inspector.variantList") }}</span>
+        <div v-for="variant in variantSetContext.variants" :key="variant.id" class="row">
+          <span class="muted prop-target">{{ variant.name }}</span>
+          <button class="mini" @click="addVariantOf(variantSetContext.set.id, variant.id)">
+            {{ t("inspector.duplicateVariant") }}
+          </button>
+          <button class="mini" @click="deleteVariantOf(variantSetContext.set.id, variant.id)">
+            {{ t("inspector.delete") }}
+          </button>
+        </div>
+      </section>
+
+      <section class="block" v-if="variantInstance">
+        <span class="micro-label">{{ t("inspector.variants") }}</span>
+        <div v-for="(def, index) in variantInstance.defs" :key="def.id" class="row prop-row">
+          <label>{{ def.name }}</label>
+          <select :value="variantInstance.values[index]" @change="onVariantChange(def, $event)">
+            <option
+              v-for="value in def.values"
+              :key="value"
+              :value="value"
+              :disabled="!variantOptionAvailable(index, value)"
+            >
+              {{ value }}
+            </option>
+          </select>
+        </div>
+        <div class="row"><span class="muted">{{ variantInstance.set.name }}</span></div>
       </section>
 
       <section class="block" v-if="variantSetContext">
@@ -1459,5 +1556,41 @@ select:disabled {
 
 .empty span {
   font-size: 11px;
+}
+
+/* 渐变 Token 引用态与"存为 Token"行 */
+.gradient-token {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.gt-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.gt-input {
+  flex: 1;
+  min-width: 0;
+  height: 22px;
+  padding: 0 6px;
+  border: 1px solid var(--hairline);
+  border-radius: 5px;
+  background: var(--surface);
+  color: var(--text);
+  font-size: 11px;
+}
+
+.gt-error {
+  margin: 4px 0 0;
+  font-size: 11px;
+  color: var(--danger, #d64545);
 }
 </style>

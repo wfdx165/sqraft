@@ -342,6 +342,48 @@ describe("AI 工具：screenshot 文本替代视图", () => {
     });
   });
 
+  it("文本视图把渐变 Token 引用展开成渐变并带上 Token 路径", async () => {
+    const { run } = textRun();
+    await call(run, "define_token", { path: "color/a", type: "color", value: "#6366f1" });
+    await call(run, "define_token", { path: "color/b", type: "color", value: "#a855f7" });
+    await call(run, "define_token", {
+      path: "gradient/brand",
+      type: "gradient",
+      value: {
+        type: "linear",
+        from: { x: 0, y: 0.5 },
+        to: { x: 1, y: 0.5 },
+        stops: [
+          { offset: 0, color: { token: "color/a" } },
+          { offset: 1, color: { token: "color/b" } },
+        ],
+      },
+    });
+    const rect = await call(run, "create_node", {
+      kind: "rect",
+      name: "引用渐变",
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 60,
+      fillToken: "gradient/brand",
+    });
+    const res = await call(run, "screenshot", {
+      format: "text",
+      region: { x: 0, y: 0, width: 120, height: 80 },
+    });
+    const row = (res.nodes as Array<Record<string, unknown>>).find((n) => n.id === rect.nodeId)!;
+    expect(row.fill).toBeNull();
+    expect(row.fillToken).toBe("gradient/brand");
+    expect(row.fillGradient).toEqual({
+      type: "linear",
+      stops: [
+        { offset: 0, color: "#6366f1" },
+        { offset: 1, color: "#a855f7" },
+      ],
+    });
+  });
+
   it("默认区域是当前页页面框，页外的节点不进来；悬空 Token 暴露成洋红", async () => {
     const { store, run, pageId } = textRun();
     await call(run, "define_token", { path: "color/primary", type: "color", value: "#3366ff" });

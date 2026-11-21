@@ -47,3 +47,33 @@ describe.each(builders)("%s 示例", (_name, build, maxNodes) => {
     expect(Object.keys(state.nodes).length).toBeLessThan(maxNodes);
   });
 });
+
+describe("日食示例（UMBRA）", () => {
+  const { state } = buildUmbraExample();
+  const nodes = Object.values(state.nodes);
+
+  it("背景与光晕用原生渐变，不再靠模糊近似", () => {
+    const page = state.nodes[state.rootIds[0]!]!;
+    expect(page.style.fill).toMatchObject({ type: "linear" });
+    const radial = nodes.filter((node) => node.style.fill && "type" in node.style.fill && node.style.fill.type === "radial");
+    expect(radial.length).toBeGreaterThanOrEqual(3);
+    expect(nodes.some((node) => node.style.effects?.some((effect) => effect.type === "layer-blur"))).toBe(false);
+  });
+
+  it("两条山脊是可编辑路径（单轮廓 + 渐变填充）", () => {
+    const ridges = nodes.filter((node) => node.name.startsWith("Ridge"));
+    expect(ridges).toHaveLength(2);
+    for (const ridge of ridges) {
+      expect(ridge.type).toBe("path");
+      expect(ridge.vector?.anchors.length).toBeGreaterThan(5);
+      expect(ridge.vector?.closed).toBe(true);
+      expect(ridge.style.fill).toMatchObject({ type: "linear" });
+    }
+  });
+
+  it("主按钮是渐变底 + 落影", () => {
+    const button = nodes.find((node) => node.name === "Reserve button")!;
+    expect(button.style.fill).toMatchObject({ type: "linear" });
+    expect(button.style.effects?.[0]).toMatchObject({ type: "drop-shadow", y: 8 });
+  });
+});

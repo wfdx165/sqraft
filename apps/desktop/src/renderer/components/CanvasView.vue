@@ -7,11 +7,13 @@ import {
   firstPageId,
   imageCropOf,
   makeAnchor,
+  resolvePaint,
   scaleVector,
   unionRects,
   worldRect,
   type Command,
   type DocNode,
+  type GradientValue,
   type NodeId,
   type Rect,
   type VectorPath,
@@ -102,6 +104,8 @@ import {
   type ResizeHandle,
 } from "../canvas/selection";
 import { drawPulse, drawSelectionOverlay } from "../canvas/selection-overlay";
+import { drawGradientHandles } from "../canvas/gradient-handles";
+import { createGradientGesture } from "../canvas/gradient-gesture";
 import { agentActivity, agentFxActive, drawAgentOverlay } from "../canvas/agent-activity";
 import { useTextEditing } from "../canvas/text-editing";
 import { drawGrid } from "../canvas/grid";
@@ -256,6 +260,34 @@ function toggleView(key: "guides" | "grid" | "snap"): void {
 }
 /** 旋转拖拽：中心与起始极角 */
 let rotateState: RotateState | null = null;
+
+/** 把渐变写回节点（整份 style 替换，遵守不变式 5）。引用态会因此断链成本地渐变。 */
+function applyGradient(id: NodeId, kind: "fill" | "stroke", value: GradientValue, label: string): void {
+  const node = docStore.doc.nodes[id];
+  if (!node) return;
+  dispatch(
+    { type: "node.update", params: { nodeId: id, patch: { style: { ...node.style, [kind]: value } } } },
+    label,
+  );
+  markDirty();
+}
+
+/** 画布渐变手柄的会话状态：命中、拖拽预览、松手提交都交给它，这里只接线。 */
+const gradientGesture = createGradientGesture({
+  store: docStore,
+  apply: applyGradient,
+  markDirty,
+  setDragging: (value) => {
+    dragging.value = value;
+  },
+});
+
+/** 缩放手柄 / 移动的预览几何：拖拽时手柄跟着走，而不是停在原地。 */
+function gradientFrameFor(id: NodeId) {
+  const geometry = resizePreview && resizePreview.id === id ? resizePreview : undefined;
+  const offset = drag?.mode === "move" && drag.moved ? { x: drag.offsetX, y: drag.offsetY } : undefined;
+  return gradientGesture.frameOf(id, { geometry, offset });
+}
 
 /** 钢笔 / 锚点编辑的会话状态（纯 UI 状态）。 */
 const pen = createPenState();
@@ -530,6 +562,17 @@ function draw() {
     hoverTextId: hoverTextId.value,
     hoverLibraryId: hoverLibraryId.value,
   });
+
+  // 渐变手柄：单选 + 选择工具 + 编辑模式才显示；锚点编辑态让位给锚点
+  if (editing && ui.mode === "edit" && ui.tool === "select" && ui.selection.length === 1 && !pen.pathEdit) {
+    const frame = gradientFrameFor(ui.selection[0]!);
+    if (frame) {
+      drawGradientHandles(ctx, vp, frame, {
+        active: gradientGesture.activeHandle(),
+        colorOf: (color) => resolvePaint(docStore.doc, color) ?? "#000000",
+      });
+    }
+  }
 
   // 原型链接：选中/悬停热区时画到目标页的连线（只读信息层）
   if (editing && !busyGesture) {
@@ -945,6 +988,11 @@ function onDoubleClick(e: MouseEvent) {
       }
     }
   }
+  // 渐变手柄：双击色标删除（少于 2 个色标时内部会拒绝）
+  if (ui.selection.length === 1 && gradientGesture.removeStop(ui.selection[0]!, screenToWorld(vp, sx, sy), vp.zoom)) {
+    return;
+  }
+
   // 双击根节点标签 = 行内改名（页面与母版同一套；母版不进页面切换）
   const label = rootLabelAtPointer(vp, ctx, sx, sy, Boolean(pen.draft));
   if (label) {
@@ -1350,6 +1398,23 @@ function onPointerDown(e: PointerEvent) {
     return;
   }
 
+  // 0.9) 渐变手柄：画布上直接调渐变。放在缩放手柄之前——两者重叠时让渐变优先。
+  //      文本节点不接"点线插入"：单击文本的优先级低于进编辑，那会挡住双击进编辑的第一步。
+  if (ui.tool === "select" && ui.selection.length === 1 && !isLocked(ui.selection[0]!)) {
+    const id = ui.selection[0]!;
+    const frame = gradientFrameFor(id);
+    if (frame) {
+      const allowInsert = docStore.doc.nodes[id]?.type !== "text";
+      if (
+        gradientGesture.begin(id, frame, { x: w.x, y: w.y }, { x: sx, y: sy }, e.pointerId, vp.zoom, {
+          allowInsert,
+        })
+      ) {
+        return;
+      }
+    }
+  }
+
   // 1) 四角外侧的旋转热区（手柄本体不落在这里，优先给缩放）
   if (hitRotateZone(sx, sy)) {
     const bounds = selectionWorldBounds();
@@ -1603,6 +1668,13 @@ function onPointerMove(e: PointerEvent) {
     }
     if (marquee.active) updateMarqueeSelection();
     markDirty();
+    return;
+  }
+  if (gradientGesture.isActive()) {
+    const rect = canvasRef.value!.getBoundingClientRect();
+    const sx = e.clientX - rect.left;
+    const sy = e.clientY - rect.top;
+    gradientGesture.move(screenToWorld(vp, sx, sy), { x: sx, y: sy }, e.pointerId);
     return;
   }
   if (!drag) {
@@ -1928,7 +2000,23 @@ function commitMoveDrag(d: NonNullable<typeof drag>, e: PointerEvent): void {
   }
 }
 
+/**
+ * 指针被系统打断（触控板手势、窗口失焦等）：丢弃渐变手势。
+ * 其它拖拽模式的取消仍走 Esc；这里不扩到全局，避免改变既有行为。
+ */
+function onPointerCancel() {
+  if (!gradientGesture.isActive()) return;
+  gradientGesture.cancel();
+}
+
 function onPointerUp(e: PointerEvent) {
+  if (gradientGesture.isActive()) {
+    const rect = canvasRef.value?.getBoundingClientRect();
+    const sx = e.clientX - (rect?.left ?? 0);
+    const sy = e.clientY - (rect?.top ?? 0);
+    gradientGesture.end({ x: sx, y: sy }, e.pointerId);
+    return;
+  }
   if (guideDrag) {
     const rect = canvasRef.value?.getBoundingClientRect();
     const sx = rect ? e.clientX - rect.left : 0;
@@ -2258,6 +2346,12 @@ function onKey(e: KeyboardEvent) {
     return;
   }
 
+  // 渐变手柄拖拽中 Esc：丢弃整次手势（不产生命令）
+  if (gradientGesture.isActive()) {
+    gradientGesture.cancel();
+    return;
+  }
+
   // 拖动中 Esc：放弃整次手势（不产生命令，几何与父级保持原样）
   if (drag) {
     cancelDrag();
@@ -2555,6 +2649,7 @@ onBeforeUnmount(() => {
       @pointerdown="onPointerDown"
       @pointermove="onPointerMove"
       @pointerup="onPointerUp"
+      @pointercancel="onPointerCancel"
       @pointerleave="onPointerLeave"
       @dblclick="onDoubleClick"
       @wheel.prevent="onWheel"
