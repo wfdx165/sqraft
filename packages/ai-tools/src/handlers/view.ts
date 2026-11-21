@@ -1,8 +1,6 @@
 // 工具名直接分派；每个分支保持原实现，ctx 提供 store 与宿主能力。
 import type { DocNode, NodeId, Rect, ScreenshotRegion } from "../shared";
 import { diagnose, firstPageId, getPages, isGradientPaint, resolvePaint, resolvePaintSpec, round2, worldRect } from "../shared";
-import type { Handler } from "../types";
-import { diagnose, firstPageId, getPages, isGradientPaint, resolvePaint, round2, worldRect } from "../shared";
 import type { Handler, SvgImportFailure, SvgImportFailureReason } from "../types";
 
 /** 整份导入失败时给 agent 的文案：每种原因都能指向下一步动作（{limit} 由宿主给出）。 */

@@ -3,11 +3,6 @@
  * 结构化渐变编辑器：类型 / 角度或中心+半径 / 色标列表。
  * 交给父层的 `change` 是整体替换（撤销依赖"patch.style 整体替换"）。
  */
-import { computed } from "vue";
-import type { GradientPaint, GradientStop } from "@sqraft/core";
-import { t } from "../i18n";
-
-const props = defineProps<{ paint: GradientPaint; disabled?: boolean }>();
 import { computed, onMounted, ref } from "vue";
 import { cloneGradientValue, type GradientPaint, type GradientStop, type GradientValue } from "@sqraft/core";
 import { t } from "../i18n";
