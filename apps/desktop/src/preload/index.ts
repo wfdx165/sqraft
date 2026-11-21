@@ -4,9 +4,13 @@ import {
   type AppInfo,
   type AppLogLevel,
   type CloseRequest,
+  type ExportMatrixRequest,
+  type ExportMatrixResult,
+  type ExportSettings,
   type FetchImageResult,
   type LanguageState,
   type McpCallRequest,
+  type MenuState,
   type McpCallResult,
   type McpClientsSnapshot,
   type McpClientsSyncEvent,
@@ -39,8 +43,11 @@ const api: SqraftApi = {
     openPath: (path: string) => ipcRenderer.invoke(CHANNELS.fileOpenPath, path) as Promise<OpenFileResult>,
     save: (request: SaveFileRequest) => ipcRenderer.invoke(CHANNELS.fileSave, request) as Promise<SaveFileResult>,
     saveAs: (request: SaveAsRequest) => ipcRenderer.invoke(CHANNELS.fileSaveAs, request) as Promise<SaveAsResult>,
-    exportPng: (request: { suggestedName: string; bytes: Uint8Array }) =>
-      ipcRenderer.invoke(CHANNELS.fileExportPng, request) as Promise<SaveAsResult>,
+    exportFile: (request: { suggestedName: string; bytes: Uint8Array; format: "png" | "svg" }) =>
+      ipcRenderer.invoke(CHANNELS.fileExport, request) as Promise<SaveAsResult>,
+    exportMatrix: (request: ExportMatrixRequest) =>
+      ipcRenderer.invoke(CHANNELS.fileExportMatrix, request) as Promise<ExportMatrixResult>,
+    exportSettings: () => ipcRenderer.invoke(CHANNELS.fileExportSettings) as Promise<ExportSettings>,
   },
   dialog: {
     unsaved: () => ipcRenderer.invoke(CHANNELS.dialogUnsaved) as Promise<UnsavedChoice>,
@@ -96,6 +103,7 @@ const api: SqraftApi = {
       return () => ipcRenderer.removeListener(CHANNELS.menuCommand, listener);
     },
     setBindings: (bindings: Record<string, string>) => ipcRenderer.send(CHANNELS.menuSetBindings, bindings),
+    setState: (state: MenuState) => ipcRenderer.send(CHANNELS.menuSetState, state),
   },
   app: {
     info: () => ipcRenderer.invoke(CHANNELS.appInfo) as Promise<AppInfo>,

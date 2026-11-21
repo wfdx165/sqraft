@@ -5,10 +5,11 @@
 import { app, BrowserWindow } from "electron";
 import { join } from "node:path";
 import type { LanguagePreference } from "../shared/i18n";
-import { CHANNELS } from "../shared/ipc";
+import { CHANNELS, type ExportSettings } from "../shared/ipc";
 import {
   addRecent,
   loadPreferences,
+  normalizeExportSettings,
   removeRecent,
   savePreferences,
   type McpPreferences,
@@ -77,6 +78,17 @@ export async function patchUpdatePreferences(patch: Partial<UpdatePreferences>):
     else (next as Record<string, unknown>)[key] = value;
   }
   preferences = { ...preferences, update: next };
+  await savePreferences(preferencesFile(), preferences);
+}
+
+/** 多倍率导出的设置（缺省 1×+2×，不带 SVG）。 */
+export function exportPreferences(): ExportSettings {
+  return normalizeExportSettings(preferences.export);
+}
+
+export async function patchExportPreferences(patch: Partial<ExportSettings>): Promise<void> {
+  const next = normalizeExportSettings({ ...preferences.export, ...patch });
+  preferences = { ...preferences, export: next };
   await savePreferences(preferencesFile(), preferences);
 }
 

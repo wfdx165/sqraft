@@ -104,6 +104,8 @@ export function dropAllowed(nodeId: NodeId, target: DropTarget): boolean {
   if (node.type === "page") return false;
   if (instanceAncestorOf(nodeId)) return false;
   if (isSelfOrDescendant(target.id, nodeId)) return false;
+  // 组件集合只装变体，普通拖放不能把节点放进去（变体走「复制为新变体」）
+  if (docStore.doc.nodes[target.id]?.type === "componentSet") return false;
 
   const owner = componentOwnerOf(nodeId);
   const targetOwner = componentOwnerOf(target.id);

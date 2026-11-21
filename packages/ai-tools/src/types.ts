@@ -31,11 +31,63 @@ export interface DocumentHost {
   openDocument(): Promise<boolean>;
   /** 切到某个页面：create_page 后让「省略 parentId」的后续操作落到新页 */
   activatePage?(pageId: NodeId): void;
-  /** 按倍率渲染 PNG data URL（由宿主注入，工具层不碰 DOM；允许先解码图片再返回） */
-  exportPng?(request: { pageId: NodeId; nodeIds?: NodeId[]; scale: number }): string | Promise<string>;
+  /**
+   * 导出成数据（由宿主注入，工具层不碰 DOM / 文件系统）：
+   * png 返回 data URL，svg 返回源码；`rasterized` 是被栅格化的节点名。
+   */
+  exportImage?(request: {
+    format: "png" | "svg";
+    pageId: NodeId;
+    nodeIds?: NodeId[];
+    scale: number;
+  }): Promise<{ image?: string; svg?: string; rasterized?: string[] }>;
   /** 导入字体（字节内联，不收路径），返回字族/字重/风格 */
   importFont?(fileName: string, dataBase64: string): Promise<{ family: string; weight: number; style: string } | null>;
+  /**
+   * 把 SVG 源码导入页面（不读磁盘、不访问网络）；返回新建 frame、缺字体与降级提示。
+   * 整份无法导入时给失败原因，由工具层翻译成可执行文案（不返回 null，免得丢掉原因）。
+   */
+  importSvg?(request: {
+    svg: string;
+    pageId: NodeId;
+    x?: number;
+    y?: number;
+  }): Promise<SvgImportResult>;
 }
+
+/** SVG 整份导入失败的原因：宿主原样交回，文案由工具层决定。 */
+export type SvgImportFailureReason =
+  | "invalid-svg"
+  | "no-size"
+  | "empty-content"
+  | "node-limit"
+  | "raster-limit";
+
+/** 单条导入降级提示：成功导入时随结果返回（agent 与界面都据此提醒用户）。 */
+export interface SvgImportWarning {
+  code: "IGNORED_TAG" | "UNSUPPORTED_ELEMENT" | "MISSING_USE_TARGET" | "EMPTY_SYMBOL" | "DEPTH_LIMIT";
+  /** 元素名：id 优先，否则标签名 */
+  element: string;
+  /** 给 agent 的英文短句（界面只显示条数，避免四语再翻一遍元素名） */
+  message: string;
+}
+
+/** 失败结果：超限类带上实际上限（数字只有宿主一处真源），并保留已产生的降级提示。 */
+export type SvgImportFailure =
+  | { ok: false; reason: "node-limit" | "raster-limit"; limit: number; warnings?: SvgImportWarning[] }
+  | { ok: false; reason: "invalid-svg" | "no-size" | "empty-content"; warnings?: SvgImportWarning[] };
+
+export type SvgImportResult =
+  | {
+      ok: true;
+      frameId: NodeId;
+      width: number;
+      height: number;
+      rasterized: string[];
+      missingFonts: string[];
+      warnings: SvgImportWarning[];
+    }
+  | SvgImportFailure;
 
 /** 执行器向外提供的宿主能力（由渲染层注入；工具层不碰文件系统与 DOM）。 */
 export interface ToolContext {

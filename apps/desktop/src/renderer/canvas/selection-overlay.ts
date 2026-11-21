@@ -30,7 +30,9 @@ export const LIBRARY_ACCENT = "#8b5cf6";
  * 实例与主组件在画布上属于"库的一部分"，选中/悬停都和普通图层不同色。
  */
 export function accentOf(node: Pick<DocNode, "type"> | null | undefined): string {
-  return node && (node.type === "instance" || node.type === "component") ? LIBRARY_ACCENT : SELECT_ACCENT;
+  return node && (node.type === "instance" || node.type === "component" || node.type === "componentSet")
+    ? LIBRARY_ACCENT
+    : SELECT_ACCENT;
 }
 
 export function drawPulse(
@@ -102,7 +104,7 @@ export function drawSelectionOverlay(
       const bh = 19;
       const bx = x + width / 2 - bw / 2;
       // 页面 / 母版的名字标签占着节点上方：尺寸徽标再往上让一格，别和标签压在一起
-      const labelAbove = n.type === "page" || n.type === "component";
+      const labelAbove = n.type === "page" || n.type === "component" || n.type === "componentSet";
       const by = y - bh - (labelAbove ? LABEL_CHIP_ABOVE + 4 : 8);
       g.beginPath();
       (g as unknown as { roundRect(x: number, y: number, w: number, h: number, r: number): void }).roundRect(

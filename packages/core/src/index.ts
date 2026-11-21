@@ -11,6 +11,7 @@ export * from "./vector";
 export * from "./polygon";
 export * from "./interaction";
 export * from "./component";
+export * from "./variant";
 export * from "./duplicate";
 export * from "./arrange";
 export * from "./group";

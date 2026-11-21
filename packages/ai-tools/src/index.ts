@@ -15,7 +15,16 @@ export { tools };
 export type { ToolDefinition };
 export { MUTATING_TOOLS } from "./handlers";
 export { assertEffectTokens, assertNumberToken, assertToken } from "./args";
-export type { DocumentHost, ExecutorOptions, ScreenshotRegion, ToolExecutor } from "./types";
+export type {
+  DocumentHost,
+  ExecutorOptions,
+  ScreenshotRegion,
+  SvgImportFailure,
+  SvgImportFailureReason,
+  SvgImportResult,
+  SvgImportWarning,
+  ToolExecutor,
+} from "./types";
 export type { Command } from "@sqraft/core";
 
 export function makeExecutor(

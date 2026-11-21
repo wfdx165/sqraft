@@ -12,7 +12,15 @@ import {
   PADDING_SIDE_KEYS,
 } from "./token-fields";
 import { tokenNumberOf } from "./token-validation";
-import type { DocNode, DocState, LayoutSpec, NodeId, NodeStyle, Paint } from "./model";
+import {
+  isGradientPaint,
+  type DocNode,
+  type DocState,
+  type LayoutSpec,
+  type NodeId,
+  type NodeStyle,
+  type Paint,
+} from "./model";
 import type { Command } from "./store";
 
 /** 这个 style 是否引用了数值 Token `path`。 */
@@ -36,10 +44,29 @@ export function hasNodeNumericTokenRef(node: DocNode, path: string): boolean {
   return hasNumericTokenRef(node.style, path) || Boolean(node.layout && hasNumericLayoutTokenRef(node.layout, path));
 }
 
+function paintHasToken(paint: Paint | null | undefined, path: string): boolean {
+  if (!paint) return false;
+  if (!isGradientPaint(paint)) return paint.token === path;
+  return paint.stops.some((stop) => stop.color?.token === path);
+}
+
+function mapPaintToken(paint: Paint, path: string, map: (paint: Paint) => Paint): Paint {
+  if (!isGradientPaint(paint)) return paint.token === path ? map(paint) : paint;
+  let touched = false;
+  const stops = paint.stops.map((stop) => {
+    if (stop.color?.token !== path) return stop;
+    touched = true;
+    const mapped = map(stop.color);
+    // stop 颜色只能是纯色；调用方误返回渐变时退回黑色，保持类型与文件合法
+    return { ...stop, color: isGradientPaint(mapped) ? { value: "#000000" } : mapped };
+  });
+  return touched ? { ...paint, stops } : paint;
+}
+
 /** 这个 style 是否引用了 `path`。 */
 export function hasTokenRef(style: NodeStyle, path: string): boolean {
-  if (style.fill?.token === path || style.stroke?.token === path) return true;
-  return Boolean(style.effects?.some((effect) => isShadowEffect(effect) && effect.color.token === path));
+  if (paintHasToken(style.fill, path) || paintHasToken(style.stroke, path)) return true;
+  return Boolean(style.effects?.some((effect) => isShadowEffect(effect) && paintHasToken(effect.color, path)));
 }
 
 /** 引用了 `path` 的节点（按文档遍历顺序，颜色与数值引用都算）。 */
@@ -62,17 +89,21 @@ export function mapTokenPaints(
 ): NodeStyle | null {
   let next: NodeStyle | null = null;
 
-  if (style.fill?.token === path) next = { ...style, fill: map(style.fill) };
-  if (style.stroke?.token === path) next = { ...(next ?? style), stroke: map(style.stroke) };
+  if (style.fill && paintHasToken(style.fill, path)) {
+    next = { ...style, fill: mapPaintToken(style.fill, path, map) };
+  }
+  if (style.stroke && paintHasToken(style.stroke, path)) {
+    next = { ...(next ?? style), stroke: mapPaintToken(style.stroke, path, map) };
+  }
 
   const effects = style.effects;
-  if (effects?.some((effect) => isShadowEffect(effect) && effect.color.token === path)) {
+  if (effects?.some((effect) => isShadowEffect(effect) && paintHasToken(effect.color, path))) {
     const base = next ?? style;
     next = {
       ...base,
       effects: (base.effects ?? []).map((effect) => {
-        if (!isShadowEffect(effect) || effect.color.token !== path) return effect;
-        return { ...effect, color: map(effect.color) };
+        if (!isShadowEffect(effect) || !paintHasToken(effect.color, path)) return effect;
+        return { ...effect, color: mapPaintToken(effect.color, path, map) };
       }),
     };
   }

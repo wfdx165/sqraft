@@ -5,7 +5,7 @@
  * 剪贴板（跨文档复制）都从这里取字段名，避免新增槽位时四处漏改。
  */
 import { isShadowEffect } from "./effects";
-import type { DocNode, NodeStyle } from "./model";
+import { isGradientPaint, type DocNode, type NodeStyle, type Paint } from "./model";
 
 /** NodeStyle 上的单值数值 Token 字段。 */
 export const NUMERIC_TOKEN_FIELDS = [
@@ -41,6 +41,13 @@ export const NUMERIC_LITERAL_OF_TOKEN: Record<NumericTokenField, NumericLiteralF
 export const CORNER_RADIUS_KEYS = ["topLeft", "topRight", "bottomRight", "bottomLeft"] as const;
 export const PADDING_SIDE_KEYS = ["top", "right", "bottom", "left"] as const;
 
+/** 一个 Paint 引用的 Token 路径（渐变取所有 stop）；纯字面量返回空。 */
+export function paintTokenPaths(paint: Paint | null | undefined): string[] {
+  if (!paint) return [];
+  if (!isGradientPaint(paint)) return paint.token ? [paint.token] : [];
+  return paint.stops.map((stop) => stop.color?.token).filter((token): token is string => Boolean(token));
+}
+
 /** 节点引用的全部 Token 路径（颜色 + 数值，去重）。跨文档复制时用它收集定义。 */
 export function tokenPathsOfNode(node: DocNode): string[] {
   const out = new Set<string>();
@@ -48,10 +55,10 @@ export function tokenPathsOfNode(node: DocNode): string[] {
     if (path) out.add(path);
   };
 
-  add(node.style.fill?.token);
-  add(node.style.stroke?.token);
+  for (const path of paintTokenPaths(node.style.fill)) add(path);
+  for (const path of paintTokenPaths(node.style.stroke)) add(path);
   for (const effect of node.style.effects ?? []) {
-    if (isShadowEffect(effect)) add(effect.color.token);
+    if (isShadowEffect(effect)) for (const path of paintTokenPaths(effect.color)) add(path);
   }
   for (const field of NUMERIC_TOKEN_FIELDS) add(node.style[field]);
   const corners = node.style.cornerRadiusTokens;

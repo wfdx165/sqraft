@@ -46,10 +46,41 @@ export type SaveAsResult =
   | { status: "ok"; path: string; name: string; mtimeMs: number }
   | { status: "error"; message: string };
 
+/** 多倍率导出的设置（偏好里持久化，也是对话框的默认值）。 */
+export interface ExportSettings {
+  /** PNG 倍率：1 / 2 / 4 的子集，至少一项 */
+  scales: number[];
+  /** 是否同时导出 SVG */
+  includeSvg: boolean;
+  /** 上次保存位置（保存对话框的默认目录） */
+  directory?: string;
+}
+
+export interface ExportMatrixRequest {
+  /** 保存对话框里的默认文件名（不含路径） */
+  suggestedName: string;
+  /** 已打包好的 zip 字节：条目平铺在根目录 */
+  bytes: Uint8Array;
+  /** 包内文件数，只用于提示 */
+  count: number;
+  settings: ExportSettings;
+}
+
+export type ExportMatrixResult =
+  | { status: "ok"; path: string; name: string; count: number }
+  | { status: "canceled" }
+  | { status: "error"; message: string };
+
 /** 关闭前询问：保存 / 不保存 / 取消 */
 export type UnsavedChoice = "save" | "discard" | "cancel";
 /** 外部修改后的保存冲突：覆盖 / 另存为 / 取消 */
 export type OverwriteChoice = "overwrite" | "save-as" | "cancel";
+
+/** 主进程菜单要用的会话状态（渲染层推送）。 */
+export interface MenuState {
+  docOpen: boolean;
+  presenting: boolean;
+}
 
 export interface AppInfo {
   name: string;
@@ -245,8 +276,12 @@ export interface SqraftApi {
     openPath(path: string): Promise<OpenFileResult>;
     save(request: SaveFileRequest): Promise<SaveFileResult>;
     saveAs(request: SaveAsRequest): Promise<SaveAsResult>;
-    /** 导出 PNG：弹系统保存框并落盘（bytes 是 PNG 原始字节） */
-    exportPng(request: { suggestedName: string; bytes: Uint8Array }): Promise<SaveAsResult>;
+    /** 导出 PNG / SVG：弹系统保存框并落盘（bytes 是原始字节） */
+    exportFile(request: { suggestedName: string; bytes: Uint8Array; format: "png" | "svg" }): Promise<SaveAsResult>;
+    /** 多倍率导出：选一次目录，把一组文件写进去（同名覆盖） */
+    exportMatrix(request: ExportMatrixRequest): Promise<ExportMatrixResult>;
+    /** 读取上次的多倍率导出设置（对话框默认值） */
+    exportSettings(): Promise<ExportSettings>;
   };
   dialog: {
     unsaved(): Promise<UnsavedChoice>;
@@ -300,6 +335,8 @@ export interface SqraftApi {
     onCommand(handler: (action: string) => void): () => void;
     /** 把当前键位同步给主进程，用于菜单里的快捷键提示 */
     setBindings(bindings: Record<string, string>): void;
+    /** 文档是否打开、是否在演示：主进程据此置灰菜单项 */
+    setState(state: MenuState): void;
   };
   app: {
     info(): Promise<AppInfo>;
@@ -354,7 +391,9 @@ export const CHANNELS = {
   fileOpen: "file:open",
   fileSave: "file:save",
   fileSaveAs: "file:save-as",
-  fileExportPng: "file:export-png",
+  fileExport: "file:export",
+  fileExportMatrix: "file:export-matrix",
+  fileExportSettings: "file:export-settings",
   fileOpenPath: "file:open-path",
   fileOpenRequest: "file:open-request",
   fileDropped: "file:dropped",
@@ -396,6 +435,7 @@ export const CHANNELS = {
   updateChanged: "update:changed",
   menuCommand: "menu:command",
   menuSetBindings: "menu:set-bindings",
+  menuSetState: "menu:set-state",
   appRendererReady: "app:renderer-ready",
   appSetDirty: "app:set-dirty",
   appLog: "app:log",

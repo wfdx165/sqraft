@@ -124,6 +124,9 @@ export function migrateDoc(state: DocState, fromVersion = state.formatVersion ??
     state.strictTokens = state.strictTokens === true;
     version = 9;
   }
+  // 10：Paint 新增可选的渐变形态（linear/radial/angular/diamond）。
+  //     纯色结构与旧文件一致，渐变缺省即"没有"，不需要改数据。
+  if (version < 10) version = 10;
   state.formatVersion = CURRENT_FORMAT_VERSION;
   return state;
 }

@@ -29,6 +29,7 @@ export const MUTATING_TOOLS: ReadonlySet<string> = new Set([
   "duplicate_node",
   "set_interaction",
   "remove_interaction",
+  "import_svg",
 ]);
 
 export const handlers: Record<string, Handler> = {
@@ -49,6 +50,8 @@ export const handlers: Record<string, Handler> = {
   "create_node": nodes.handleCreateNode,
   "create_nodes": nodes.handleCreateNodes,
   "create_instance": components.handleCreateInstance,
+  "create_component_set": components.handleCreateComponentSet,
+  "add_variant": components.handleAddVariant,
   "define_property": components.handleDefineProperty,
   "set_instance_prop": components.handleSetInstanceProp,
   "fill_slot": components.handleFillSlot,
@@ -62,6 +65,7 @@ export const handlers: Record<string, Handler> = {
   "duplicate_node": nodes.handleDuplicateNode,
   "import_font": document.handleImportFont,
   "inspect_layout": read.handleInspectLayout,
-  "export_png": view.handleExportPng,
+  "export_as": view.handleExportAs,
+  "import_svg": view.handleImportSvg,
   "screenshot": view.handleScreenshot,
 };

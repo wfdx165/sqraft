@@ -1,6 +1,6 @@
 // 工具名直接分派；每个分支保持原实现，ctx 提供 store 与宿主能力。
 import type { AlignEdge, Command, DistributeAxis, DocNode, NodeId, NodeStyle, ReorderAction, TextAutoResize } from "../shared";
-import { CREATABLE_KINDS, applyNodeArgs, applyStyleArgs, assertEffectTokens, assertImageUrl, assertNoLiteralColors, assertNumericTokenArgs, assertToken, clampSides, createNode, defaultLayoutFor, effectsFrom, ensurePage, firstPageId, newId, nextComponentName, nextComponentPosition, planDuplicate, readPoints, resolveNumericStyle, validateVector, walkSubtree, worldRect, type CreatableKind } from "../shared";
+import { CREATABLE_KINDS, applyNodeArgs, applyStyleArgs, assertEffectTokens, assertGradientTokens, assertImageUrl, assertNoLiteralColors, assertNumericTokenArgs, assertToken, clampSides, createNode, defaultLayoutFor, effectsFrom, ensurePage, firstPageId, newId, nextComponentName, nextComponentPosition, planDuplicate, readPoints, resolveNumericStyle, validateVector, walkSubtree, worldRect, type CreatableKind } from "../shared";
 import type { Handler, ToolContext } from "../types";
 
 /** 单次 `create_nodes` 的节点总数上限（含子孙）：既撑爆事务，也给 agent 一个"分批"的理由。 */
@@ -154,6 +154,7 @@ async function buildNodeInner(
 
   assertToken(ctx.store, args.fillToken as string | undefined, "fillToken");
   assertToken(ctx.store, args.strokeToken as string | undefined, "strokeToken");
+  assertGradientTokens(ctx.store, args);
   if (Array.isArray(args.effects)) assertEffectTokens(ctx.store, effectsFrom(args.effects));
 
   let name = args.name as string | undefined;
@@ -321,11 +322,18 @@ export const handleUpdateNode: Handler = async (ctx, args) => {
     if (!node) throw new Error(`节点 ${nodeId} 不存在`);
     assertToken(ctx.store, args.fillToken as string | undefined, "fillToken");
     assertToken(ctx.store, args.strokeToken as string | undefined, "strokeToken");
+    assertGradientTokens(ctx.store, args);
     assertNumericTokenArgs(ctx.store, args);
     assertNoLiteralColors(ctx.store, args);
     if (Array.isArray(args.effects)) assertEffectTokens(ctx.store, effectsFrom(args.effects));
 
-    if (args.layout !== undefined && node.type !== "frame" && node.type !== "component" && node.type !== "instance") {
+    if (
+      args.layout !== undefined &&
+      node.type !== "frame" &&
+      node.type !== "component" &&
+      node.type !== "componentSet" &&
+      node.type !== "instance"
+    ) {
       throw new Error("layout 仅适用于 frame / component / instance");
     }
     const patch: Partial<DocNode> = { ...applyNodeArgs(args, node.layout ?? undefined) };
@@ -442,6 +450,7 @@ export const handleMoveNode: Handler = async (ctx, args) => {
     const parent = ctx.store.doc.nodes[parentId];
     if (!parent) throw new Error(`父节点 ${parentId} 不存在`);
     if (node.type === "component") throw new Error("主组件固定在文档根节点，不能移动父级");
+    if (node.type === "componentSet") throw new Error("组件集合固定在文档根节点，不能移动父级");
     const world = worldRect(ctx.store.doc, nodeId);
     const parentWorld = worldRect(ctx.store.doc, parentId);
     if (!world || !parentWorld) throw new Error("节点或父节点没有几何信息");

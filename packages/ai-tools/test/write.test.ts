@@ -1348,3 +1348,62 @@ describe("AI 工具：原型链接", () => {
   });
 });
 
+describe("AI 工具：渐变入参", () => {
+  it("create_node 接受 fillGradient；严格模式要求 stop 引用 Token", async () => {
+    const { store, run } = setup();
+    store.doc.tokens["color/a"] = { type: "color", value: "#000000" };
+    store.doc.tokens["color/b"] = { type: "color", value: "#ffffff" };
+
+    const created = await call(run, "create_node", {
+      kind: "rect",
+      width: 100,
+      height: 100,
+      fillGradient: {
+        type: "linear",
+        from: { x: 0, y: 0.5 },
+        to: { x: 1, y: 0.5 },
+        stops: [
+          { offset: 0, color: { token: "color/a" } },
+          { offset: 1, color: { token: "color/b" } },
+        ],
+      },
+    });
+    const fill = store.doc.nodes[created.nodeId as string].style.fill;
+    expect(fill && "stops" in fill && fill.type).toBe("linear");
+
+    store.doc.strictTokens = true;
+    await expect(
+      run("create_node", {
+        kind: "rect",
+        width: 10,
+        height: 10,
+        fillGradient: {
+          type: "linear",
+          from: { x: 0, y: 0 },
+          to: { x: 1, y: 0 },
+          stops: [
+            { offset: 0, color: { value: "#000000" } },
+            { offset: 1, color: { value: "#ffffff" } },
+          ],
+        },
+      }),
+    ).rejects.toThrow(/TOKEN_REQUIRED/);
+
+    await expect(
+      run("create_node", {
+        kind: "rect",
+        width: 10,
+        height: 10,
+        fillGradient: {
+          type: "linear",
+          from: { x: 0, y: 0 },
+          to: { x: 1, y: 0 },
+          stops: [
+            { offset: 0, color: { token: "missing" } },
+            { offset: 1, color: { token: "color/b" } },
+          ],
+        },
+      }),
+    ).rejects.toThrow(/不存在的 Token/);
+  });
+});

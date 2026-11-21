@@ -30,6 +30,7 @@ import { appInfo } from "./app-meta";
 import { measureText, textSizeOf } from "./text-metrics";
 import { putAsset } from "./assets";
 import { putFont } from "./fonts";
+import { insertSvgFrame } from "./canvas/svg-insert";
 import { t } from "./i18n";
 import { agentErrorText } from "./errors";
 import { AGENT_TEXT } from "../shared/agent-text";
@@ -253,7 +254,18 @@ export function installMcpHost(): void {
         return { name: info.name, version: info.version, platform: window.sqraft.platform };
       },
       activatePage: (pageId) => hooks.activatePage(pageId),
-      exportPng: (request) => hooks.renderExport(request),
+      exportImage: async (request) => {
+        if (request.format === "svg") {
+          const result = await hooks.renderExportSvg({ pageId: request.pageId, nodeIds: request.nodeIds });
+          return { svg: result.svg, rasterized: result.rasterized };
+        }
+        const image = await hooks.renderExport({
+          pageId: request.pageId,
+          nodeIds: request.nodeIds,
+          scale: request.scale,
+        });
+        return { image, rasterized: [] };
+      },
       importFont: async (fileName, dataBase64) => {
         const binary = atob(dataBase64);
         const bytes = new Uint8Array(binary.length);
@@ -270,6 +282,44 @@ export function installMcpHost(): void {
         // MIME 以实际内容为准（magic bytes），不信任 agent 传的值
         void mimeType;
         return { assetId: asset.id, width: asset.width, height: asset.height };
+      },
+      importSvg: async (request) => {
+        try {
+          const outcome = await insertSvgFrame({
+            text: request.svg,
+            name: "imported.svg",
+            pageId: request.pageId,
+            x: request.x,
+            y: request.y,
+          });
+          if (outcome.status === "error") {
+            // 只会是页面不存在（工具层已校验过），当成语法问题回报
+            return { ok: false, reason: "invalid-svg" };
+          }
+          if (outcome.status === "fallback") {
+            const warnings = outcome.warnings.length ? outcome.warnings : undefined;
+            if (outcome.reason === "node-limit" || outcome.reason === "raster-limit") {
+              return {
+                ok: false,
+                reason: outcome.reason,
+                limit: outcome.limit ?? 0,
+                ...(warnings ? { warnings } : {}),
+              };
+            }
+            return { ok: false, reason: outcome.reason, ...(warnings ? { warnings } : {}) };
+          }
+          return {
+            ok: true,
+            frameId: outcome.result.frameId,
+            width: outcome.result.width,
+            height: outcome.result.height,
+            rasterized: outcome.result.rasterized,
+            missingFonts: outcome.result.missingFonts,
+            warnings: outcome.result.warnings,
+          };
+        } catch {
+          return { ok: false, reason: "invalid-svg" };
+        }
       },
     },
     // 选区是画布 UI 状态：只读给 agent 看，改还是走显式 nodeId

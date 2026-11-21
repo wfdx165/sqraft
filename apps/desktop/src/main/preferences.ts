@@ -4,6 +4,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { isLanguagePreference, type LanguagePreference } from "../shared/i18n";
+import type { ExportSettings } from "../shared/ipc";
 import { isValidPort } from "./mcp/port";
 import { writeFileAtomic } from "./files";
 
@@ -21,6 +22,7 @@ export interface Preferences {
   window?: WindowBounds;
   mcp?: McpPreferences;
   update?: UpdatePreferences;
+  export?: ExportSettings;
 }
 
 /** 更新状态里需要跨启动记住的部分：最小检查间隔、已下载版本、7 天提醒去过重。 */
@@ -49,6 +51,29 @@ export interface McpPreferences {
 
 const MAX_RECENT = 8;
 
+/** 多倍率导出的默认值：1× + 2×，不带 SVG。 */
+export const DEFAULT_EXPORT_SETTINGS: ExportSettings = { scales: [1, 2], includeSvg: false };
+
+/** 允许的 PNG 倍率（与单文件导出的 1/2/4 一致）。 */
+const EXPORT_SCALES = [1, 2, 4] as const;
+
+/**
+ * 归一化导出设置：只认 1/2/4、去重排序、至少保留一档；
+ * 目录只在非空字符串时保留。主进程收到的请求与偏好里的旧数据都走这里。
+ */
+export function normalizeExportSettings(value: Partial<ExportSettings> | undefined): ExportSettings {
+  const rawScales = Array.isArray(value?.scales) ? value.scales : DEFAULT_EXPORT_SETTINGS.scales;
+  const scales = [...new Set(rawScales)]
+    .filter((scale): scale is number => EXPORT_SCALES.includes(scale as (typeof EXPORT_SCALES)[number]))
+    .sort((a, b) => a - b);
+  const directory = typeof value?.directory === "string" && value.directory.trim() ? value.directory : undefined;
+  return {
+    scales: scales.length ? scales : [...DEFAULT_EXPORT_SETTINGS.scales],
+    includeSvg: value?.includeSvg === true,
+    ...(directory ? { directory } : {}),
+  };
+}
+
 export const DEFAULT_PREFERENCES: Preferences = { recentFiles: [] };
 
 /** 最近列表：去重、置顶、截断；不存在的路径也会先保留，打开失败时再剔除。 */
@@ -73,18 +98,21 @@ export async function loadPreferences(file: string): Promise<Preferences> {
       window?: unknown;
       mcp?: unknown;
       update?: unknown;
+      export?: unknown;
     };
     const recent = record.recentFiles;
     const recentFiles = Array.isArray(recent) ? recent.filter((item): item is string => typeof item === "string") : [];
     const language = isLanguagePreference(record.language) ? record.language : undefined;
     const mcp = sanitizeMcp(record.mcp);
     const update = sanitizeUpdate(record.update);
+    const exportSettings = sanitizeExport(record.export);
     return {
       recentFiles: recentFiles.slice(0, MAX_RECENT),
       ...(language ? { language } : {}),
       window: sanitizeWindow(record.window),
       ...(mcp ? { mcp } : {}),
       ...(update ? { update } : {}),
+      ...(exportSettings ? { export: exportSettings } : {}),
     };
   } catch {
     return { ...DEFAULT_PREFERENCES };
@@ -111,6 +139,15 @@ function sanitizeUpdate(value: unknown): UpdatePreferences | undefined {
   if (typeof raw.failedVersion === "string" && raw.failedVersion) next.failedVersion = raw.failedVersion;
   if (typeof raw.autoDownload === "boolean") next.autoDownload = raw.autoDownload;
   return Object.keys(next).length > 0 ? next : undefined;
+}
+
+/** 导出设置：形状不对就当作没有（回退默认值由调用方负责）。 */
+function sanitizeExport(value: unknown): ExportSettings | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const raw = value as Record<string, unknown>;
+  const hasAny =
+    Array.isArray(raw.scales) || typeof raw.includeSvg === "boolean" || typeof raw.directory === "string";
+  return hasAny ? normalizeExportSettings(raw as Partial<ExportSettings>) : undefined;
 }
 
 function sanitizeWindow(value: unknown): WindowBounds | undefined {

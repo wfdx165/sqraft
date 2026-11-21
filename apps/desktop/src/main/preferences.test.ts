@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { addRecent, loadPreferences, removeRecent, savePreferences } from "./preferences";
+import { addRecent, loadPreferences, normalizeExportSettings, removeRecent, savePreferences } from "./preferences";
 import { isValidPort } from "./mcp/port";
 
 const dirs: string[] = [];
@@ -32,6 +32,23 @@ describe("最近打开列表", () => {
 
   it("可以剔除失效条目", () => {
     expect(removeRecent(["/a", "/b"], "/a")).toEqual(["/b"]);
+  });
+});
+
+describe("导出设置归一化", () => {
+  it("只留 1/2/4、去重排序；全非法时回退默认 1×+2×", () => {
+    expect(normalizeExportSettings({ scales: [4, 4, 2, 7], includeSvg: true })).toEqual({
+      scales: [2, 4],
+      includeSvg: true,
+    });
+    expect(normalizeExportSettings({ scales: [3], includeSvg: false })).toEqual({ scales: [1, 2], includeSvg: false });
+  });
+
+  it("目录只在非空时保留", () => {
+    expect(normalizeExportSettings({ scales: [1], includeSvg: false, directory: "  " }).directory).toBeUndefined();
+    expect(normalizeExportSettings({ scales: [1], includeSvg: false, directory: "/tmp/out" }).directory).toBe(
+      "/tmp/out",
+    );
   });
 });
 

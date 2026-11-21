@@ -10,13 +10,12 @@ import WelcomeView from "./components/WelcomeView.vue";
 import ConnectionStatus from "./components/ConnectionStatus.vue";
 import AboutPanel from "./components/AboutPanel.vue";
 import SettingsHost from "./components/SettingsHost.vue";
-import ExportPngDialog from "./components/ExportPngDialog.vue";
+import ExportMatrixDialog from "./components/ExportMatrixDialog.vue";
 import Presenter from "./components/Presenter.vue";
 import ContextMenu from "./components/ContextMenu.vue";
 import Toast from "./components/Toast.vue";
 import TokenPicker from "./components/TokenPicker.vue";
-import { exportUi, hooks, ui } from "./store";
-import { openExportDefault } from "./export-actions";
+import { exportMatrixUi, hooks, ui } from "./store";
 import { bindingRev, installShortcuts, keyOf, registerShortcuts, runAction, type ActionId } from "./shortcuts";
 import { openSettings, settingsUi } from "./settings";
 import { closeDocument, installFileSession, newDocument, syncTitle } from "./file-session";
@@ -30,6 +29,7 @@ import { copySelectionAction, cutSelectionAction } from "./canvas/node-clipboard
 import { checkForUpdates, installUpdates } from "./update";
 import { locale, t } from "./i18n";
 import { togglePresenter } from "./presenter";
+import { menuStateOf } from "./menu-state";
 
 /** 菜单里出现的动作：键位同步给主进程，点击回送到渲染层同一个执行器。 */
 const MENU_ACTIONS: ActionId[] = [
@@ -38,7 +38,11 @@ const MENU_ACTIONS: ActionId[] = [
   "file.insertImage",
   "file.save",
   "file.saveAs",
-  "file.exportPng",
+  "file.exportPng1",
+  "file.exportPng2",
+  "file.exportPng4",
+  "file.exportSvg",
+  "file.exportMatrix",
   "file.closeDoc",
   "edit.copy",
   "edit.cut",
@@ -58,6 +62,16 @@ const MENU_ACTIONS: ActionId[] = [
 
 const aboutOpen = ref(false);
 const platform = window.sqraft.platform;
+
+/**
+ * 菜单的可点状态：没有文档时大部分动作无处落地，演示中渲染层会丢弃所有动作。
+ * 主进程按这份状态置灰，避免"点下去什么都不发生"。
+ */
+watch(
+  () => [ui.docOpen, ui.presenter] as const,
+  ([docOpen, presenter]) => window.sqraft.menu.setState(menuStateOf(docOpen, presenter)),
+  { immediate: true },
+);
 
 /** 切换语言后窗口标题里的「未命名 / Untitled」也要跟着变；画布标签字体也随语言换栈。 */
 watch(locale, () => {
@@ -116,7 +130,13 @@ onMounted(() => {
     // 复制/剪切/全选放在根组件：欢迎页也要能复制文本（画布不在时走原生）
     "edit.copy": () => void copySelectionAction(),
     "edit.cut": () => void cutSelectionAction(),
-    "file.exportPng": () => openExportDefault(),
+    "file.exportPng1": () => hooks.exportSelectionAs("png", 1),
+    "file.exportPng2": () => hooks.exportSelectionAs("png", 2),
+    "file.exportPng4": () => hooks.exportSelectionAs("png", 4),
+    "file.exportSvg": () => hooks.exportSelectionAs("svg", 1),
+    "file.exportMatrix": () => {
+      exportMatrixUi.open = true;
+    },
     "view.present": () => togglePresenter(),
     "palette.open": () => togglePalette(),
     "file.exampleLogin": () => void openExample("login"),
@@ -174,8 +194,8 @@ watchEffect(() => {
 
     <CommandPalette v-if="paletteUi.open" />
     <AboutPanel v-if="aboutOpen" @close="aboutOpen = false" />
+    <ExportMatrixDialog v-if="exportMatrixUi.open" @close="exportMatrixUi.open = false" />
     <SettingsHost v-if="settingsUi.open" />
-    <ExportPngDialog v-if="exportUi.open" />
     <Toast />
     <TokenPicker />
     <ContextMenu />

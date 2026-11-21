@@ -168,6 +168,14 @@ export function remapNode(
       targetMainId: idMap[def.targetMainId] ?? def.targetMainId,
     }));
   }
+  if (src.variantProperties) {
+    clone.variantProperties = src.variantProperties.map((def) => ({ ...def, values: [...def.values] }));
+  }
+  if (src.variantMap) {
+    const map: Record<string, NodeId> = {};
+    for (const [key, id] of Object.entries(src.variantMap)) map[key] = idMap[id] ?? id;
+    clone.variantMap = map;
+  }
   if (src.propValues) {
     const values: Record<string, string | boolean | NodeId> = {};
     for (const [key, value] of Object.entries(src.propValues)) {

@@ -3,6 +3,7 @@ import {
   createDocWithPage,
   createNode,
   resolvePaint,
+  resolvePaintSpec,
   worldRect,
   unionRects,
   getPages,
@@ -18,9 +19,17 @@ import {
   firstPageId,
   imageCropOf,
   maskPlan,
+  isGradientPaint,
   type DocNode,
+  type Paint,
 } from "../src/model";
 import { subtreeWorldBounds } from "../src/model";
+
+/** 测试里只关心纯色 Token；渐变不参与这些断言。 */
+function tokenOf(paint: Paint | null | undefined): string | undefined {
+  return paint && !isGradientPaint(paint) ? paint.token : undefined;
+}
+
 import {
   EFFECT_TYPES,
   createEffect,
@@ -134,8 +143,8 @@ describe("Token 改名", () => {
     store.apply({ type: "token.rename", params: { from: "color/primary", to: "brand/primary" } });
     expect(store.doc.tokens["color/primary"]).toBeUndefined();
     expect(store.doc.tokens["brand/primary"]).toEqual({ type: "color", value: "#3366ff" });
-    expect(store.doc.nodes[rect.id].style.fill?.token).toBe("brand/primary");
-    expect(store.doc.nodes[rect.id].style.stroke?.token).toBe("brand/primary");
+    expect(tokenOf(store.doc.nodes[rect.id].style.fill)).toBe("brand/primary");
+    expect(tokenOf(store.doc.nodes[rect.id].style.stroke)).toBe("brand/primary");
     expect(store.doc.nodes[rect.id].style.effects?.[0]).toMatchObject({ color: { token: "brand/primary" } });
     // 改名不改变渲染结果
     expect(resolvePaint(store.doc, store.doc.nodes[rect.id].style.fill)).toBe("#3366ff");
@@ -143,13 +152,13 @@ describe("Token 改名", () => {
     store.undo();
     expect(store.doc.tokens["brand/primary"]).toBeUndefined();
     expect(store.doc.tokens["color/primary"]).toEqual({ type: "color", value: "#3366ff" });
-    expect(store.doc.nodes[rect.id].style.fill?.token).toBe("color/primary");
-    expect(store.doc.nodes[rect.id].style.stroke?.token).toBe("color/primary");
+    expect(tokenOf(store.doc.nodes[rect.id].style.fill)).toBe("color/primary");
+    expect(tokenOf(store.doc.nodes[rect.id].style.stroke)).toBe("color/primary");
     expect(store.doc.nodes[rect.id].style.effects?.[0]).toMatchObject({ color: { token: "color/primary" } });
 
     store.redo();
     expect(store.doc.tokens["brand/primary"]).toBeTruthy();
-    expect(store.doc.nodes[rect.id].style.fill?.token).toBe("brand/primary");
+    expect(tokenOf(store.doc.nodes[rect.id].style.fill)).toBe("brand/primary");
     expect(store.doc.nodes[rect.id].style.effects?.[0]).toMatchObject({ color: { token: "brand/primary" } });
   });
 
@@ -166,8 +175,8 @@ describe("Token 改名", () => {
     ]);
 
     store.apply({ type: "token.rename", params: { from: "color/text", to: "ink/text" } });
-    expect(store.doc.nodes[a.id].style.fill?.token).toBe("ink/text");
-    expect(store.doc.nodes[b.id].style.fill?.token).toBe("color/primary");
+    expect(tokenOf(store.doc.nodes[a.id].style.fill)).toBe("ink/text");
+    expect(tokenOf(store.doc.nodes[b.id].style.fill)).toBe("color/primary");
   });
 
   it("源不存在或目标重名时抛错且不改文档", () => {
@@ -2429,6 +2438,23 @@ describe("子树绘制包围盒", () => {
     const box = subtreeWorldBounds(store.doc, rect.id)!;
     expect(box).toEqual({ x: -14, y: -4, width: 98, height: 88 });
   });
+
+  it("把描边宽度算进去（导出选区不被裁边）", () => {
+    const store = new DocStore(createDocWithPage());
+    const pageId = firstPageId(store.doc)!;
+    const rect = createNode("rect", {
+      parentId: pageId,
+      x: 100,
+      y: 100,
+      width: 50,
+      height: 40,
+      style: { stroke: { value: "#000" }, strokeWidth: 8 },
+    });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+    const box = subtreeWorldBounds(store.doc, rect.id)!;
+    // 描边每边压出 4px
+    expect(box).toEqual({ x: 96, y: 96, width: 58, height: 48 });
+  });
 });
 
 describe("脏标记", () => {
@@ -3381,5 +3407,71 @@ describe("Token 严格模式（ADR-0035）", () => {
     } as unknown as DocState;
     migrateDoc(state, 8);
     expect(state.strictTokens).toBe(true);
+  });
+});
+
+describe("渐变 Paint", () => {
+  it("stop 颜色支持 Token，并按 offset 排序", () => {
+    const doc = createDocWithPage();
+    doc.tokens["color/a"] = { type: "color", value: "#000000" };
+    doc.tokens["color/b"] = { type: "color", value: "#ffffff" };
+    expect(
+      resolvePaintSpec(doc, {
+        type: "linear",
+        from: { x: 0, y: 0.5 },
+        to: { x: 1, y: 0.5 },
+        stops: [
+          { offset: 1, color: { token: "color/b" } },
+          { offset: 0, color: { token: "color/a" } },
+        ],
+      }),
+    ).toEqual({
+      type: "gradient",
+      gradient: {
+        type: "linear",
+        from: { x: 0, y: 0.5 },
+        to: { x: 1, y: 0.5 },
+        stops: [
+          { offset: 0, color: "#000000" },
+          { offset: 1, color: "#ffffff" },
+        ],
+      },
+    });
+  });
+
+  it("不足两个可用 stop 时视为不可绘制", () => {
+    const doc = createDocWithPage();
+    expect(
+      resolvePaintSpec(doc, {
+        type: "radial",
+        from: { x: 0.5, y: 0.5 },
+        to: { x: 1, y: 1 },
+        stops: [{ offset: 0, color: { value: "#000000" } }],
+      }),
+    ).toBeUndefined();
+  });
+
+  it("Token 改名会同步渐变 stop 的引用", () => {
+    const store = new DocStore(createDocWithPage());
+    store.doc.tokens["color/old"] = { type: "color", value: "#111111" };
+    const pageId = store.doc.rootIds[0];
+    const rect = createNode("rect", {
+      style: {
+        fill: {
+          type: "linear",
+          from: { x: 0, y: 0 },
+          to: { x: 1, y: 0 },
+          stops: [
+            { offset: 0, color: { token: "color/old" } },
+            { offset: 1, color: { value: "#ffffff" } },
+          ],
+        },
+      },
+    });
+    store.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+    store.apply({ type: "token.rename", params: { from: "color/old", to: "color/new" } });
+    const fill = store.doc.nodes[rect.id].style.fill;
+    if (!fill || !("stops" in fill)) throw new Error("expected gradient");
+    expect(fill.stops[0]?.color.token).toBe("color/new");
   });
 });

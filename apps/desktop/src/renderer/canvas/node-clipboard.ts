@@ -182,7 +182,7 @@ export async function pasteNodesFromClipboard(deps: PasteDeps): Promise<boolean>
     const clone = cloneById.get(idMap[rootId]);
     if (!source || !clone) continue;
     // 主组件是文档根节点（ADR-0025）：粘贴出来仍然是根级母版，落不进页面/容器
-    const toRoot = clone.type === "component";
+    const toRoot = clone.type === "component" || clone.type === "componentSet";
     const targetParent = toRoot ? null : parentId;
     // 没有页面可落的文档：只有母版能粘到根上，其余根节点跳过（别让整次粘贴抛错）
     if (!targetParent && !toRoot) continue;
@@ -252,7 +252,7 @@ function detachSubtree(cloneById: Map<NodeId, DocNode>, id: NodeId): void {
 const MAX_NODES = 5000;
 const NODE_TYPES = new Set([
   "frame", "group", "rect", "ellipse", "line", "polygon", "star", "path", "text", "image",
-  "component", "instance", "slot", "page",
+  "component", "componentSet", "instance", "slot", "page",
 ]);
 
 /**

@@ -10,9 +10,33 @@ export const SEARCH_TYPES: ReadonlySet<string> = new Set(NODE_TYPES);
 
 /** create_node / update_node 共用的排版与外观字段。 */
 const STYLE_SCHEMA: Record<string, unknown> = {
-  fillToken: { type: "string", description: "填充色的 Token 名，如 color/primary；与 fill 二选一，Token 优先" },
+  fillToken: { type: "string", description: "填充色的 Token 名，如 color/primary；与 fillGradient / fill 三选一，Token 优先" },
+  fillGradient: {
+    type: "object",
+    description:
+      "渐变填充（linear/radial/angular/diamond）；坐标 0–1 相对节点包围盒，stops 2–16 个。与 fillToken / fill 三选一，Token 优先、渐变次之。严格模式下 stop 必须引用 Token。",
+    properties: {
+      type: { type: "string", enum: ["linear", "radial", "angular", "diamond"] },
+      from: { type: "object", description: "{x,y}，0–1" },
+      to: { type: "object", description: "{x,y}，0–1；radial/angular/diamond 表示边界/角度/半宽" },
+      focus: { type: "object", description: "{x,y}，可选，radial 焦点" },
+      stops: {
+        type: "array",
+        items: {
+          type: "object",
+          properties: {
+            offset: { type: "number", description: "0–1" },
+            color: { type: "object", description: "{token} 或 {value}" },
+          },
+          required: ["offset", "color"],
+        },
+      },
+    },
+    required: ["type", "from", "to", "stops"],
+  },
   fill: { type: "string", description: "填充色的字面量（如 #3366ff）；没有设计系统时直接给色值" },
-  strokeToken: { type: "string", description: "描边色的 Token 名；与 stroke 二选一，Token 优先" },
+  strokeToken: { type: "string", description: "描边色的 Token 名；与 strokeGradient / stroke 三选一，Token 优先" },
+  strokeGradient: { type: "object", description: "渐变描边，格式与 fillGradient 相同" },
   stroke: { type: "string", description: "描边色的字面量（如 #1a1a1a）" },
   strokeWidth: { type: "number", description: "描边线宽" },
   fontSizeToken: { type: "string", description: "字号的数值 Token 名，如 size/body；与 fontSize 同时存在时 Token 优先" },
@@ -478,6 +502,43 @@ export const tools: ToolDefinition[] = [
     },
   },
   {
+    name: "create_component_set",
+    description:
+      "把两个以上根级主组件组成组件集合（变体）。组件名必须是 Property=Value 形式（如 Size=M, Type=Primary），同名属性合并成枚举；返回 setId、组合映射与属性列表。",
+    input_schema: {
+      type: "object",
+      properties: {
+        componentIds: {
+          type: "array",
+          items: { type: "string" },
+          minItems: 2,
+          description: "要组成集合的根级主组件 id（2 个及以上）",
+        },
+      },
+      required: ["componentIds"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "add_variant",
+    description:
+      "复制集合里的一个现有变体并写入新的属性组合，返回新组件 id。values 按属性 id 或名字给值；给了新值时会自动加入该属性。组合已存在则拒绝。",
+    input_schema: {
+      type: "object",
+      properties: {
+        setId: { type: "string" },
+        sourceComponentId: { type: "string", description: "复制的源变体；省略取集合里的第一个" },
+        values: {
+          type: "object",
+          description: "属性 id 或名字 → 值；缺省属性沿用源变体的值",
+          additionalProperties: { type: "string" },
+        },
+      },
+      required: ["setId", "values"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "define_property",
     description:
       "在组件母版的图层上创建组件属性。type=text 要求目标为文本图层，boolean 控制可见性，instance 控制嵌套实例替换成哪个组件。返回 propertyId。",
@@ -496,7 +557,7 @@ export const tools: ToolDefinition[] = [
   {
     name: "set_instance_prop",
     description:
-      "设置或清除实例的属性值。文本用字符串、布尔用 true/false、实例替换用组件 id；null 表示清除并回落到母版值。",
+      "设置或清除实例的属性值。文本用字符串、布尔用 true/false、实例替换用组件 id；null 表示清除并回落到母版值。属性 id 命中组件集合的变体属性时等价于切换变体（值必须已存在，实例几何与同名覆盖保留）。",
     input_schema: {
       type: "object",
       properties: {
@@ -724,16 +785,34 @@ export const tools: ToolDefinition[] = [
     },
   },
   {
-    name: "export_png",
+    name: "export_as",
     description:
-      "按倍率把页面或一组节点渲染成 PNG data URL（不含选中框/参考线等 UI 叠加层）。有 nodeIds 时导出选区（透明背景），否则导出整页（带页面背景）。",
+      "把页面或一组节点导出成数据返回给调用方：format=svg 给 SVG 源码，format=png 给 PNG data URL。不写剪贴板、不写文件。有 nodeIds 时导出选区（透明背景），否则导出整页（带页面背景、不含根级主组件）。含背景模糊的节点会被栅格化（拍平后背景模糊效果会丢失），名字出现在 rasterized 里。",
     input_schema: {
       type: "object",
       properties: {
+        format: { type: "string", enum: ["png", "svg"], description: "必填：png=数据 URL，svg=源码字符串" },
         pageId: { type: "string", description: "页面 id；省略时用当前活动页" },
         nodeIds: { type: "array", items: { type: "string" }, description: "要导出的节点（透明背景）" },
-        scale: { type: "number", description: "倍率 1–4，默认 2" },
+        scale: { type: "number", enum: [1, 2, 4], description: "只对 png 有效，默认 2" },
       },
+      required: ["format"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "import_svg",
+    description:
+      "把 SVG 源码导入页面成为可编辑节点：形状/路径/文本/线性与径向渐变会转成节点，symbol + use、a / switch 与嵌套 svg 按原变换展开，整份包在一个 frame 里（一个撤销步）。不读磁盘、不访问网络；滤镜/蒙版/pattern 等无法映射的元素按元素栅格化成图片（清单在 rasterized），script / foreignObject / iframe / 动画等直接丢弃（清单在 warnings）。只有非法 XML、缺少尺寸、没有可导入内容或超过 3000 节点 / 200 个栅格化元素时才整份失败。严格 Token 模式不约束导入内容。",
+    input_schema: {
+      type: "object",
+      properties: {
+        svg: { type: "string", description: "SVG 源码（≤5MB）" },
+        pageId: { type: "string", description: "目标页面 id；省略时用当前活动页" },
+        x: { type: "number", description: "页面坐标系里的落点 x；省略时居中" },
+        y: { type: "number", description: "页面坐标系里的落点 y；省略时居中" },
+      },
+      required: ["svg"],
       additionalProperties: false,
     },
   },

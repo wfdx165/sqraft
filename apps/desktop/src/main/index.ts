@@ -10,7 +10,7 @@ import { registerMcpChannels, shutdownMcp, startMcp } from "./mcp";
 import { logApp } from "./mcp/log";
 import { removeStaleCliLink } from "./mcp/setup";
 import { initLogFile } from "./log-file";
-import { rebuildMenu, registerMenuChannels } from "./menu";
+import { rebuildMenu, registerMenuChannels, setMenuState } from "./menu";
 import { initMainI18n } from "./i18n";
 import { currentPreferences, initRecentFiles, requestOpen, saveWindowBounds } from "./recent-state";
 import { initUpdater, installOnQuit, registerUpdateChannels, scheduleAutoCheck } from "./updater";
@@ -175,7 +175,11 @@ function createWindow(): void {
   });
   attachCloseGuard(window);
   logApp("info", "window created", { width: bounds.width, height: bounds.height });
-  window.on("closed", () => logApp("info", "window closed"));
+  window.on("closed", () => {
+    logApp("info", "window closed");
+    // 渲染层没了，菜单不能还停在"有文档"的样子（macOS 关窗后应用还活着）
+    setMenuState({ docOpen: false, presenting: false });
+  });
 
   // 记住窗口位置：拖动/缩放时防抖写盘，关闭前再兜一次
   let saveTimer: ReturnType<typeof setTimeout> | null = null;

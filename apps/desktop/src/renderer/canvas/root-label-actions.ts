@@ -32,9 +32,9 @@ export interface RootLabelHover {
 /** 悬停态：标签给 move 光标；母版标签还点亮它的紫色悬停框。 */
 export function rootLabelHover(label: DocNode | null, hovered: DocNode | null): RootLabelHover {
   const libraryId =
-    label?.type === "component"
+    label?.type === "component" || label?.type === "componentSet"
       ? label.id
-      : hovered && (hovered.type === "instance" || hovered.type === "component")
+      : hovered && (hovered.type === "instance" || hovered.type === "component" || hovered.type === "componentSet")
         ? hovered.id
         : null;
   return { onLabel: Boolean(label), libraryId };

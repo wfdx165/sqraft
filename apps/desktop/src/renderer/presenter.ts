@@ -5,6 +5,7 @@
  * 渲染与输入在 `components/Presenter.vue`。
  */
 import { subtreeWorldBounds, type DocNode, type NodeId } from "@sqraft/core";
+import { logWarn } from "./log";
 import { docStore, ui } from "./store";
 
 /** 演示起点：编辑模式取活动页，否则取选中的页面，再否则第一页。 */
@@ -49,15 +50,27 @@ export function jumpTo(pageId: NodeId): void {
   state.scroll = 0;
 }
 
-/** 返回上一屏；栈空返回 false（调用方决定要不要退出）。 */
+/** 返回上一屏；栈空（或栈里剩下的页都已被删）返回 false，调用方决定要不要退出。 */
 export function goBack(): boolean {
   const state = ui.presenter;
   if (!state) return false;
-  const prev = state.stack.pop();
-  if (!prev) return false;
-  state.pageId = prev.pageId;
-  state.scroll = prev.scroll;
-  return true;
+  // 栈里的页面可能已经被删（演示中改稿、MCP 批量删页）：逐帧跳过，别落到空白页
+  let skipped = 0;
+  let landed = false;
+  while (state.stack.length > 0) {
+    const prev = state.stack.pop()!;
+    if (docStore.doc.nodes[prev.pageId]?.type !== "page") {
+      skipped += 1;
+      continue;
+    }
+    state.pageId = prev.pageId;
+    state.scroll = prev.scroll;
+    landed = true;
+    break;
+  }
+  // 正常后退不产生日志；只有跳过了已删页才留一条线索
+  if (skipped > 0) logWarn("presenter/back skipped deleted pages", { count: skipped });
+  return landed;
 }
 
 /** 页面内容的可滚动范围（文档单位）：子节点包围盒并集超出页面的部分。 */

@@ -4,6 +4,8 @@
  */
 import type { NodeId } from "@sqraft/core";
 import { dispatch, docStore, select, ui } from "../store";
+import { showToast } from "../toast";
+import { localizeError } from "../errors";
 import { isLocked } from "./hit";
 import type { PenState } from "./pen";
 
@@ -16,9 +18,15 @@ export function deleteSelection(pen: PenState): void {
     pen.pathEdit = null;
     pen.vectorDrag = null;
   }
-  dispatch(
-    ids.map((id) => ({ type: "node.delete" as const, params: { nodeId: id } })),
-    "delete",
-  );
+  try {
+    dispatch(
+      ids.map((id) => ({ type: "node.delete" as const, params: { nodeId: id } })),
+      "delete",
+    );
+  } catch (error) {
+    // 变体仍有实例引用等：命令层拒绝，界面给提示而不是抛到控制台
+    showToast(localizeError(error), "error");
+    return;
+  }
   select(ui.selection.filter((s) => !ids.includes(s)));
 }

@@ -337,6 +337,12 @@ export function imageFor(assetId: string, want?: number): ResolvedImage | null {
   return fallback;
 }
 
+/** 资源模型：解码入口只返回位图，SVG 导出要原始字节，走这里。 */
+export function assetBytes(assetId: string): { mime: string; bytes: Uint8Array } | null {
+  const record = records.get(assetId);
+  return record ? { mime: record.mime, bytes: record.bytes } : null;
+}
+
 /**
  * 这张图是否还有解码在进行：画布据此判断"刚才画的是不是占位 / 临时的粗级别"，
  * 是的话缓存层记为未完成，图解码完再重画（不需要让整个缓存失效）。

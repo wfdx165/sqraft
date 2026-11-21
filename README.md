@@ -41,14 +41,15 @@ If you would rather not auto-update, **Help → Check for Updates…** checks ma
 
 - **Vector canvas**: rectangles, ellipses, polygons, lines, pen paths, text; infinite canvas with multiple pages
 - **Auto layout**: direction, gap, padding, hug / fill / fixed, wrapping, drag to reorder
-- **Components**: main components, instances, slots, instance overrides and swapping
+- **Components**: main components, instances, slots, overrides, swapping, and component sets with enumerated variants
 - **Prototype links**: click a layer to jump to another page or go back, with instant / fade transitions; present mode scrolls pages and `H` highlights hotspots
 - **Design tokens**: colors and numbers (font size, radius, spacing…); change once and it applies everywhere
 - **Editing**: multi-select, marquee, align and distribute, drag to reparent, grouping, guides, snapping
 - **Effects**: drop shadow, inner shadow, layer blur, background blur
-- **Images**: drag in, paste, crop, mask, linked images (cached locally)
+- **Gradients**: linear, radial, angular and diamond fills and strokes, editable down to each color stop
+- **Images**: drag in, paste, crop, mask, linked images (cached locally); drop an `.svg` to import editable vectors, or hold `⌥` to insert it as an image
 - **AI editing**: agents search and read only the page or subtree they need (even in 100k-layer files), create nodes and change styles over MCP, and get warnings on every write (zero-size, clipped text, missing tokens) so they fix themselves; models without vision can read a text summary of the screen. They can also wire prototype links, so a generated design is clickable; one tool call = one undo step
-- **Export**: PNG (with scale)
+- **Export**: PNG 1×/2×/4× and SVG from the selection or the active page, plus `Copy as ▸` for the clipboard
 - **Interface languages**: 中文 / English / 日本語 / 한국어, with optional automatic system-language detection
 
 ## Connect AI

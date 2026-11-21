@@ -3,6 +3,7 @@ import { useInspector } from "../inspector/useInspector";
 import Icon from "./Icon.vue";
 import ImageSection from "./ImageSection.vue";
 import TokenLink from "./TokenLink.vue";
+import GradientEditor from "./GradientEditor.vue";
 import { EFFECT_TYPES } from "@sqraft/core";
 import { docStore, ui } from "../store";
 import { t } from "../i18n";
@@ -154,6 +155,15 @@ const {
   componentDefs,
   instanceProps,
   allComponents,
+  variantInstance,
+  variantOptionAvailable,
+  onVariantChange,
+  variantSetContext,
+  renameVariantProperty,
+  renameVariantValue,
+  deleteVariantValue,
+  addVariantOf,
+  deleteVariantOf,
   overrideView,
   outerOverrideView,
   inspectorTab,
@@ -566,11 +576,18 @@ const {
             <select :value="fillTokenOf(node)" :disabled="readonly" @change="setFill">
               <option value="">{{ t("inspector.none") }}</option>
               <option value="__custom">{{ t("inspector.custom") }}</option>
+              <option value="__gradient">{{ t("inspector.gradient") }}</option>
               <option v-for="t in tokenNames" :key="t" :value="t">{{ t }}</option>
             </select>
           </div>
         </div>
-        <div v-if="supportsFill && node.style.fill && !node.style.fill.token" class="row sub-row">
+        <GradientEditor
+          v-if="supportsFill && node.style.fill && 'stops' in node.style.fill"
+          :paint="node.style.fill"
+          :disabled="readonly"
+          @change="setGradient('fill', $event)"
+        />
+        <div v-if="supportsFill && node.style.fill && !node.style.fill.token && !('stops' in node.style.fill)" class="row sub-row">
           <label />
           <input type="color" class="color-input" :value="colorOf(node.style.fill)" :disabled="readonly" @input="setCustomPaint('fill', $event)" />
           <input class="mono hex" :value="node.style.fill.value ?? ''" :disabled="readonly" @change="setCustomPaint('fill', $event)" />
@@ -608,11 +625,18 @@ const {
             <select :value="strokeTokenOf(node)" :disabled="readonly" @change="setStroke">
               <option value="">{{ t("inspector.none") }}</option>
               <option value="__custom">{{ t("inspector.custom") }}</option>
+              <option value="__gradient">{{ t("inspector.gradient") }}</option>
               <option v-for="t in tokenNames" :key="t" :value="t">{{ t }}</option>
             </select>
           </div>
         </div>
-        <div v-if="supportsStroke && node.style.stroke && !node.style.stroke.token" class="row sub-row">
+        <GradientEditor
+          v-if="supportsStroke && node.style.stroke && 'stops' in node.style.stroke"
+          :paint="node.style.stroke"
+          :disabled="readonly"
+          @change="setGradient('stroke', $event)"
+        />
+        <div v-if="supportsStroke && node.style.stroke && !node.style.stroke.token && !('stops' in node.style.stroke)" class="row sub-row">
           <label />
           <input type="color" class="color-input" :value="colorOf(node.style.stroke)" :disabled="readonly" @input="setCustomPaint('stroke', $event)" />
           <input class="mono hex" :value="node.style.stroke.value ?? ''" :disabled="readonly" @change="setCustomPaint('stroke', $event)" />
@@ -809,6 +833,50 @@ const {
             <button v-if="hasPropValue(def)" class="mini" @click="setProp(def, null)">{{ t("inspector.reset") }}</button>
           </div>
         </template>
+      </section>
+
+      <section class="block" v-if="variantSetContext">
+        <span class="micro-label">{{ t("inspector.variantProperties") }}</span>
+        <div v-if="!variantSetContext.defs.length" class="row">
+          <span class="muted">{{ t("inspector.noVariantProperties") }}</span>
+        </div>
+        <div v-for="def in variantSetContext.defs" :key="def.id" class="variant-def">
+          <div class="row">
+            <input class="prop-name" :value="def.name" @change="renameVariantProperty(def, $event)" />
+          </div>
+          <div v-for="(value, index) in def.values" :key="value" class="row variant-value">
+            <input class="prop-name" :value="value" @change="renameVariantValue(def, index, $event)" />
+            <button class="mini" @click="deleteVariantValue(def, index)">{{ t("inspector.delete") }}</button>
+          </div>
+        </div>
+        <span class="micro-label">{{ t("inspector.variantList") }}</span>
+        <div v-for="variant in variantSetContext.variants" :key="variant.id" class="row">
+          <span class="muted prop-target">{{ variant.name }}</span>
+          <button class="mini" @click="addVariantOf(variantSetContext.set.id, variant.id)">
+            {{ t("inspector.duplicateVariant") }}
+          </button>
+          <button class="mini" @click="deleteVariantOf(variantSetContext.set.id, variant.id)">
+            {{ t("inspector.delete") }}
+          </button>
+        </div>
+      </section>
+
+      <section class="block" v-if="variantInstance">
+        <span class="micro-label">{{ t("inspector.variants") }}</span>
+        <div v-for="(def, index) in variantInstance.defs" :key="def.id" class="row prop-row">
+          <label>{{ def.name }}</label>
+          <select :value="variantInstance.values[index]" @change="onVariantChange(def, $event)">
+            <option
+              v-for="value in def.values"
+              :key="value"
+              :value="value"
+              :disabled="!variantOptionAvailable(index, value)"
+            >
+              {{ value }}
+            </option>
+          </select>
+        </div>
+        <div class="row"><span class="muted">{{ variantInstance.set.name }}</span></div>
       </section>
 
       <section class="block" v-if="outerOverrideView">

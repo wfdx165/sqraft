@@ -15,7 +15,9 @@ export interface ContextMenuItem {
   disabled?: boolean;
   /** 在这一项之前画一条分隔线 */
   separator?: boolean;
-  run: () => void;
+  /** 有子菜单时点这项展开，而不是执行 */
+  children?: ContextMenuItem[];
+  run?: () => void;
 }
 
 export const contextMenu = reactive({

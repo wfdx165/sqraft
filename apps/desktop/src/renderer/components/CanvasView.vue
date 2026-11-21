@@ -69,6 +69,8 @@ import { flushNudge, nudgeSelection } from "../canvas/nudge";
 import { marqueeHits } from "../canvas/marquee";
 import { boundsHandlePoints, selectionBounds as boundsOfSelection } from "../canvas/selection-bounds";
 import { renderPngAsync } from "../canvas/export-image";
+import { copySelectionAs, exportSelectionAs } from "../canvas/export-selection";
+import { renderSvgAsync } from "../canvas/svg-export";
 import { imageRefsOf } from "../canvas/image-assets";
 import { ensureLinkedImage, linkedImage } from "../linked-images";
 import { showToast } from "../toast";
@@ -834,40 +836,6 @@ function startRenameForSelection(): void {
     renameEl.value?.focus();
     renameEl.value?.select();
   });
-}
-
-/** ⌘⇧C：把选区（无选区则活动页）复制成 PNG 到剪贴板 */
-async function copySelectionAsPng(): Promise<void> {
-  const pageId = ensureActivePage()?.id ?? null;
-  if (!pageId) {
-    showToast(t("canvas.copyNoPage"), "error");
-    return;
-  }
-  const ids = ui.selection.filter((id) => {
-    const node = docStore.doc.nodes[id];
-    return !!node && node.type !== "page";
-  });
-  // 字体可能还在加载：导出前等一次，避免落成回退字体
-  try {
-    await document.fonts.ready;
-    const dataUrl = await renderPngAsync(docStore.doc, {
-      pageId,
-      nodeIds: ids.length > 0 ? ids : undefined,
-      scale: 2,
-      resolveImage: (assetId) => imageFor(assetId),
-      resolveLinkedImage: (url) => linkedImage(url),
-      ensureImage: ensureAssetDecoded,
-      ensureLinkedImage,
-    });
-    if (!dataUrl) {
-      showToast(t("canvas.copyEmpty"), "error");
-      return;
-    }
-    const ok = await window.sqraft.app.writeClipboardImage(dataUrl);
-    showToast(ok ? t("canvas.copiedPng") : t("canvas.copyClipboardUnavailable"), ok ? "info" : "error");
-  } catch (error) {
-    showToast(t("canvas.copyFailed", { detail: String(error) }), "error");
-  }
 }
 
 /** ⌘A：全选当前层级的可见未锁定图层（实例上下文内只选当前层） */
@@ -2431,8 +2399,8 @@ onMounted(() => {
       startLabelRename(node);
       return;
     }
-    if (node.type === "component") {
-      // 母版回根节点：输入框贴在它的名称标签上，和画布双击标签一致
+    if (node.type === "component" || node.type === "componentSet") {
+      // 母版/组件集合回根节点：输入框贴在它的名称标签上，和画布双击标签一致
       select([id]);
       startLabelRename(node);
       return;
@@ -2441,7 +2409,21 @@ onMounted(() => {
     startRenameForSelection();
   };
   hooks.deleteSelectionNow = () => deleteSelectionAction(pen);
-  hooks.copySelectionPng = () => void copySelectionAsPng();
+  hooks.copySelectionAs = (format, scale) => void copySelectionAs(format, scale);
+  hooks.exportSelectionAs = (format, scale) => void exportSelectionAs(format, scale);
+  hooks.renderExportSvg = async (request) => {
+    const pageId = request.pageId ?? ensureActivePage()?.id ?? null;
+    const result = await renderSvgAsync(docStore.doc, {
+      pageId: pageId ?? undefined,
+      nodeIds: request.nodeIds,
+      scale: 1,
+      resolveImage: (assetId) => imageFor(assetId),
+      resolveLinkedImage: (url) => linkedImage(url),
+      ensureImage: ensureAssetDecoded,
+      ensureLinkedImage,
+    });
+    return result;
+  };
   hooks.getActivePageId = () => {
     if (ui.mode === "edit") return ensureActivePage()?.id ?? null;
     return pageAtViewportCenter()?.id ?? null;
@@ -2477,7 +2459,7 @@ onMounted(() => {
     "tool.text": () => pickTool("text"),
     "edit.undo": () => docStore.undo(),
     "edit.redo": () => docStore.redo(),
-    "edit.copyImage": () => void copySelectionAsPng(),
+    "edit.copyImage": () => void copySelectionAs("png", 2),
     "edit.group": () => groupSelection(),
     "edit.ungroup": () => ungroupSelection(),
     "edit.rename": () => startRenameForSelection(),

@@ -3,7 +3,7 @@
  * 未来 WebGL2 后端实现同一接口即可替换，文档模型零改动。
  */
 
-import type { BlurEffect, CornerRadius, DocNode, DocState, Rect, ShadowEffect, VectorPath } from "@sqraft/core";
+import type { BlurEffect, CornerRadius, DocNode, DocState, Rect, ResolvedPaint, ShadowEffect, VectorPath } from "@sqraft/core";
 
 /** 已经解析成 CSS 颜色的阴影效果：后端不解析 Token。 */
 export type RenderShadowEffect = Omit<ShadowEffect, "color"> & { color: string };
@@ -52,6 +52,11 @@ export interface ResolvedImage {
    * 后端取样时乘上它——上层不需要知道拿到的是哪一级位图。
    */
   scale?: number;
+  /**
+   * 原图字节的 data URL（或等价的 `href`）。SVG 后端拿不到 Canvas 对象，
+   * 导出路径由宿主补上；画布路径不需要，缺省不填。
+   */
+  href?: string;
 }
 
 export interface RenderBackend {
@@ -85,14 +90,14 @@ export interface RenderBackend {
    */
   pushEffects(node: DocNode, effects: readonly RenderEffect[], cacheKey?: string): boolean | void;
   popEffects(): void;
-  drawRect(node: DocNode, fill?: string, stroke?: string, strokeWidth?: number, radius?: CornerRadius, shadow?: boolean): void;
-  drawEllipse(node: DocNode, fill?: string, stroke?: string, strokeWidth?: number): void;
-  drawLine(node: DocNode, stroke?: string, strokeWidth?: number): void;
+  drawRect(node: DocNode, fill?: ResolvedPaint, stroke?: ResolvedPaint, strokeWidth?: number, radius?: CornerRadius, shadow?: boolean): void;
+  drawEllipse(node: DocNode, fill?: ResolvedPaint, stroke?: ResolvedPaint, strokeWidth?: number): void;
+  drawLine(node: DocNode, stroke?: ResolvedPaint, strokeWidth?: number): void;
   /** 矢量路径：闭合时 closePath；fill/stroke 为空则跳过对应绘制 */
-  drawPath(node: DocNode, vector: VectorPath, fill?: string, stroke?: string, strokeWidth?: number): void;
+  drawPath(node: DocNode, vector: VectorPath, fill?: ResolvedPaint, stroke?: ResolvedPaint, strokeWidth?: number): void;
   /** 参数化多边形：points 为节点本地坐标，闭合描边 */
-  drawPolygon(node: DocNode, points: ReadonlyArray<{ x: number; y: number }>, fill?: string, stroke?: string, strokeWidth?: number): void;
-  drawText(node: DocNode, fill?: string, stroke?: string): void;
+  drawPolygon(node: DocNode, points: ReadonlyArray<{ x: number; y: number }>, fill?: ResolvedPaint, stroke?: ResolvedPaint, strokeWidth?: number): void;
+  drawText(node: DocNode, fill?: ResolvedPaint, stroke?: ResolvedPaint): void;
   /** 图片：`crop` 是原图像素坐标下的可见区域，绘制到节点框内 */
   drawImage(node: DocNode, image: ResolvedImage, crop: Rect, radius?: CornerRadius): void;
   /** 图片缺失占位（资源没随文件带过来时） */
@@ -117,6 +122,8 @@ export interface RenderBackend {
   /** `cacheKey` 语义同 pushEffects：返回 true 表示命中缓存，调用方跳过目标子树并直接 popMaskLayer。 */
   pushMaskLayer(bounds?: Rect, cacheKey?: string): boolean | void;
   popMaskLayer(drawMask: () => void, alpha?: number): void;
+  /** 把已经渲染好的位图贴回原位置（SVG 后端的栅格化兜底）；矩形是世界坐标。 */
+  drawRasterFallback?(raster: { href: string; rect: Rect }): void;
   endFrame(): void;
 }
 

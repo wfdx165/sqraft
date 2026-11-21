@@ -20,6 +20,14 @@ describe("根节点绘制清单", () => {
     expect(plan.components.map((c) => c.id)).toEqual([masterId]);
   });
 
+  it("组件集合也是库根：画布要画，页面导出不画", () => {
+    const { doc, pageId } = setup();
+    const set = createNode("componentSet", { name: "集合", x: 0, y: 1200, width: 300, height: 120 });
+    doc.apply({ type: "node.create", params: { nodes: [set], parentId: null } });
+    expect(rootDrawPlan(doc.doc).components.map((c) => c.id)).toContain(set.id);
+    expect(rootDrawPlan(doc.doc, [pageId]).components).toEqual([]);
+  });
+
   it("页面导出：只画该页，母版即使压在页面上也不画", () => {
     const { doc, pageId } = setup();
     const plan = rootDrawPlan(doc.doc, [pageId]);

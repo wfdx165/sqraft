@@ -2,6 +2,10 @@ import { describe, expect, it } from "vitest";
 import { createDocWithPage, createEmptyDoc, createNode, DocStore, firstPageId, makeExecutor } from "./helpers";
 import { call, setup } from "./helpers";
 
+/** 1×1 透明 PNG：用于断言 data URL 的尺寸解析。 */
+const PNG_1X1 =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
+
 describe("AI 工具：文档级操作与截图区域", () => {
   it("document.new 交给宿主执行", async () => {
     const store = new DocStore(createDocWithPage());
@@ -92,21 +96,123 @@ describe("AI 工具：文档级操作与截图区域", () => {
 
 
 describe("AI 工具：导出与布局检查", () => {
-  it("export_png 校验倍率并交给宿主渲染", async () => {
+  it("export_as 校验参数并交给宿主导出", async () => {
     const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     const run = makeExecutor(store, async () => "", () => pageId, undefined, {
       newDocument: async () => true,
       openDocument: async () => true,
-      exportPng: (request) => `data:image/png;base64,${request.scale}`,
+      exportImage: async (request) =>
+        request.format === "svg"
+          ? {
+              svg: '<svg xmlns="http://www.w3.org/2000/svg" width="120" height="80" viewBox="0 0 120 80"></svg>',
+              rasterized: ["背景模糊卡片"],
+            }
+          : { image: PNG_1X1, rasterized: [] },
     });
 
-    const ok = await call(run, "export_png", { scale: 3 });
-    expect(ok.image).toBe("data:image/png;base64,3");
-    await expect(run("export_png", { scale: 9 })).rejects.toThrow(/scale/);
-    await expect(run("export_png", { pageId: "missing" })).rejects.toThrow(/pageId/);
+    const svg = await call(run, "export_as", { format: "svg" });
+    expect(svg.width).toBe(120);
+    expect(svg.height).toBe(80);
+    expect(svg.svg).toContain("<svg");
+    expect(svg.rasterized).toEqual(["背景模糊卡片"]);
+
+    const png = await call(run, "export_as", { format: "png", scale: 4 });
+    expect(png.image).toBe(PNG_1X1);
+    expect(png.width).toBe(1);
+
+    await expect(run("export_as", { format: "png", scale: 3 })).rejects.toThrow(/scale/);
+    await expect(run("export_as", { format: "png", pageId: "missing" })).rejects.toThrow(/pageId/);
   });
 
+
+  it("import_svg 交给宿主并返回 frame 信息", async () => {
+    const store = new DocStore(createDocWithPage());
+    const pageId = firstPageId(store.doc)!;
+    const run = makeExecutor(store, async () => "", () => pageId, undefined, {
+      newDocument: async () => true,
+      openDocument: async () => true,
+      importSvg: async () => ({
+        ok: true,
+        frameId: "frame-1",
+        width: 120,
+        height: 80,
+        rasterized: ["filter-card"],
+        missingFonts: ["Brand Sans"],
+        warnings: [{ code: "IGNORED_TAG", element: "script", message: "<script> was dropped" }],
+      }),
+    });
+
+    const result = await call(run, "import_svg", { svg: "<svg/>" });
+    expect(result.frameId).toBe("frame-1");
+    expect(result.width).toBe(120);
+    expect(result.rasterized).toEqual(["filter-card"]);
+    expect(result.missingFonts).toEqual(["Brand Sans"]);
+    expect(result.warnings).toEqual([{ code: "IGNORED_TAG", element: "script", message: "<script> was dropped" }]);
+
+    await expect(run("import_svg", { svg: "   " })).rejects.toThrow(/svg/);
+  });
+
+  it("import_svg 把整份失败的原因翻成可执行文案，上限数字来自宿主", async () => {
+    const store = new DocStore(createDocWithPage());
+    const pageId = firstPageId(store.doc)!;
+    const cases = [
+      { failure: { ok: false, reason: "invalid-svg" } as const, expected: /不是合法/ },
+      { failure: { ok: false, reason: "no-size" } as const, expected: /缺少有效尺寸/ },
+      { failure: { ok: false, reason: "empty-content" } as const, expected: /没有可导入/ },
+      { failure: { ok: false, reason: "node-limit", limit: 1234 } as const, expected: /1234 个节点/ },
+      { failure: { ok: false, reason: "raster-limit", limit: 42 } as const, expected: /42 个栅格化/ },
+    ];
+    for (const { failure, expected } of cases) {
+      const run = makeExecutor(store, async () => "", () => pageId, undefined, {
+        newDocument: async () => true,
+        openDocument: async () => true,
+        importSvg: async () => failure,
+      });
+      await expect(run("import_svg", { svg: "<svg/>" })).rejects.toThrow(expected);
+    }
+  });
+
+  it("import_svg 失败时带上被忽略元素的摘要", async () => {
+    const store = new DocStore(createDocWithPage());
+    const pageId = firstPageId(store.doc)!;
+    const run = makeExecutor(store, async () => "", () => pageId, undefined, {
+      newDocument: async () => true,
+      openDocument: async () => true,
+      importSvg: async () => ({
+        ok: false,
+        reason: "empty-content",
+        warnings: [
+          { code: "IGNORED_TAG", element: "script", message: "<script> was dropped" },
+          { code: "IGNORED_TAG", element: "script", message: "<script> was dropped" },
+          { code: "IGNORED_TAG", element: "foreignobject", message: "<foreignobject> was dropped" },
+          { code: "UNSUPPORTED_ELEMENT", element: "foo", message: "<foo> was skipped" },
+        ],
+      }),
+    });
+    await expect(run("import_svg", { svg: "<svg/>" })).rejects.toThrow(/已忽略 4 个元素：script、foreignobject、foo/);
+  });
+
+  it("import_svg 成功但没有降级时省略 warnings", async () => {
+    const store = new DocStore(createDocWithPage());
+    const pageId = firstPageId(store.doc)!;
+    const run = makeExecutor(store, async () => "", () => pageId, undefined, {
+      newDocument: async () => true,
+      openDocument: async () => true,
+      importSvg: async () => ({
+        ok: true,
+        frameId: "frame-1",
+        width: 10,
+        height: 10,
+        rasterized: [],
+        missingFonts: [],
+        warnings: [],
+      }),
+    });
+    const result = await call(run, "import_svg", { svg: "<svg/>" });
+    expect(result.warnings).toBeUndefined();
+    expect(result.rasterized).toBeUndefined();
+  });
   it("inspect_layout 返回世界坐标与布局参数", async () => {
     const { store, run, pageId } = setup();
     const frame = createNode("frame", { parentId: pageId, x: 100, y: 50, width: 200, height: 100 });
@@ -199,6 +305,41 @@ describe("AI 工具：screenshot 文本替代视图", () => {
       parentId: frame.nodeId,
     });
     expect(String(res.hint)).toMatch(/format:"image"/);
+  });
+
+  it("文本视图把渐变报成类型 + 解析后的色标", async () => {
+    const { run } = textRun();
+    await call(run, "define_token", { path: "color/a", type: "color", value: "#22c55e" });
+    const rect = await call(run, "create_node", {
+      kind: "rect",
+      name: "渐变",
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 60,
+      fillGradient: {
+        type: "linear",
+        from: { x: 0, y: 0 },
+        to: { x: 1, y: 0 },
+        stops: [
+          { offset: 0, color: { token: "color/a" } },
+          { offset: 1, color: { value: "#06b6d4" } },
+        ],
+      },
+    });
+    const res = await call(run, "screenshot", {
+      format: "text",
+      region: { x: 0, y: 0, width: 120, height: 80 },
+    });
+    const row = (res.nodes as Array<Record<string, unknown>>).find((n) => n.id === rect.nodeId)!;
+    expect(row.fill).toBeNull();
+    expect(row.fillGradient).toEqual({
+      type: "linear",
+      stops: [
+        { offset: 0, color: "#22c55e" },
+        { offset: 1, color: "#06b6d4" },
+      ],
+    });
   });
 
   it("默认区域是当前页页面框，页外的节点不进来；悬空 Token 暴露成洋红", async () => {
