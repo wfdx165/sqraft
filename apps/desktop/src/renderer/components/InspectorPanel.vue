@@ -932,6 +932,50 @@ const {
         <div class="row"><span class="muted">{{ variantInstance.set.name }}</span></div>
       </section>
 
+      <section class="block" v-if="variantSetContext">
+        <span class="micro-label">{{ t("inspector.variantProperties") }}</span>
+        <div v-if="!variantSetContext.defs.length" class="row">
+          <span class="muted">{{ t("inspector.noVariantProperties") }}</span>
+        </div>
+        <div v-for="def in variantSetContext.defs" :key="def.id" class="variant-def">
+          <div class="row">
+            <input class="prop-name" :value="def.name" @change="renameVariantProperty(def, $event)" />
+          </div>
+          <div v-for="(value, index) in def.values" :key="value" class="row variant-value">
+            <input class="prop-name" :value="value" @change="renameVariantValue(def, index, $event)" />
+            <button class="mini" @click="deleteVariantValue(def, index)">{{ t("inspector.delete") }}</button>
+          </div>
+        </div>
+        <span class="micro-label">{{ t("inspector.variantList") }}</span>
+        <div v-for="variant in variantSetContext.variants" :key="variant.id" class="row">
+          <span class="muted prop-target">{{ variant.name }}</span>
+          <button class="mini" @click="addVariantOf(variantSetContext.set.id, variant.id)">
+            {{ t("inspector.duplicateVariant") }}
+          </button>
+          <button class="mini" @click="deleteVariantOf(variantSetContext.set.id, variant.id)">
+            {{ t("inspector.delete") }}
+          </button>
+        </div>
+      </section>
+
+      <section class="block" v-if="variantInstance">
+        <span class="micro-label">{{ t("inspector.variants") }}</span>
+        <div v-for="(def, index) in variantInstance.defs" :key="def.id" class="row prop-row">
+          <label>{{ def.name }}</label>
+          <select :value="variantInstance.values[index]" @change="onVariantChange(def, $event)">
+            <option
+              v-for="value in def.values"
+              :key="value"
+              :value="value"
+              :disabled="!variantOptionAvailable(index, value)"
+            >
+              {{ value }}
+            </option>
+          </select>
+        </div>
+        <div class="row"><span class="muted">{{ variantInstance.set.name }}</span></div>
+      </section>
+
       <section class="block" v-if="outerOverrideView">
         <span class="micro-label">{{ t("inspector.outerOverrides") }}</span>
         <div v-for="f in outerOverrideView.fields" :key="f" class="row ovr-row">

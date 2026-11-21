@@ -8,10 +8,8 @@ import {
   type DocNode,
   type DocState,
   type Effect,
-  type GradientType,
   type LayoutSpec,
   type NodeStyle,
-  type Paint,
 } from "@sqraft/core";
 import { parsePathData } from "../canvas/svg-path";
 
