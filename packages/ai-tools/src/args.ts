@@ -154,7 +154,7 @@ export function assertNumberToken(store: DocStore, token: string | null | undefi
     );
   }
   if (entry.type !== "number") {
-    throw new Error(`${field} 需要数值 Token，但 "${token}" 是颜色 Token；改用数值 Token 或字面量数值。`);
+    throw new Error(`${field} 需要数值 Token，但 "${token}" 是 ${entry.type} Token；改用数值 Token 或字面量数值。`);
   }
 }
 
@@ -373,14 +373,23 @@ export const TOKEN_REF_PREVIEW = 5;
 export const REF_NAME_MAX = 24;
 
 /** 被引用时拒绝删除：给 agent 明确的下一步（detach 会冻结成什么值），并带节点名便于核对 */
-export function blockedDeleteMessage(doc: DocState, path: string, refs: NodeId[], value: string): string {
+export function blockedDeleteMessage(
+  doc: DocState,
+  path: string,
+  refs: NodeId[],
+  tokenRefs: string[],
+  value: string,
+): string {
   const preview = refs
     .slice(0, TOKEN_REF_PREVIEW)
     .map((id) => `${(doc.nodes[id]?.name ?? "未命名").slice(0, REF_NAME_MAX)}(${id})`)
     .join("、");
   const rest = refs.length > TOKEN_REF_PREVIEW ? `，另有 ${refs.length - TOKEN_REF_PREVIEW} 个` : "";
+  const gradientPart = tokenRefs.length
+    ? `，另有 ${tokenRefs.length} 个渐变 Token 引用它（${tokenRefs.slice(0, 3).join("、")}）`
+    : "";
   return (
-    `Token "${path}" 仍被 ${refs.length} 个节点引用：${preview}${rest}` +
+    `Token "${path}" 仍被 ${refs.length} 个节点引用：${preview}${rest}${gradientPart}` +
     `；传 detach=true 会把它们冻结为 ${value} 后删除（完整名单见 read_document）`
   );
 }

@@ -4,7 +4,8 @@
  * 从 `DocStore.applyOne` 抽出来：store 只负责命令调度，Token 的引用遍历
  * （fill / stroke / 阴影颜色）与逆操作集中在这里维护。
  */
-import type { DocState, NodeId } from "./model";
+import type { DocState, NodeId, TokenEntry } from "./model";
+import { isGradientValue } from "./model";
 import type { Command } from "./store";
 import { AppError } from "./errors";
 import {
@@ -65,6 +66,20 @@ export function applyTokenCommand(state: DocState, cmd: TokenCommand, changed: S
 
       delete state.tokens[from];
       state.tokens[to] = entry;
+
+      // 渐变 Token 的色标也可能引用这个颜色 Token：条目内部一起改
+      for (const [key, other] of Object.entries(state.tokens)) {
+        if (other.type !== "gradient" || !isGradientValue(other.value)) continue;
+        let touched = false;
+        const stops = other.value.stops.map((stop) => {
+          if (stop.color?.token !== from) return stop;
+          touched = true;
+          return { ...stop, color: { token: to } };
+        });
+        if (!touched) continue;
+        const next: TokenEntry = { type: "gradient", value: { ...other.value, stops } };
+        state.tokens[key] = next;
+      }
 
       // 引用随动：填充、描边与阴影颜色（效果里的 Paint）都要跟着改
       for (const node of Object.values(state.nodes)) {

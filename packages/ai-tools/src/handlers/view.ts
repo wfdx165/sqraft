@@ -1,6 +1,6 @@
 // 工具名直接分派；每个分支保持原实现，ctx 提供 store 与宿主能力。
 import type { DocNode, NodeId, Rect, ScreenshotRegion } from "../shared";
-import { diagnose, firstPageId, getPages, isGradientPaint, resolvePaint, round2, worldRect } from "../shared";
+import { diagnose, firstPageId, getPages, isGradientPaint, resolvePaint, resolvePaintSpec, round2, worldRect } from "../shared";
 import type { Handler, SvgImportFailure, SvgImportFailureReason } from "../types";
 
 /** 整份导入失败时给 agent 的文案：每种原因都能指向下一步动作（{limit} 由宿主给出）。 */
@@ -135,17 +135,21 @@ export const handleScreenshot: Handler = async (ctx, args) => {
     }
     const areaBox: Rect = { x: area.x, y: area.y, width: area.width, height: area.height };
     const MAX_TEXT_NODES = 200;
-    /** 渐变没法压成一个色值：给类型与解析后的色标，避免 agent 把渐变读成"无填充"。 */
+    /**
+     * 渐变没法压成一个色值：给类型与解析后的色标，避免 agent 把渐变读成"无填充"。
+     * 走 resolvePaintSpec：字面渐变与"引用渐变 Token"两种都要能读出来。
+     */
     const gradientSummary = (paint: DocNode["style"]["fill"]) => {
-      if (!isGradientPaint(paint)) return undefined;
+      const spec = resolvePaintSpec(ctx.store.doc, paint);
+      if (!spec || spec.type !== "gradient") return undefined;
       return {
-        type: paint.type,
-        stops: paint.stops.map((stop) => ({
-          offset: stop.offset,
-          color: resolvePaint(ctx.store.doc, stop.color) ?? null,
-        })),
+        type: spec.gradient.type,
+        stops: spec.gradient.stops.map((stop) => ({ offset: stop.offset, color: stop.color })),
       };
     };
+    /** 纯色 / 渐变 Token 的引用路径（字面渐变没有 Token）。 */
+    const tokenOf = (paint: DocNode["style"]["fill"]) =>
+      paint && !isGradientPaint(paint) && paint.token ? paint.token : undefined;
     const rows: Array<Record<string, unknown>> = [];
     const included = new Set<NodeId>();
     let textTruncated = false;
@@ -179,6 +183,8 @@ export const handleScreenshot: Handler = async (ctx, args) => {
           opacity: node.opacity,
           fill: resolvePaint(ctx.store.doc, node.style.fill) ?? null,
           stroke: resolvePaint(ctx.store.doc, node.style.stroke) ?? null,
+          ...(tokenOf(node.style.fill) ? { fillToken: tokenOf(node.style.fill) } : {}),
+          ...(tokenOf(node.style.stroke) ? { strokeToken: tokenOf(node.style.stroke) } : {}),
           ...(gradientSummary(node.style.fill) ? { fillGradient: gradientSummary(node.style.fill) } : {}),
           ...(gradientSummary(node.style.stroke) ? { strokeGradient: gradientSummary(node.style.stroke) } : {}),
           text: node.type === "text" ? (node.text ?? "") : null,

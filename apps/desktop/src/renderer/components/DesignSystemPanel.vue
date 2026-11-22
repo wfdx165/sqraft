@@ -6,11 +6,16 @@
  */
 import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
 import {
+  cloneGradientValue,
+  isGradientValue,
   planTokenDelete,
+  resolveGradient,
   tokenColorOf,
+  tokenGradientOf,
   tokenNumberOf,
   tokenPathOf,
   tokenRefsOf,
+  type GradientValue,
   type TokenDeletePlan,
   type TokenEntry,
 } from "@sqraft/core";
@@ -19,13 +24,27 @@ import { t } from "../i18n";
 import { localizeError } from "../errors";
 import { tokenFocus } from "../token-focus";
 import Icon from "./Icon.vue";
+import GradientEditor from "./GradientEditor.vue";
 
 interface Row {
   path: string;
   entry: TokenEntry;
 }
 
+const DEFAULT_GRADIENT: GradientValue = {
+  type: "linear",
+  from: { x: 0, y: 0.5 },
+  to: { x: 1, y: 0.5 },
+  stops: [
+    { offset: 0, color: { value: "#6366f1" } },
+    { offset: 1, color: { value: "#a855f7" } },
+  ],
+};
+
 const filter = ref("");
+/** 展开展示渐变编辑器的 Token 路径（行内编辑，一次改动一条 `token.define`）。 */
+const editingGradient = ref<string | null>(null);
+const draftGradient = ref<GradientValue>(cloneGradientValue(DEFAULT_GRADIENT));
 const collapsed = ref<Record<string, boolean>>({});
 const flashPath = ref<string | null>(null);
 let flashTimer: ReturnType<typeof setTimeout> | undefined;
@@ -108,6 +127,12 @@ function isValidNumber(value: string): boolean {
   return tokenNumberOf(value) !== null;
 }
 
+/** 行内输入只服务颜色 / 数值；渐变行没有文本输入。 */
+function commitRow(row: Row, raw: string): void {
+  if (row.entry.type === "gradient") return;
+  commit(row.path, row.entry.type, raw);
+}
+
 function commit(path: string, tokenType: "color" | "number", raw: string): void {
   const entry = docStore.doc.tokens[path];
   if (!entry) return;
@@ -141,10 +166,51 @@ function onPick(path: string, e: Event): void {
   commit(path, "color", (e.target as HTMLInputElement).value);
 }
 
+/* ---------- 渐变 Token ---------- */
+
+const colorTokenPaths = computed(() => {
+  void ui.version;
+  return Object.keys(docStore.doc.tokens).filter((k) => docStore.doc.tokens[k]?.type === "color");
+});
+
+function gradientValueOf(entry: TokenEntry): GradientValue | undefined {
+  return entry.type === "gradient" && isGradientValue(entry.value) ? entry.value : undefined;
+}
+
+/** 列表缩略条：线性按 from→to 求角度，径向按中心，角度用 conic，菱形按方向示意（只用于缩略）。 */
+function gradientPreview(entry: TokenEntry): string {
+  const value = gradientValueOf(entry);
+  const resolved = value ? resolveGradient(docStore.doc, value) : undefined;
+  if (!resolved) return "transparent";
+  const stops = resolved.stops.map((stop) => `${stop.color} ${Math.round(stop.offset * 100)}%`).join(", ");
+  if (resolved.type === "radial") {
+    return `radial-gradient(circle at ${Math.round(resolved.from.x * 100)}% ${Math.round(resolved.from.y * 100)}%, ${stops})`;
+  }
+  if (resolved.type === "angular") return `conic-gradient(${stops})`;
+  const dx = resolved.to.x - resolved.from.x;
+  const dy = resolved.to.y - resolved.from.y;
+  const angle = Math.round((Math.atan2(dx, -dy) * 180) / Math.PI);
+  return `linear-gradient(${angle}deg, ${stops})`;
+}
+
+function toggleGradient(path: string): void {
+  editingGradient.value = editingGradient.value === path ? null : path;
+}
+
+function setGradient(path: string, next: GradientValue): void {
+  dispatch({ type: "token.define", params: { path, tokenType: "gradient", value: next } }, "token-edit");
+}
+
+/** 删除确认与占位展示：渐变显示成 `linear (3 stops)`，不显示 [object Object]。 */
+function displayValue(entry: TokenEntry): string {
+  const gradient = gradientValueOf(entry);
+  return gradient ? `${gradient.type} (${gradient.stops.length} stops)` : String(entry.value);
+}
+
 /* ---------- 新增 ---------- */
 
 const adding = ref(false);
-const draft = ref({ path: "", type: "color" as "color" | "number", value: "" });
+const draft = ref({ path: "", type: "color" as TokenEntry["type"], value: "" });
 const addError = ref("");
 
 function startAdd(groupPrefix?: string) {
@@ -152,9 +218,10 @@ function startAdd(groupPrefix?: string) {
   addError.value = "";
   draft.value = {
     path: groupPrefix ? `${groupPrefix}/` : "",
-    type: groupPrefix === "color" ? "color" : groupPrefix ? "number" : "color",
+    type: groupPrefix === "gradient" ? "gradient" : groupPrefix === "color" ? "color" : groupPrefix ? "number" : "color",
     value: "",
   };
+  draftGradient.value = cloneGradientValue(DEFAULT_GRADIENT);
 }
 
 /** 路径校验：新增与改名共用（至少两段、无空格/空段、不重复）。 */
@@ -171,6 +238,18 @@ function submitAdd() {
     addError.value = pathError;
     return;
   }
+
+  if (draft.value.type === "gradient") {
+    const gradient = tokenGradientOf(draftGradient.value);
+    if (!gradient) {
+      addError.value = t("tokens.gradientInvalid");
+      return;
+    }
+    dispatch({ type: "token.define", params: { path, tokenType: "gradient", value: gradient } }, "token-add");
+    closeAddForm();
+    return;
+  }
+
   const value = draft.value.value.trim();
   if (draft.value.type === "color" ? !isValidColor(value) : !isValidNumber(value)) {
     addError.value = draft.value.type === "color" ? t("tokens.colorInvalid") : t("tokens.numberInvalid");
@@ -187,6 +266,10 @@ function submitAdd() {
     },
     "token-add",
   );
+  closeAddForm();
+}
+
+function closeAddForm(): void {
   adding.value = false;
   addError.value = "";
   draft.value = { path: "", type: "color", value: "" };
@@ -249,10 +332,13 @@ const confirmText = computed(() => {
   const entry = docStore.doc.tokens[path];
   // Token 被别处删掉/撤销后行本身会消失；兜底是为了不渲染出「冻结为 」
   if (!entry) return t("tokens.deleteMissing");
-  return t("tokens.deleteConfirm", {
+  const plan = planTokenDelete(docStore.doc, path, true);
+  const tokens = plan.status === "missing" ? [] : (plan.tokenRefs ?? []);
+  const base = t("tokens.deleteConfirm", {
     count: tokenRefsOf(docStore.doc, path).length,
-    value: String(entry.value),
+    value: displayValue(entry),
   });
+  return tokens.length ? `${base}；${t("tokens.deleteConfirmTokens", { count: tokens.length })}` : base;
 });
 
 function requestDelete(path: string): void {
@@ -260,6 +346,7 @@ function requestDelete(path: string): void {
   if (renamingPath.value !== null) cancelRename();
   const plan = planTokenDelete(docStore.doc, path, false);
   if (plan.status === "missing") return;
+  // 有引用（节点或渐变 Token）时不直接删：先把"会冻结成什么"摊开
   if (plan.status === "ready") {
     runPlan(path, plan);
     return;
@@ -319,6 +406,11 @@ function runPlan(path: string, plan: Extract<TokenDeletePlan, { status: "ready" 
               <label v-if="row.entry.type === 'color'" class="swatch" :style="{ background: String(row.entry.value) }">
                 <input type="color" :value="hexOf(row.entry.value)" @change="onPick(row.path, $event)" />
               </label>
+              <span
+                v-else-if="row.entry.type === 'gradient'"
+                class="swatch gradient-swatch"
+                :style="{ background: gradientPreview(row.entry) }"
+              />
               <span v-else class="swatch number-dot">#</span>
 
               <input
@@ -337,12 +429,20 @@ function runPlan(path: string, plan: Extract<TokenDeletePlan, { status: "ready" 
                 <Icon name="pencil" :size="11" />
               </button>
 
+              <button
+                v-if="renamingPath !== row.path && row.entry.type === 'gradient'"
+                class="value mono gradient-open"
+                :class="{ on: editingGradient === row.path }"
+                @click="toggleGradient(row.path)"
+              >
+                {{ t("tokens.editGradient") }}
+              </button>
               <input
-                v-if="renamingPath !== row.path"
+                v-else-if="renamingPath !== row.path"
                 class="value mono"
                 :value="row.entry.value"
                 spellcheck="false"
-                @change="commit(row.path, row.entry.type, ($event.target as HTMLInputElement).value)"
+                @change="commitRow(row, ($event.target as HTMLInputElement).value)"
               />
 
               <button
@@ -354,6 +454,14 @@ function runPlan(path: string, plan: Extract<TokenDeletePlan, { status: "ready" 
               >
                 <Icon name="close" :size="10" />
               </button>
+            </div>
+
+            <div v-if="editingGradient === row.path && gradientValueOf(row.entry)" class="gradient-inline">
+              <GradientEditor
+                :paint="gradientValueOf(row.entry)"
+                :color-tokens="colorTokenPaths"
+                @change="setGradient(row.path, $event)"
+              />
             </div>
 
             <div v-if="confirmingPath === row.path" class="confirm">
@@ -377,13 +485,21 @@ function runPlan(path: string, plan: Extract<TokenDeletePlan, { status: "ready" 
           <select v-model="draft.type" class="type">
             <option value="color">{{ t("tokens.typeColor") }}</option>
             <option value="number">{{ t("tokens.typeNumber") }}</option>
+            <option value="gradient">{{ t("tokens.typeGradient") }}</option>
           </select>
         </div>
-        <div class="add-line">
+        <div v-if="draft.type !== 'gradient'" class="add-line">
           <input v-model="draft.value" class="value-input mono" :placeholder="draft.type === 'color' ? '#3366ff' : '12'" spellcheck="false" />
           <button type="submit" class="mini primary">{{ t("common.add") }}</button>
           <button type="button" class="mini" @click="adding = false">{{ t("common.cancel") }}</button>
         </div>
+        <template v-else>
+          <GradientEditor :paint="draftGradient" :color-tokens="colorTokenPaths" @change="draftGradient = $event" />
+          <div class="add-line">
+            <button type="submit" class="mini primary">{{ t("common.add") }}</button>
+            <button type="button" class="mini" @click="adding = false">{{ t("common.cancel") }}</button>
+          </div>
+        </template>
         <p v-if="addError" class="add-error">{{ addError }}</p>
       </form>
       <button v-else class="add" @click="startAdd()"><Icon name="plus" :size="12" />{{ t("tokens.add") }}</button>
@@ -404,6 +520,31 @@ function runPlan(path: string, plan: Extract<TokenDeletePlan, { status: "ready" 
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+.gradient-swatch {
+  background-clip: padding-box;
+}
+
+.gradient-open {
+  text-align: left;
+  cursor: pointer;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--text-dim);
+}
+
+.gradient-open.on {
+  border-color: var(--accent-line);
+  color: var(--text);
+}
+
+.gradient-inline {
+  margin: 2px 0 6px 30px;
+  padding: 6px 8px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  background: var(--tint-3);
 }
 
 .search {

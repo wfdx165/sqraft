@@ -35,7 +35,7 @@ import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, re
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { compareVersions, pickArm64Dmg, pickArm64Zip, pickWinSetup } from "./release-utils.mjs";
+import { compareVersions, pickArm64Dmg, pickArm64Zip, pickWinSetup, signingProblems } from "./release-utils.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../..");
@@ -167,7 +167,9 @@ function localProblems({ requireNotes }) {
   if (requireNotes) {
     const notes = existsSync(notesPath) ? readFileSync(notesPath, "utf8") : "";
     if (!notes.trim()) {
-      problems.push(`缺少发布说明 ${notesPath}（或内容为空）；复制 docs/releases/v0.0.2.md 改名后填写`);
+      problems.push(
+        `缺少发布说明 ${notesPath}（或内容为空）；复制 docs/releases/ 里最新的那份改名后填写（正文用英文）`,
+      );
     }
   }
 
@@ -299,14 +301,9 @@ function stampProblems() {
   if (stamp.version !== version) {
     problems.push(`build.json 的版本是 ${String(stamp.version)}，package.json 是 ${version}：重跑 pnpm dist`);
   }
-  // macOS 发版必须有 Developer ID 签名（ADR-0034）：没有 signing 说明是 dist:dir 或签名上线前的构建。
-  // 公证当前关闭（NOTARIZE=false）：`signing.notarized` 为 true 时才额外断言 Gatekeeper 与票据。
-  if (!stamp.signing || !stamp.signing.identity || !stamp.signing.teamId) {
-    problems.push(
-      "build.json 里没有完整的签名信息：那是 dist:dir 或签名上线前的产物。" +
-        "发版请重跑 pnpm dist（需要 Developer ID 证书）",
-    );
-  }
+  // macOS 发版必须有 Developer ID 签名并且已公证（ADR-0034 / 2026-11-22 修订）：
+  // 没有 signing 说明是 dist:dir 或签名上线前的构建；notarized 不是 true 说明是 --no-notarize。
+  problems.push(...signingProblems(stamp.signing));
   const head = gitHead();
   if (stamp.commit && head && stamp.commit !== head) {
     problems.push(
@@ -484,11 +481,15 @@ report(artifactProblemsList);
 
 // 3) 成品防护验收（ADR-0030 / ADR-0034）：源码 / 依赖漏回包里、或签名不合格，都在这里中止，
 //    而不是把包传上去。它只读产物、秒级完成，所以放在测试前面——产物不合格时不必先等一遍测试。
-const verifyPackArgs = [join(desktopRoot, "scripts", "verify-pack.mjs"), "--expect-signed"];
+const verifyPackArgs = [
+  join(desktopRoot, "scripts", "verify-pack.mjs"),
+  "--expect-signed",
+  "--expect-notarized",
+];
 const builtTeam = stamp?.signing?.teamId;
 if (builtTeam) verifyPackArgs.push("--team-id", builtTeam);
-// 只有构建时真做了公证才断言 Gatekeeper 与票据（公证当前关闭，见 ADR-0034「后续修订」）
-if (stamp?.signing?.notarized === true) verifyPackArgs.push("--expect-notarized");
+// 公证默认开启（ADR-0034 / 2026-11-22 修订）：发版包必须过 Gatekeeper 且票据已 staple。
+// build.json 的 signing.notarized 不是 true 时，stampProblems() 已经先中止了。
 run("node", verifyPackArgs, { cwd: desktopRoot });
 // 4) 发版闸门：没测过不发版（本脚本不再构建，测试是唯一与产物无关的硬检查）
 run("pnpm", ["test"]);

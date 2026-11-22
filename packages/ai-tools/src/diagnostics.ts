@@ -8,7 +8,7 @@ export function attachDiagnostics(
   changed: Set<NodeId>,
   measureLine?: MeasureText,
 ): string {
-  // Token 命令只标 __doc__：扫全文档，但只跑 TOKEN_MISSING，避免把无关的历史问题带出来
+  // Token 命令只标 __doc__：扫全文档，但只跑 Token 相关码，避免把无关的历史问题带出来
   const docLevel =
     changed.has("__doc__" as NodeId) || changed.has(NUMERIC_TOKEN_CHANGED as NodeId);
   // 写工具：changed 已含每个被动的节点（create / 实例物化 / 布局回写都会逐个加进去），
@@ -20,7 +20,7 @@ export function attachDiagnostics(
   const result = diagnose(store.doc, roots, {
     measure: measureLine,
     shallow: !docLevel,
-    codes: docLevel ? ["TOKEN_MISSING"] : undefined,
+    codes: docLevel ? ["TOKEN_MISSING", "TOKEN_TYPE"] : undefined,
   });
   if (result.diagnostics.length === 0) return raw;
   let parsed: Record<string, unknown>;

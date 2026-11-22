@@ -13,13 +13,17 @@ import {
 } from "./token-fields";
 import { tokenNumberOf } from "./token-validation";
 import {
+  cloneGradientValue,
   isGradientPaint,
+  isGradientValue,
   type DocNode,
   type DocState,
+  type GradientValue,
   type LayoutSpec,
   type NodeId,
   type NodeStyle,
   type Paint,
+  type TokenEntry,
 } from "./model";
 import type { Command } from "./store";
 
@@ -67,6 +71,16 @@ function mapPaintToken(paint: Paint, path: string, map: (paint: Paint) => Paint)
 export function hasTokenRef(style: NodeStyle, path: string): boolean {
   if (paintHasToken(style.fill, path) || paintHasToken(style.stroke, path)) return true;
   return Boolean(style.effects?.some((effect) => isShadowEffect(effect) && paintHasToken(effect.color, path)));
+}
+
+/** 引用了 `path` 的渐变 Token（色标里引用它）；返回 Token 路径。 */
+export function gradientTokenRefsOf(state: DocState, path: string): string[] {
+  const out: string[] = [];
+  for (const [key, entry] of Object.entries(state.tokens)) {
+    if (entry.type !== "gradient" || !isGradientValue(entry.value)) continue;
+    if (entry.value.stops.some((stop) => stop.color?.token === path)) out.push(key);
+  }
+  return out;
 }
 
 /** 引用了 `path` 的节点（按文档遍历顺序，颜色与数值引用都算）。 */
@@ -288,12 +302,17 @@ export function mapOverridePaints(
 function detachTokenRefs(state: DocState, path: string): Command[] {
   const entry = state.tokens[path];
   if (!entry) return [];
-  const value = String(entry.value);
+  // 渐变 Token 冻结成渐变字面量；颜色 / 数值冻结成对应字面量
+  const gradient: GradientValue | null =
+    entry.type === "gradient" && isGradientValue(entry.value) ? cloneGradientValue(entry.value) : null;
+  const literal = gradient ? "" : String(entry.value);
   const numberValue = entry.type === "number" ? tokenNumberOf(entry.value) : null;
 
   const commands: Command[] = [];
   for (const node of Object.values(state.nodes)) {
-    let style = mapTokenPaints(node.style, path, () => ({ value })) ?? node.style;
+    let style =
+      mapTokenPaints(node.style, path, () => (gradient ? cloneGradientValue(gradient) : { value: literal })) ??
+      node.style;
     const frozen = freezeNumericStyle(style, path, numberValue);
     if (frozen) style = frozen;
     const layout = node.layout ? freezeNumericLayout(node.layout, path, numberValue) : null;
@@ -321,21 +340,62 @@ function detachTokenRefs(state: DocState, path: string): Command[] {
  */
 export type TokenDeletePlan =
   | { status: "missing" }
-  | { status: "blocked"; refs: NodeId[]; value: string }
-  | { status: "ready"; refs: NodeId[]; value: string; commands: Command[] };
+  | { status: "blocked"; refs: NodeId[]; tokenRefs: string[]; value: string }
+  | { status: "ready"; refs: NodeId[]; tokenRefs: string[]; value: string; commands: Command[] };
+
+/** 颜色 Token 被删时，把渐变 Token 里引用它的色标冻结成字面量（否则留下悬空色标）。 */
+function detachGradientTokenStops(state: DocState, path: string): Command[] {
+  const entry = state.tokens[path];
+  if (!entry || entry.type !== "color") return [];
+  const literal = String(entry.value);
+  const commands: Command[] = [];
+  for (const [key, other] of Object.entries(state.tokens)) {
+    if (other.type !== "gradient" || !isGradientValue(other.value)) continue;
+    let touched = false;
+    const stops = other.value.stops.map((stop) => {
+      if (stop.color?.token !== path) return stop;
+      touched = true;
+      return { ...stop, color: { value: literal } };
+    });
+    if (!touched) continue;
+    commands.push({
+      type: "token.define",
+      params: { path: key, tokenType: "gradient", value: { ...other.value, stops } },
+    });
+  }
+  return commands;
+}
+
+/** 删除确认里展示"会冻结成什么"：渐变给出类型与色标数，避免显示成对象字符串。 */
+function freezeDescription(entry: TokenEntry): string {
+  if (entry.type === "gradient" && isGradientValue(entry.value)) {
+    return `${entry.value.type} (${entry.value.stops.length} stops)`;
+  }
+  return String(entry.value);
+}
 
 export function planTokenDelete(state: DocState, path: string, detach: boolean): TokenDeletePlan {
   const entry = state.tokens[path];
   if (!entry) return { status: "missing" };
 
   const refs = tokenRefsOf(state, path);
-  const value = String(entry.value);
-  if (refs.length > 0 && !detach) return { status: "blocked", refs, value };
+  // 只被渐变 Token 的色标引用时 refs 是空的：静默改写用户的设计系统不合适，也算"仍在用"
+  const tokenRefs = gradientTokenRefsOf(state, path);
+  const value = freezeDescription(entry);
+  if ((refs.length > 0 || tokenRefs.length > 0) && !detach) {
+    return { status: "blocked", refs, tokenRefs, value };
+  }
 
   return {
     status: "ready",
     refs,
+    tokenRefs,
     value,
-    commands: [...detachTokenRefs(state, path), { type: "token.delete", params: { path } }],
+    commands: [
+      ...detachTokenRefs(state, path),
+      // 没有节点引用、但被别的渐变 Token 引用时也要冻结，否则留下悬空色标
+      ...detachGradientTokenStops(state, path),
+      { type: "token.delete", params: { path } },
+    ],
   };
 }

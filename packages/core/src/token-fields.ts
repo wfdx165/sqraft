@@ -48,27 +48,46 @@ export function paintTokenPaths(paint: Paint | null | undefined): string[] {
   return paint.stops.map((stop) => stop.color?.token).filter((token): token is string => Boolean(token));
 }
 
+/** 节点上 Paint 类字段引用的 Token（填充 / 描边 / 阴影颜色，去重）。 */
+export function paintTokenPathsOfNode(node: DocNode): string[] {
+  const out = new Set<string>();
+  for (const path of paintTokenPaths(node.style.fill)) out.add(path);
+  for (const path of paintTokenPaths(node.style.stroke)) out.add(path);
+  for (const effect of node.style.effects ?? []) {
+    if (isShadowEffect(effect)) for (const path of paintTokenPaths(effect.color)) out.add(path);
+  }
+  return [...out];
+}
+
+/** 节点上数值字段引用的 Token（字号 / 圆角 / gap / padding，去重）。 */
+export function numericTokenPathsOfNode(node: DocNode): string[] {
+  const out = new Set<string>();
+  for (const field of NUMERIC_TOKEN_FIELDS) {
+    const path = node.style[field];
+    if (path) out.add(path);
+  }
+  const corners = node.style.cornerRadiusTokens;
+  if (corners) {
+    for (const key of CORNER_RADIUS_KEYS) {
+      const path = corners[key];
+      if (path) out.add(path);
+    }
+  }
+  if (node.layout) {
+    if (node.layout.gapToken) out.add(node.layout.gapToken);
+    if (node.layout.crossGapToken) out.add(node.layout.crossGapToken);
+    const padding = node.layout.paddingTokens;
+    if (padding) {
+      for (const key of PADDING_SIDE_KEYS) {
+        const path = padding[key];
+        if (path) out.add(path);
+      }
+    }
+  }
+  return [...out];
+}
+
 /** 节点引用的全部 Token 路径（颜色 + 数值，去重）。跨文档复制时用它收集定义。 */
 export function tokenPathsOfNode(node: DocNode): string[] {
-  const out = new Set<string>();
-  const add = (path: string | undefined) => {
-    if (path) out.add(path);
-  };
-
-  for (const path of paintTokenPaths(node.style.fill)) add(path);
-  for (const path of paintTokenPaths(node.style.stroke)) add(path);
-  for (const effect of node.style.effects ?? []) {
-    if (isShadowEffect(effect)) for (const path of paintTokenPaths(effect.color)) add(path);
-  }
-  for (const field of NUMERIC_TOKEN_FIELDS) add(node.style[field]);
-  const corners = node.style.cornerRadiusTokens;
-  if (corners) for (const key of CORNER_RADIUS_KEYS) add(corners[key]);
-  if (node.layout) {
-    add(node.layout.gapToken);
-    add(node.layout.crossGapToken);
-    const padding = node.layout.paddingTokens;
-    if (padding) for (const key of PADDING_SIDE_KEYS) add(padding[key]);
-  }
-
-  return [...out];
+  return [...new Set([...paintTokenPathsOfNode(node), ...numericTokenPathsOfNode(node)])];
 }

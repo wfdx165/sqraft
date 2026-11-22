@@ -5,6 +5,7 @@
 import { readFile } from "node:fs/promises";
 import { isLanguagePreference, type LanguagePreference } from "../shared/i18n";
 import type { ExportSettings } from "../shared/ipc";
+import type { GradientValue } from "@sqraft/core";
 import { isValidPort } from "./mcp/port";
 import { writeFileAtomic } from "./files";
 
@@ -23,6 +24,8 @@ export interface Preferences {
   mcp?: McpPreferences;
   update?: UpdatePreferences;
   export?: ExportSettings;
+  /** 用户保存的渐变预设：只存值，不存名字；跨文档可用、不随文件走（ADR-0039）。 */
+  gradientPresets?: GradientValue[];
 }
 
 /** 更新状态里需要跨启动记住的部分：最小检查间隔、已下载版本、7 天提醒去过重。 */
@@ -50,6 +53,9 @@ export interface McpPreferences {
 }
 
 const MAX_RECENT = 8;
+
+/** 用户渐变预设上限：超过就提示先删，不做静默淘汰。 */
+export const MAX_GRADIENT_PRESETS = 24;
 
 /** 多倍率导出的默认值：1× + 2×，不带 SVG。 */
 export const DEFAULT_EXPORT_SETTINGS: ExportSettings = { scales: [1, 2], includeSvg: false };
@@ -99,6 +105,7 @@ export async function loadPreferences(file: string): Promise<Preferences> {
       mcp?: unknown;
       update?: unknown;
       export?: unknown;
+      gradientPresets?: unknown;
     };
     const recent = record.recentFiles;
     const recentFiles = Array.isArray(recent) ? recent.filter((item): item is string => typeof item === "string") : [];
@@ -106,6 +113,7 @@ export async function loadPreferences(file: string): Promise<Preferences> {
     const mcp = sanitizeMcp(record.mcp);
     const update = sanitizeUpdate(record.update);
     const exportSettings = sanitizeExport(record.export);
+    const gradientPresets = sanitizeGradientPresets(record.gradientPresets);
     return {
       recentFiles: recentFiles.slice(0, MAX_RECENT),
       ...(language ? { language } : {}),
@@ -113,6 +121,7 @@ export async function loadPreferences(file: string): Promise<Preferences> {
       ...(mcp ? { mcp } : {}),
       ...(update ? { update } : {}),
       ...(exportSettings ? { export: exportSettings } : {}),
+      ...(gradientPresets.length > 0 ? { gradientPresets } : {}),
     };
   } catch {
     return { ...DEFAULT_PREFERENCES };
@@ -139,6 +148,38 @@ function sanitizeUpdate(value: unknown): UpdatePreferences | undefined {
   if (typeof raw.failedVersion === "string" && raw.failedVersion) next.failedVersion = raw.failedVersion;
   if (typeof raw.autoDownload === "boolean") next.autoDownload = raw.autoDownload;
   return Object.keys(next).length > 0 ? next : undefined;
+}
+
+/**
+ * 渐变预设：只做形状上的粗筛（类型合法、from/to 是数值点、stops 是数组），
+ * 深度校验留给渲染层的 `tokenGradientOf`——主进程不持有文档模型，不重复实现一套规则。
+ */
+export function sanitizeGradientPresets(value: unknown): GradientValue[] {
+  if (!Array.isArray(value)) return [];
+  const out: GradientValue[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const raw = item as Partial<GradientValue>;
+    if (raw.type !== "linear" && raw.type !== "radial" && raw.type !== "angular" && raw.type !== "diamond") continue;
+    if (!isFinitePoint(raw.from) || !isFinitePoint(raw.to)) continue;
+    if (raw.focus !== undefined && !isFinitePoint(raw.focus)) continue;
+    if (!Array.isArray(raw.stops)) continue;
+    out.push({
+      type: raw.type,
+      from: { x: raw.from!.x, y: raw.from!.y },
+      to: { x: raw.to!.x, y: raw.to!.y },
+      ...(raw.focus ? { focus: { x: raw.focus.x, y: raw.focus.y } } : {}),
+      stops: raw.stops as GradientValue["stops"],
+    });
+    if (out.length >= MAX_GRADIENT_PRESETS) break;
+  }
+  return out;
+}
+
+function isFinitePoint(value: unknown): value is { x: number; y: number } {
+  if (!value || typeof value !== "object") return false;
+  const point = value as { x?: unknown; y?: unknown };
+  return typeof point.x === "number" && Number.isFinite(point.x) && typeof point.y === "number" && Number.isFinite(point.y);
 }
 
 /** 导出设置：形状不对就当作没有（回退默认值由调用方负责）。 */
