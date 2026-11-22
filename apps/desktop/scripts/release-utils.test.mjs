@@ -6,6 +6,7 @@ import {
   pickArm64Dmg,
   pickArm64Zip,
   pickWinSetup,
+  signingProblems,
 } from "./release-utils.mjs";
 
 describe("发布产物匹配", () => {
@@ -86,6 +87,25 @@ describe("公证凭据来源", () => {
         APPLE_API_ISSUER: "issuer",
       }).kind,
     ).toBe("api-key");
+  });
+});
+
+describe("发版签名 / 公证闸门", () => {
+  const signed = { identity: "Developer ID Application: X (TEAM)", teamId: "5BJLY53QWY" };
+
+  it("dist:dir / 签名上线前的产物：没有 signing", () => {
+    expect(signingProblems(null)[0]).toContain("没有完整的签名信息");
+    expect(signingProblems({ identity: "" })[0]).toContain("没有完整的签名信息");
+  });
+
+  it("签名齐全但未公证：拒收（--no-notarize 的应急包发不出去）", () => {
+    const problems = signingProblems({ ...signed, notarized: false });
+    expect(problems).toHaveLength(1);
+    expect(problems[0]).toContain("signing.notarized 不是 true");
+  });
+
+  it("签名 + 公证都齐全才放行", () => {
+    expect(signingProblems({ ...signed, notarized: true })).toEqual([]);
   });
 });
 

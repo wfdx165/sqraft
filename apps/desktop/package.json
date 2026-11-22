@@ -18,6 +18,7 @@
     "clean": "node scripts/clean.mjs",
     "dist": "pnpm clean && pnpm build && node scripts/dist.mjs",
     "dist:dir": "pnpm clean && pnpm build && node scripts/dist.mjs --dir",
+    "dist:resume": "node scripts/dist.mjs --resume",
     "verify:pack": "node scripts/verify-pack.mjs",
     "release": "node scripts/release.mjs",
     "publish:release": "node scripts/release.mjs --publish-draft",

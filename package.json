@@ -25,6 +25,7 @@
     "test": "pnpm -r --if-present run test",
     "dist": "pnpm --filter @sqraft/desktop run dist",
     "dist:dir": "pnpm --filter @sqraft/desktop run dist:dir",
+    "dist:resume": "pnpm --filter @sqraft/desktop run dist:resume",
     "release": "pnpm --filter @sqraft/desktop run release",
     "publish:release": "pnpm --filter @sqraft/desktop run publish:release",
     "stage:update": "pnpm --filter @sqraft/desktop run stage:update"

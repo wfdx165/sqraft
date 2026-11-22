@@ -70,6 +70,28 @@ export function notaryCredentialSource(env = {}) {
 }
 
 /**
+ * build.json 的签名 / 公证闸门（纯函数）。
+ *
+ * 公证默认开启后，`notarized !== true` 一律拒收：`--no-notarize` 的应急包
+ * 只能留在本机自测，不能发出去——否则 README 承诺的"双击即开"会被自己打破。
+ */
+export function signingProblems(signing) {
+  if (!signing || !signing.identity || !signing.teamId) {
+    return [
+      "build.json 里没有完整的签名信息：那是 dist:dir 或签名上线前的产物。" +
+        "发版请重跑 pnpm dist（需要 Developer ID 证书）",
+    ];
+  }
+  if (signing.notarized !== true) {
+    return [
+      "build.json 里 signing.notarized 不是 true：这份产物没有公证（可能是 --no-notarize 的应急包）。" +
+        "发版请重跑 pnpm dist（需要 Apple 公证凭据）",
+    ];
+  }
+  return [];
+}
+
+/**
  * verify-pack 的命令行解析：位置参数是产物路径，其余是开关。
  *
  * 返回 `{ target, expectSigned, expectNotarized, expectedTeam }` 或 `{ error }`。

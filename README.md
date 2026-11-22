@@ -4,7 +4,7 @@
 
 > AI-friendly, lightweight UI design tool — a desktop app with local files that works offline.
 
-Design interfaces with frames, components, auto layout and design tokens; the same capabilities are exposed over **MCP** to agents such as Claude Code and Cursor, so "edit the design in natural language" is a first-class entry point.
+Design interfaces with frames, components, auto layout, design tokens and gradients; the same capabilities are exposed over **MCP** to agents such as Claude Code and Cursor, so "edit the design in natural language" is a first-class entry point.
 
 The app is fully local: no account, no cloud, no model calls. A design is simply a `.sqraft` file on disk.
 
@@ -25,7 +25,7 @@ The app is fully local: no account, no cloud, no model calls. A design is simply
 ### macOS
 
 1. Open the downloaded `.dmg` and drag **Sqraft** into Applications
-2. The app is signed but not yet notarized, so Gatekeeper asks once on the first launch: open **System Settings → Privacy & Security** and click **Open Anyway** next to Sqraft
+2. The app is signed and notarized by Apple, so it opens on double-click — no manual allow needed
 3. Afterwards the app checks for updates on launch: new versions download in the background, a "Restart to update" button appears in the toolbar, and quitting or clicking it finishes the upgrade
 
 If you would rather not auto-update, **Help → Check for Updates…** checks manually at any time.
@@ -43,13 +43,14 @@ If you would rather not auto-update, **Help → Check for Updates…** checks ma
 - **Auto layout**: direction, gap, padding, hug / fill / fixed, wrapping, drag to reorder
 - **Components**: main components, instances, slots, overrides, swapping, and component sets with enumerated variants
 - **Prototype links**: click a layer to jump to another page or go back, with instant / fade transitions; present mode scrolls pages and `H` highlights hotspots
-- **Design tokens**: colors and numbers (font size, radius, spacing…); change once and it applies everywhere
+- **Design tokens**: colors, numbers (font size, radius, spacing…) and gradients; change once and it applies everywhere. In strict mode a literal color from an agent comes back as `TOKEN_REQUIRED`, with the nearest tokens
 - **Editing**: multi-select, marquee, align and distribute, drag to reparent, grouping, guides, snapping
 - **Effects**: drop shadow, inner shadow, layer blur, background blur
-- **Gradients**: linear, radial, angular and diamond fills and strokes, editable down to each color stop
+- **Gradients**: linear, radial, angular and diamond fills and strokes, editable on the canvas (endpoints, center, radius, angle) and down to each stop — drag, insert, delete; six built-in presets plus your own, saved locally
 - **Images**: drag in, paste, crop, mask, linked images (cached locally); drop an `.svg` to import editable vectors, or hold `⌥` to insert it as an image
-- **AI editing**: agents search and read only the page or subtree they need (even in 100k-layer files), create nodes and change styles over MCP, and get warnings on every write (zero-size, clipped text, missing tokens) so they fix themselves; models without vision can read a text summary of the screen. They can also wire prototype links, so a generated design is clickable; one tool call = one undo step
-- **Export**: PNG 1×/2×/4× and SVG from the selection or the active page, plus `Copy as ▸` for the clipboard
+- **AI editing**: agents search and read only the page or subtree they need (even in 100k-layer files), create nodes and change styles over MCP (35 tools), and get warnings on every write (zero-size, clipped text, missing tokens) so they fix themselves; models without vision can read a text summary of the screen. They can also wire prototype links, so a generated design is clickable; one tool call = one undo step
+- **Examples**: the welcome page ships a login page, a card grid and a gradient-heavy landing page you can open and take apart
+- **Export**: the export matrix writes PNG 1×/2×/4× and optional SVG into one zip, named after document, page and layer; single PNG / SVG export from the selection or the active page, plus `Copy as ▸` for the clipboard
 - **Interface languages**: 中文 / English / 日本語 / 한국어, with optional automatic system-language detection
 
 ## Connect AI
@@ -160,14 +161,17 @@ pnpm build    # type check + production bundle
 pnpm dist     # host platform: macOS arm64 dmg + zip, or the Windows x64 installer
 ```
 
+`pnpm dist` signs and notarizes the macOS build, so it needs a Developer ID certificate and Apple notarization credentials; use `pnpm dist:dir` for an unsigned local package.
+
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the project layout and the review process.
 
 ## Requirements and known limitations
 
 - **macOS Apple Silicon (M series)**; Intel Macs are not supported
 - **Windows 10 22H2+ or Windows 11 (x64)**; Windows on ARM (ARM64) and Linux are not supported
-- The macOS app is **signed but not notarized**: the first launch needs one manual allow (see Install). The Windows installer is **unsigned**, so SmartScreen warns on the first run
+- The macOS app is **signed and notarized**: it opens on the first try without a Gatekeeper prompt. The Windows installer is **unsigned**, so SmartScreen warns on the first run
 - Auto-update is macOS-only; on Windows you download and run the new installer yourself
+- No Figma import: start a new document, or bring individual SVG assets
 - CJK text uses each system's own fonts, so line breaks can shift between macOS and Windows
 - No real-time collaboration, no accounts, no cloud sync
 

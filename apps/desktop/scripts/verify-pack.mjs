@@ -11,8 +11,8 @@
  * 3. 渲染层 bundle 是压缩过的（行数很少）；
  * 4. Electron fuse 已按要求翻转；
  * 5. `--expect-signed` 时（macOS 发版）：Developer ID 签名、Team、hardened runtime、
- *    entitlements；再加 `--expect-notarized` 才断言 Gatekeeper 接受与公证票据已 staple
- *    （公证当前关闭，见 ADR-0034；恢复后 dist 会自动传这个开关）。
+ *    entitlements；再加 `--expect-notarized` 断言 Gatekeeper 接受与公证票据已 staple
+ *    （公证默认开启后，`pnpm dist` 与 `pnpm release` 都会传这个开关）。
  *
  * 用法：`node scripts/verify-pack.mjs [产物路径] [--expect-signed] [--expect-notarized] [--team-id <id>]`。
  * 默认按平台挑：Windows 用 `release/win-unpacked`，其余用 `release/mac-arm64/Sqraft.app`。
@@ -230,8 +230,8 @@ if (expectSigned) {
       problems.push("签名 entitlements 里出现了 get-task-allow：这是可调试的签名，不能发版");
     }
 
-    // 4–5) 只有真做了公证才断言这两条（本轮 NOTARIZE=false：签名有效但未公证，
-    //      Gatekeeper 首启会提示一次，属预期）
+    // 4–5) 发版包必须过 Gatekeeper 且票据已 staple（离线首启才不会被拦）；
+    //      `--no-notarize` 的应急包会在 release.mjs 的印章闸门被拒收，不会走到这里
     if (expectNotarized) {
       const assess = exec("spctl", ["--assess", "--type", "execute", "--verbose=4", appPath]);
       if (assess.status !== 0 || !/accepted/.test(assess.out)) {

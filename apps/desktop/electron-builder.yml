@@ -11,6 +11,10 @@ files:
 asar: true
 # 打包后、签名前收敛 macOS 痕迹：删用不到的权限文案、helper 显示名改产品名
 afterPack: scripts/after-pack.mjs
+# 签名之后、打 dmg / zip 之前做公证（ADR-0034 / 2026-11-22 修订）：
+# 自己轮询 notarytool（20 秒一行、60 分钟上限），失败给 submission id 与续跑入口；
+# 票据在打包前 staple 进 .app，dmg 与自动更新用的 zip 都带着它
+afterSign: scripts/after-sign.mjs
 # 许可文本随包分发（MIT 要求保留版权声明）；关于面板的「开源许可」打开的就是这里
 extraResources:
   - from: node_modules/electron/dist/LICENSE
@@ -36,10 +40,11 @@ mac:
   # 只开 V8 必需的两条；不要照抄 electron-builder 的隐式模板（它还含 disable-library-validation）
   entitlements: build/entitlements.mac.plist
   entitlementsInherit: build/entitlements.mac.inherit.plist
-  # 公证（ADR-0034「后续修订」）：Apple 公证服务连续两次提交各卡在 In Progress 约 24 小时，
-  # 于是本轮先只上签名。恢复时把它改回 true，并同步 `scripts/dist.mjs` 的 NOTARIZE 开关；
+  # 公证（ADR-0034 / 2026-11-22 修订）：内建公证（`@electron/notarize` 的
+  # `notarytool submit --wait`）全程无输出、超时不可控，2026-11-13 两次提交各挂了约 24 小时。
+  # 这里保持 false，改由 afterSign 钩子（scripts/after-sign.mjs）自己 submit + 轮询 + staple；
   # 凭据只从环境变量读（APPLE_API_KEY / APPLE_API_KEY_ID / APPLE_API_ISSUER，
-  # 或 APPLE_ID 三件套、APPLE_KEYCHAIN_PROFILE），票据由 @electron/notarize staple 到 .app。
+  # 或 APPLE_ID 三件套、APPLE_KEYCHAIN_PROFILE），票据由 `xcrun stapler` 落到 .app。
   notarize: false
   target:
     - target: dmg

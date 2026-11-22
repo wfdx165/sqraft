@@ -35,9 +35,11 @@ pnpm build    # type check (main / preload / renderer) + production bundle
 ```
 
 Packaging runs on the host platform: macOS produces the arm64 dmg + zip
-(signed with a Developer ID certificate; notarization is currently off),
-Windows produces the x64 NSIS installer (unsigned). Cross-compiling is not
-supported (the Windows installer must be built and checked on Windows):
+(signed with a Developer ID certificate and notarized by Apple), Windows
+produces the x64 NSIS installer (unsigned). `pnpm dist` therefore needs a
+Developer ID certificate and Apple notarization credentials on the build
+machine; use `pnpm dist:dir` for an unsigned local package. Cross-compiling is
+not supported (the Windows installer must be built and checked on Windows):
 
 ```bash
 pnpm dist     # macOS: arm64 dmg + zip; Windows: Sqraft-Setup-<version>.exe
