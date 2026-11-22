@@ -167,7 +167,9 @@ function localProblems({ requireNotes }) {
   if (requireNotes) {
     const notes = existsSync(notesPath) ? readFileSync(notesPath, "utf8") : "";
     if (!notes.trim()) {
-      problems.push(`缺少发布说明 ${notesPath}（或内容为空）；复制 docs/releases/v0.0.2.md 改名后填写`);
+      problems.push(
+        `缺少发布说明 ${notesPath}（或内容为空）；复制 docs/releases/ 里最新的那份改名后填写（正文用英文）`,
+      );
     }
   }
 

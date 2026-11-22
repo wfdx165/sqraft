@@ -71,7 +71,11 @@ gh auth status         # 确认账号对 wfdx165/sqraft 有写权限
 
 ### 2. 写发布说明
 
-编辑 `docs/releases/v0.0.3.md`（复制上一版改名即可）。这份内容会同时出现在 GitHub Release 和客户端「关于」面板里。
+编辑 `docs/releases/vX.Y.Z.md`（复制 `v0.1.0.md` 改名即可）。这份内容会原样成为 GitHub Release 正文，
+并经 `latest.json` 显示在客户端「关于 → 更新」里（可滚动，四种界面语言看到的是同一份文本）。
+
+**正文一律用英文**：结构固定为 `## <version>` → 一段英文摘要（说明这一版的定位）→ 分节要点
+（新功能 / 行为变更 / 已知限制 / 升级说明 / 手点清单）。中文只留在内部文档与发布前讨论里，不要写进这份文件。
 
 文件缺失、或内容只有空白，`pnpm release` 直接中止；没有跳过开关。说明文件不必提交——脚本不读 git 状态。
 
@@ -242,7 +246,7 @@ pnpm --filter @sqraft/desktop run check:readmes
 | 预检报 401/403 | `gh auth status`，必要时 `gh auth login`；确认对仓库有写权限 |
 | 仓库不是 public | 改成 public（否则更新链路必然 404） |
 | `release vX 已存在` | 先改 `apps/desktop/package.json` 的 version；或删掉旧 release 与同名 tag 再重试 |
-| 预检报"缺少发布说明" | 写 `docs/releases/vX.Y.Z.md`（可复制上一版）；不能为空 |
+| 预检报"缺少发布说明" | 写 `docs/releases/vX.Y.Z.md`（复制上一版，正文用英文）；不能为空 |
 | 预检报"版本必须大于最新已发布版本" | 改 `apps/desktop/package.json` 的 version，发版一律 patch |
 | `dist: 找不到 Developer ID Application 证书` | Xcode → Manage Certificates 建证书；或先 `pnpm dist:dir` 出个不签名的快包 |
 | `dist: 缺少公证凭据` / 凭据不完整 | 在 shell profile 配 `APPLE_API_KEY` + `APPLE_API_KEY_ID` + `APPLE_API_ISSUER`（或备用两组），`source` 后重试 |
