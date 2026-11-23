@@ -6,6 +6,7 @@ import {
   findOverrideOwner,
   hitPolygon,
   hitVector,
+  isPageVisibleByGroup,
   polygonPoints,
   worldRect,
   type DocNode,
@@ -110,14 +111,14 @@ export function hitTest(vp: Viewport, wx: number, wy: number): Hit | null {
   }
   if (editing && ui.activePageId) {
     const page = docStore.doc.nodes[ui.activePageId];
-    if (page) {
+    if (page && isPageVisibleByGroup(docStore.doc, page)) {
       const deep = hitIn(vp, page.id, wx - page.x, wy - page.y);
       if (deep) return { id: deep, pageId: page.id, inactive: false };
     }
   }
   for (const pageId of roots) {
     const page = docStore.doc.nodes[pageId];
-    if (!page || page.type !== "page") continue;
+    if (!page || page.type !== "page" || !isPageVisibleByGroup(docStore.doc, page)) continue;
     if (wx < page.x || wy < page.y || wx > page.x + page.width || wy > page.y + page.height) continue;
     if (editing && pageId !== ui.activePageId) return { id: pageId, pageId, inactive: true };
     return { id: pageId, pageId, inactive: false };
@@ -128,7 +129,7 @@ export function hitTest(vp: Viewport, wx: number, wy: number): Hit | null {
 export function pageAt(wx: number, wy: number): NodeId | null {
   for (const pageId of docStore.doc.rootIds) {
     const page = docStore.doc.nodes[pageId];
-    if (!page || page.type !== "page") continue;
+    if (!page || page.type !== "page" || !isPageVisibleByGroup(docStore.doc, page)) continue;
     if (wx >= page.x && wx <= page.x + page.width && wy >= page.y && wy <= page.y + page.height) return pageId;
   }
   return null;

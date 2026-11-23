@@ -1,6 +1,6 @@
 // 工具名直接分派；每个分支保持原实现，ctx 提供 store 与宿主能力。
 import type { DocNode, MatchField, NodeId, Paint } from "../shared";
-import { PADDING_SIDE_KEYS, READ_DEPTH_DEFAULT, READ_DEPTH_MAX, READ_LIMIT_DEFAULT, READ_LIMIT_MAX, SEARCH_TYPES, clampIntArg, collectSlice, countSubtree, diagnose, firstPageId, getPages, getRootComponents, isGradientPaint, pageOfNode, pathOf, resolveNumericLayout, snippetOf, worldRect } from "../shared";
+import { PADDING_SIDE_KEYS, READ_DEPTH_DEFAULT, READ_DEPTH_MAX, READ_LIMIT_DEFAULT, READ_LIMIT_MAX, SEARCH_TYPES, clampIntArg, collectSlice, countSubtree, diagnose, firstPageId, getPageGroup, getPageGroups, getPages, getPagesInGroup, getRootComponents, isGradientPaint, isPageVisibleByGroup, pageOfNode, pathOf, resolveNumericLayout, snippetOf, worldRect } from "../shared";
 import type { Handler } from "../types";
 
 /** 只取纯色引用的 Token；渐变（stop 里的 Token 不在这个字段语义内）返回 undefined。 */
@@ -20,12 +20,27 @@ export const handleReadDocument: Handler = async (ctx, args) => {
         ? 'includeComponentTrees is deprecated: use read_document({scope:"subtree", subtreeId:<componentId>}) instead.'
         : undefined;
     if (scope === "document") {
-      const pages = getPages(ctx.store.doc).map((page) => ({
+      const groupFilter = typeof args.groupId === "string" && args.groupId.trim() ? args.groupId.trim() : undefined;
+      if (groupFilter && !getPageGroup(ctx.store.doc, groupFilter)) {
+        throw new Error(`分组 ${groupFilter} 不存在`);
+      }
+      const sourcePages = groupFilter ? getPagesInGroup(ctx.store.doc, groupFilter) : getPages(ctx.store.doc);
+      const pages = sourcePages.map((page) => ({
         pageId: page.id,
         name: page.name,
         width: page.width,
         height: page.height,
         nodeCount: countSubtree(ctx.store, page.id),
+        ...(page.groupId ? { groupId: page.groupId } : {}),
+      }));
+      const pageGroups = getPageGroups(ctx.store.doc).map((g) => ({
+        groupId: g.id,
+        name: g.name,
+        visible: g.visible !== false,
+        locked: g.locked === true,
+        ...(g.color ? { color: g.color } : {}),
+        ...(g.defaultPageSize ? { defaultPageSize: g.defaultPageSize } : {}),
+        pageCount: getPagesInGroup(ctx.store.doc, g.id).length,
       }));
       // 主组件是文档根节点，不在任何页面里：只给摘要，看内部用 scope=subtree
       const components = getRootComponents(ctx.store.doc).map((c) => ({
@@ -60,6 +75,7 @@ export const handleReadDocument: Handler = async (ctx, args) => {
       return JSON.stringify({
         scope,
         pages,
+        ...(pageGroups.length ? { pageGroups } : {}),
         components,
         ...(componentSets.length ? { componentSets } : {}),
         tokenCount,
@@ -137,6 +153,7 @@ export const handleSearchNodes: Handler = async (ctx, args) => {
     const strokeToken = pick("strokeToken");
     const componentId = pick("componentId");
     const pageFilter = pick("pageId");
+    const groupFilter = pick("groupId");
     let types: Set<string> | null = null;
     if (args.type !== undefined && args.type !== null) {
       const rawTypes = Array.isArray(args.type) ? args.type : [args.type];
@@ -162,10 +179,17 @@ export const handleSearchNodes: Handler = async (ctx, args) => {
       if (!page) throw new Error(`页面 ${pageFilter} 不存在`);
       if (page.type !== "page") throw new Error(`节点 ${pageFilter} 不是页面`);
       roots = [{ id: page.id, kind: "page" }];
+    } else if (groupFilter) {
+      if (!getPageGroup(ctx.store.doc, groupFilter)) throw new Error(`分组 ${groupFilter} 不存在`);
+      roots = getPagesInGroup(ctx.store.doc, groupFilter)
+        .filter((page) => includeHidden || isPageVisibleByGroup(ctx.store.doc, page))
+        .map((page) => ({ id: page.id, kind: "page" as const }));
     } else {
       // 页面在前、组件母版在后：顺序稳定，命中行可复现
       roots = [
-        ...getPages(ctx.store.doc).map((page) => ({ id: page.id, kind: "page" as const })),
+        ...getPages(ctx.store.doc)
+          .filter((page) => includeHidden || isPageVisibleByGroup(ctx.store.doc, page))
+          .map((page) => ({ id: page.id, kind: "page" as const })),
         ...getRootComponents(ctx.store.doc).map((c) => ({ id: c.id, kind: "component" as const })),
         ...ctx.store.doc.rootIds
           .map((id) => ctx.store.doc.nodes[id])

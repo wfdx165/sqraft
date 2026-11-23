@@ -3,7 +3,19 @@
  * 纪律：画布热路径不进 Vue 响应式；store 变更通过订阅推增量。
  */
 import { reactive } from "vue";
-import { DocStore, createEmptyDoc, firstPageId, NUMERIC_TOKEN_CHANGED, type Command, type DocNode, type DocState, type NodeId } from "@sqraft/core";
+import {
+  DocStore,
+  createEmptyDoc,
+  firstPageId,
+  getVisiblePages,
+  isPageVisibleByGroup,
+  NUMERIC_TOKEN_CHANGED,
+  type Command,
+  type DocNode,
+  type DocState,
+  type NodeId,
+  type PageGroupId,
+} from "@sqraft/core";
 import { clearAgentReport } from "./agent-report";
 import { textSizeOf } from "./text-metrics";
 
@@ -40,6 +52,8 @@ export const ui = reactive({
   expandedPageId: firstPageId(docStore.doc) as NodeId | null,
   /** 图层树里容器行的展开状态（未点过的行：实例折叠，其它容器展开） */
   expandedLayers: {} as Record<NodeId, boolean>,
+  /** 左栏页面分组的折叠状态（纯 UI 状态，默认展开） */
+  collapsedGroups: {} as Record<PageGroupId, boolean>,
   /** 当前进入的实例上下文（栈，Esc 逐级退出） */
   instanceContext: [] as NodeId[],
   /** 左栏 tab：默认页面（每次刷新都回到页面，不持久化） */
@@ -57,8 +71,11 @@ docStore.subscribe((_state, changed) => {
   if (ui.expandedPageId && !docStore.doc.nodes[ui.expandedPageId]) {
     ui.expandedPageId = firstPageId(docStore.doc);
   }
-  if (ui.activePageId && !docStore.doc.nodes[ui.activePageId]) {
-    ui.activePageId = firstPageId(docStore.doc);
+  if (ui.activePageId) {
+    const active = docStore.doc.nodes[ui.activePageId];
+    if (!active || (active.type === "page" && !isPageVisibleByGroup(docStore.doc, active))) {
+      ui.activePageId = getVisiblePages(docStore.doc)[0]?.id ?? firstPageId(docStore.doc);
+    }
   }
   ui.selection = ui.selection.filter((id) => docStore.doc.nodes[id]);
   ui.instanceContext = ui.instanceContext.filter((id) => docStore.doc.nodes[id]?.type === "instance");
@@ -123,6 +140,7 @@ export function dispatch(cmd: Command | Command[], label?: string): void {
  * "点击定位"会静默无反应（与撤销清空是同一类问题）。
  */
 export function replaceDocument(state: DocState): void {
+  ui.collapsedGroups = {};
   docStore.replace(state);
   clearAgentReport();
 }

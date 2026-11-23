@@ -270,6 +270,7 @@ export const tools: ToolDefinition[] = [
           description: "page=读一个页面（默认）；subtree=读任意节点子树；document=只给页面与组件摘要",
         },
         pageId: { type: "string", description: "scope=page 时读哪个页面，缺省为当前活动页" },
+        groupId: { type: "string", description: "scope=document 时按页面分组过滤页面摘要" },
         subtreeId: { type: "string", description: "scope=subtree 时的根节点 id（含自身）" },
         depth: {
           type: "number",
@@ -305,6 +306,7 @@ export const tools: ToolDefinition[] = [
         strokeToken: { type: "string", description: "描边 Token 的完整 path，精确匹配" },
         componentId: { type: "string", description: "实例引用的母版 id，或母版自身的节点 id" },
         pageId: { type: "string", description: "只在某个页面里搜；缺省搜所有页面 + 组件母版" },
+        groupId: { type: "string", description: "只在某个页面分组内的页面里搜（与 pageId 二选一）" },
         includeHidden: { type: "boolean", description: "是否包含 visible:false 的节点，默认 false" },
         limit: { type: "number", description: "最多返回多少条命中，1–200，默认 20；越界夹紧" },
       },
@@ -433,9 +435,90 @@ export const tools: ToolDefinition[] = [
         name: { type: "string", description: "页面名；省略自动编号" },
         x: { type: "number", description: "省略时放在最右侧页面之右" },
         y: { type: "number", description: "省略时与最上方页面对齐" },
-        width: { type: "number", description: "默认 1440" },
+        width: { type: "number", description: "默认 1440（若指定 groupId 且分组配置了 defaultPageSize 则优先用分组默认尺寸）" },
         height: { type: "number", description: "默认 1024" },
+        groupId: { type: "string", description: "可选：把新建页面归入指定分组，并排在该分组最右侧" },
       },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "create_page_group",
+    description:
+      "创建一个页面分组（用于按版本如 v1.0.0、设备端如 iPad 等逻辑归组画板）。可选通过 pageIds 同时归入一批已有页面；一次调用 = 一个撤销步。",
+    input_schema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "分组名称，如 v1.0.0 或 iPad；省略自动编号" },
+        color: { type: "string", description: "可选标签色（CSS 颜色字符串）" },
+        visible: { type: "boolean", description: "是否可见，默认 true；false 时组内页面不渲染也不参与命中" },
+        locked: { type: "boolean", description: "是否锁定，默认 false；true 时禁止编辑组内页面（适合版本归档）" },
+        defaultPageSize: {
+          type: "object",
+          description: "组内新建页面的默认尺寸，如 { width: 1024, height: 1366 }",
+          properties: { width: { type: "number" }, height: { type: "number" } },
+          required: ["width", "height"],
+          additionalProperties: false,
+        },
+        pageIds: { type: "array", items: { type: "string" }, description: "可选：建组时一并归入的页面 id 列表" },
+      },
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "update_page_group",
+    description:
+      "修改页面分组的名称、标签色、显隐（visible）、锁定（locked）或默认画板尺寸（defaultPageSize）。",
+    input_schema: {
+      type: "object",
+      properties: {
+        groupId: { type: "string", description: "分组 id" },
+        name: { type: "string", description: "新名称" },
+        color: { type: ["string", "null"], description: "新标签色；传 null 或空串清除" },
+        visible: { type: "boolean", description: "是否可见" },
+        locked: { type: "boolean", description: "是否锁定" },
+        defaultPageSize: {
+          oneOf: [
+            { type: "null" },
+            {
+              type: "object",
+              properties: { width: { type: "number" }, height: { type: "number" } },
+              required: ["width", "height"],
+              additionalProperties: false,
+            },
+          ],
+          description: "默认页面尺寸；传 null 清除",
+        },
+      },
+      required: ["groupId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "delete_page_group",
+    description:
+      "删除页面分组：mode=ungroup（默认）仅解散分组并保留组内页面；mode=deletePages 连同组内页面一并删除。已锁定分组需先解锁。",
+    input_schema: {
+      type: "object",
+      properties: {
+        groupId: { type: "string", description: "分组 id" },
+        mode: { type: "string", enum: ["ungroup", "deletePages"], description: "ungroup=仅解散（默认）；deletePages=连同页面删除" },
+      },
+      required: ["groupId"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "assign_pages_to_group",
+    description:
+      "将若干页面移入指定分组，或移出到未分组（groupId=null）。",
+    input_schema: {
+      type: "object",
+      properties: {
+        pageIds: { type: "array", items: { type: "string" }, minItems: 1, description: "页面 id 列表" },
+        groupId: { type: ["string", "null"], description: "目标分组 id；传 null 移出到未分组" },
+      },
+      required: ["pageIds", "groupId"],
       additionalProperties: false,
     },
   },

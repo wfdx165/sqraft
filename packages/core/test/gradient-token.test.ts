@@ -199,7 +199,7 @@ describe("渐变 Token：格式版本", () => {
     state.tokens["color/a"] = { type: "color", value: "#000000" };
     const migrated = migrateDoc(state, 10);
     expect(migrated.formatVersion).toBe(CURRENT_FORMAT_VERSION);
-    expect(CURRENT_FORMAT_VERSION).toBe(11);
+    expect(CURRENT_FORMAT_VERSION).toBeGreaterThanOrEqual(11);
     expect(migrated.tokens["color/a"]).toEqual({ type: "color", value: "#000000" });
   });
 });

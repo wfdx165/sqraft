@@ -3,8 +3,15 @@
  * 确定性 + 可逆 + 可批量；GUI、AI、撤销重做全部走这里。
  */
 
-import type { ComponentPropertyDef, DocNode, DocState, NodeId, TokenEntry, TokenType } from "./model";
+import type { ComponentPropertyDef, DocNode, DocState, NodeId, PageGroup, PageGroupId, TokenEntry, TokenType } from "./model";
 import { createNode, isRootNodeType, walkSubtree, worldRect } from "./model";
+import {
+  applyPageGroupCommand,
+  expandPageGroupCommand,
+  getPageGroup,
+  isPageLockedByGroup,
+  validatePageGroupCommand,
+} from "./page-group";
 import { AppError } from "./errors";
 import { applyTokenCommand } from "./token-commands";
 import { clampSides } from "./polygon";
@@ -120,7 +127,17 @@ export type Command =
   /** 删除 Token（新建的 Token 撤销时用它回滚，避免留下孤儿条目） */
   | { type: "token.delete"; params: { path: string } }
   /** 改名是原子操作：token 条目与所有节点引用一起改，只占一步撤销 */
-  | { type: "token.rename"; params: { from: string; to: string } };
+  | { type: "token.rename"; params: { from: string; to: string } }
+  /** 创建页面分组（可选同时归入一批已有页面） */
+  | { type: "pageGroup.create"; params: { group: PageGroup; index?: number; pageIds?: NodeId[] } }
+  /** 更新页面分组属性（改名、改色、显隐、锁定、默认画板尺寸等） */
+  | { type: "pageGroup.update"; params: { groupId: PageGroupId; patch: Partial<Omit<PageGroup, "id">> } }
+  /** 删除页面分组：ungroup 仅解散（保留页面），deletePages 连同组内页面一起删除 */
+  | { type: "pageGroup.delete"; params: { groupId: PageGroupId; mode?: "ungroup" | "deletePages" } }
+  /** 调整页面分组排序 */
+  | { type: "pageGroup.reorder"; params: { groupId: PageGroupId; index: number } }
+  /** 将若干页面归入指定分组（null 表示移出到未分组） */
+  | { type: "pageGroup.assignPages"; params: { pageIds: NodeId[]; groupId: PageGroupId | null } };
 
 interface Inverse {
   cmd: Command;
@@ -705,6 +722,13 @@ export class DocStore {
       }
       else if (cmd.type === "node.create") out.push(...this.expandSlotPreInsert(cmd.params.parentId, cmd));
       else if (cmd.type === "instance.create") out.push(...this.expandSlotPreInsert(cmd.params.parentId, cmd));
+      else if (cmd.type === "pageGroup.create" || cmd.type === "pageGroup.delete" || cmd.type === "pageGroup.assignPages") {
+        validatePageGroupCommand(this.state, cmd);
+        for (const sub of expandPageGroupCommand(this.state, cmd)) {
+          if (sub.type === "node.delete") out.push(...this.expandDelete(sub));
+          else out.push(sub);
+        }
+      }
       else out.push(cmd);
     }
     return out;
@@ -1031,11 +1055,12 @@ export class DocStore {
     }
   }
 
-  /** 节点自身或任一祖先是否锁定。 */
+  /** 节点自身、任一祖先或所属页面分组是否锁定。 */
   private isLockedChain(nodeId: NodeId): boolean {
     let cur: DocNode | undefined = this.state.nodes[nodeId];
     while (cur) {
       if (cur.locked) return true;
+      if (cur.type === "page" && isPageLockedByGroup(this.state, cur)) return true;
       cur = cur.parentId ? this.state.nodes[cur.parentId] : undefined;
     }
     return false;
@@ -1075,6 +1100,11 @@ export class DocStore {
         }
         case "instance.create": {
           if (this.isLockedChain(cmd.params.parentId)) throw new Error("不能修改已锁定节点的内容");
+          break;
+        }
+        case "pageGroup.delete": {
+          const group = getPageGroup(this.state, cmd.params.groupId);
+          if (group?.locked) throw new Error(`分组「${group.name}」已锁定`);
           break;
         }
         default:
@@ -1270,6 +1300,13 @@ export class DocStore {
         for (const n of materializeInstance(this.state, componentId, nodeId, parentId, 0, 0)) {
           if (this.state.nodes[n.id]) throw new Error(`实例节点 id ${n.id} 已存在`);
         }
+        break;
+      }
+      case "pageGroup.create":
+      case "pageGroup.update":
+      case "pageGroup.delete":
+      case "pageGroup.reorder": {
+        validatePageGroupCommand(this.state, cmd);
         break;
       }
       default:
@@ -1646,6 +1683,13 @@ export class DocStore {
       case "token.delete":
       case "token.rename":
         return applyTokenCommand(this.state, cmd, changed);
+      case "pageGroup.create":
+      case "pageGroup.update":
+      case "pageGroup.delete":
+      case "pageGroup.reorder":
+        return applyPageGroupCommand(this.state, cmd, changed);
+      case "pageGroup.assignPages":
+        throw new Error("pageGroup.assignPages 应在展开阶段消解");
       case "doc.setStrictTokens": {
         const prev = this.state.strictTokens === true;
         this.state.strictTokens = cmd.params.value;

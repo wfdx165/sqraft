@@ -2,7 +2,7 @@
  * 视口导航：适配页面、切换活动页、飞行定位与脉冲标记。
  * 只改 UI 视口状态，不进文档、不进撤销。
  */
-import { firstPageId, worldRect, type DocNode, type NodeId, type Rect } from "@sqraft/core";
+import { firstPageId, isPageVisibleByGroup, worldRect, type DocNode, type NodeId, type Rect } from "@sqraft/core";
 import { screenToWorld, type Viewport } from "@sqraft/render";
 import { docStore, ui } from "../store";
 import { pageAt } from "./hit";
@@ -148,7 +148,9 @@ export function createViewportNav(deps: ViewportNavDeps) {
   /** 适配全部根节点（拖动模式 / 初始视图）：页面 + 组件区，否则母版会看不见。 */
   function fitAll(padding = 80): void {
     deps.commitEditors();
-    const roots = docStore.doc.rootIds.map((id) => docStore.doc.nodes[id]).filter(Boolean);
+    const roots = docStore.doc.rootIds
+      .map((id) => docStore.doc.nodes[id])
+      .filter((n): n is NonNullable<typeof n> => Boolean(n && isPageVisibleByGroup(docStore.doc, n)));
     if (roots.length === 0) return;
     const minX = Math.min(...roots.map((p) => p.x));
     const minY = Math.min(...roots.map((p) => p.y));

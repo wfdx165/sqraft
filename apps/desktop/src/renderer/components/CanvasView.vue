@@ -49,7 +49,7 @@ import {
 } from "../canvas/pen";
 import { dispatch, docStore, hooks, select, switchMode, ui } from "../store";
 import { closeContextMenu } from "../context-menu";
-import { openNodeMenu, openPageMenu } from "../object-menu";
+import { openNodeMenu, openPageMenu, openPagesMenu } from "../object-menu";
 import { hitTest, isLocked, pageAt, slotUnder } from "../canvas/hit";
 import { containerAt, layoutParentOf, reorderGuide, reorderIndexAt } from "../canvas/layout-drag";
 import { dropAllowed, dropTargetAt, type DropTarget } from "../canvas/drop-target";
@@ -68,7 +68,7 @@ import { deleteSelection as deleteSelectionAction } from "../canvas/delete-selec
 import { duplicateSelection } from "../canvas/duplicate-selection";
 import { reorderSelection } from "../canvas/reorder-selection";
 import { flushNudge, nudgeSelection } from "../canvas/nudge";
-import { marqueeHits } from "../canvas/marquee";
+import { resolveMarqueeSelection } from "../canvas/marquee";
 import { boundsHandlePoints, selectionBounds as boundsOfSelection } from "../canvas/selection-bounds";
 import { renderPngAsync } from "../canvas/export-image";
 import { copySelectionAs, exportSelectionAs } from "../canvas/export-selection";
@@ -497,9 +497,12 @@ function draw() {
         }
       : undefined;
 
-  // 非活动页淡化（编辑模式）；主组件是根节点、不属于任何页面，不参与淡化
+  // 非活动页淡化（编辑模式）；被框选/多选中的画板保持清晰高亮；主组件不参与淡化
+  const selectedPageSet = new Set(ui.selection.filter((id) => docStore.doc.nodes[id]?.type === "page"));
   const dimPageIds = editing
-    ? docStore.doc.rootIds.filter((id) => id !== ui.activePageId && docStore.doc.nodes[id]?.type === "page")
+    ? docStore.doc.rootIds.filter(
+        (id) => id !== ui.activePageId && !selectedPageSet.has(id) && docStore.doc.nodes[id]?.type === "page",
+      )
     : undefined;
 
   // 网格层：视口辅助物，独立画布，永远在文档之下
@@ -843,7 +846,7 @@ function removeGuide(axis: "x" | "y", index: number): void {
   dispatch({ type: "node.update", params: { nodeId: page.id, patch: { guides: next } } }, "删除参考线");
 }
 
-/** 框选命中：当前层级、可见、未锁定，包围盒相交即选 */
+/** 框选命中：跨画板/非活动画板选画板，否则优先选活动页内图层 */
 function updateMarqueeSelection(): void {
   if (!marquee) return;
   const a = screenToWorld(vp, marquee.startX, marquee.startY);
@@ -854,9 +857,12 @@ function updateMarqueeSelection(): void {
     width: Math.abs(b.x - a.x),
     height: Math.abs(b.y - a.y),
   };
-  const levelId = ui.instanceContext.length ? ui.instanceContext.at(-1)! : ui.activePageId;
-  const hits = marqueeHits(docStore.doc, levelId, rect);
-  select(marquee.additive ? [...new Set([...marquee.base, ...hits])] : hits);
+  select(
+    resolveMarqueeSelection(docStore.doc, ui.activePageId, ui.instanceContext, rect, {
+      additive: marquee.additive,
+      base: marquee.base,
+    }),
+  );
 }
 
 /** F2：重命名选中图层（输入框浮在图层左上角，和页面改名同一套提交逻辑） */
@@ -933,21 +939,37 @@ function onContextMenu(e: MouseEvent): void {
   const sx = e.clientX - rect.left;
   const sy = e.clientY - rect.top;
   const position = { x: e.clientX, y: e.clientY };
+  const multiSelectedPages =
+    ui.selection.length > 1 && ui.selection.every((id) => docStore.doc.nodes[id]?.type === "page")
+      ? [...ui.selection]
+      : null;
   // 标题画在节点矩形之外，hitTest 打不到：按标签命中补一条，右键标题同样弹菜单
   const label = rootLabelAtPointer(vp, ctx, sx, sy, Boolean(pen.draft));
   if (label) {
-    if (rootLabelMenuKind(label) === "page") openPageMenu(label.id, position);
-    else openNodeMenu(label.id, position);
+    if (rootLabelMenuKind(label) === "page") {
+      if (multiSelectedPages && multiSelectedPages.includes(label.id)) openPagesMenu(multiSelectedPages, position);
+      else openPageMenu(label.id, position);
+    } else {
+      openNodeMenu(label.id, position);
+    }
     return;
   }
   const world = screenToWorld(vp, sx, sy);
   const hit = hitTest(vp, world.x, world.y);
   if (!hit) {
+    if (multiSelectedPages) {
+      openPagesMenu(multiSelectedPages, position);
+      return;
+    }
     closeContextMenu();
     return;
   }
-  if (hit.id === hit.pageId || hit.inactive) openPageMenu(hit.pageId, position);
-  else openNodeMenu(hit.id, position);
+  if (hit.id === hit.pageId || hit.inactive) {
+    if (multiSelectedPages && multiSelectedPages.includes(hit.pageId)) openPagesMenu(multiSelectedPages, position);
+    else openPageMenu(hit.pageId, position);
+  } else {
+    openNodeMenu(hit.id, position);
+  }
 }
 
 function onDoubleClick(e: MouseEvent) {
@@ -1284,6 +1306,8 @@ function toggleCrop(nodeId: NodeId | null): void {
 
 
 function onPointerDown(e: PointerEvent) {
+  // 右键完全交给 contextmenu 处理，不触发选区变更、框选或拖拽
+  if (e.button === 2) return;
   // 切页后同一次双击的第二下：位置不变但视口已经变了，旧坐标失效，直接吞掉
   const downRect = canvasRef.value?.getBoundingClientRect();
   if (downRect && swallowRepeatClick(e.clientX - downRect.left, e.clientY - downRect.top)) return;
@@ -1327,8 +1351,8 @@ function onPointerDown(e: PointerEvent) {
     return;
   }
 
-  // 编辑模式：中键不再平移（视图操作属于拖动模式）
-  if (e.button === 1) return;
+  // 编辑模式只响应左键（中键/侧键等非主按键不触发选择、框选或拖拽）
+  if (e.button !== 0) return;
 
   // 裁切模式：图内拖动 = 移动裁切窗口，抓手柄 = 缩放裁切范围，点图外 = 退出
   if (ui.cropNodeId) {
@@ -1384,15 +1408,31 @@ function onPointerDown(e: PointerEvent) {
   //      放在旋转热区与缩放手柄之前：标签是刻意的目标，左上角不该被热区抢走。
   const label = rootLabelAtPointer(vp, ctx, sx, sy, Boolean(pen.draft));
   if (label) {
-    beginRootLabelDrag(label, { setActivePage: (id) => setActivePage(id, false) });
+    if (label.type === "page" && e.shiftKey) {
+      const next = new Set(ui.selection.filter((id) => docStore.doc.nodes[id]?.type === "page"));
+      if (next.has(label.id)) next.delete(label.id);
+      else next.add(label.id);
+      select([...next]);
+      markDirty();
+      return;
+    }
+    const keepMultiPages =
+      label.type === "page" &&
+      ui.selection.length > 1 &&
+      ui.selection.includes(label.id) &&
+      ui.selection.every((id) => docStore.doc.nodes[id]?.type === "page");
+    if (!keepMultiPages) {
+      beginRootLabelDrag(label, { setActivePage: (id) => setActivePage(id, false) });
+    }
+    const moveIds = keepMultiPages ? ui.selection : [label.id];
     drag = {
       ...base,
       startX: w.x,
       startY: w.y,
       mode: "move",
-      guide: guideContextFor([label.id]),
+      guide: guideContextFor(moveIds),
       guideKey: null,
-      snapRects: snapRectsOf([label.id]),
+      snapRects: snapRectsOf(moveIds),
     };
     markDirty();
     return;
@@ -1522,9 +1562,23 @@ function onPointerDown(e: PointerEvent) {
     return;
   }
   if (hit.inactive) {
-    // 点另一页 = 切页 + 适配该页；不顺势拖动，避免误移整页
-    activatePage(hit.pageId);
-    notePageSwitchClick(sx, sy);
+    if (e.shiftKey) {
+      const next = new Set(ui.selection.filter((id) => docStore.doc.nodes[id]?.type === "page"));
+      if (next.has(hit.pageId)) next.delete(hit.pageId);
+      else next.add(hit.pageId);
+      select([...next]);
+      markDirty();
+      return;
+    }
+    // 两段式交互：首次单击仅选中该画板（不跳视口）；已单选该画板时再次点击或双击才切为活动页进入编辑
+    if (ui.selection.length === 1 && ui.selection[0] === hit.pageId) {
+      activatePage(hit.pageId);
+      notePageSwitchClick(sx, sy);
+    } else {
+      ui.instanceContext = [];
+      select([hit.pageId]);
+      markDirty();
+    }
     return;
   }
   // 在实例上下文里点了上下文之外的节点：先退出上下文
