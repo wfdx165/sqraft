@@ -4,7 +4,7 @@
  *
  * 目标页不在视口里时不画长线（会横穿整个画布），只给胶囊，避免视觉噪音。
  */
-import { worldRect, walkSubtree, type DocState, type NodeId, type Rect } from "@sqraft/core";
+import { isPageVisibleByGroup, worldRect, walkSubtree, type DocState, type NodeId, type Rect } from "@sqraft/core";
 import { worldToScreen, type Viewport } from "@sqraft/render";
 import { t } from "../i18n";
 import { labelFont } from "./label-metrics";
@@ -134,7 +134,7 @@ export function paintPrototypeFlow(ctx: CanvasRenderingContext2D, options: Proto
   let drawn = 0;
   for (const pageId of doc.rootIds) {
     const page = doc.nodes[pageId];
-    if (!page || page.type !== "page") continue;
+    if (!page || page.type !== "page" || !isPageVisibleByGroup(doc, page)) continue;
     let full = false;
     walkSubtree(doc, page.id, (node) => {
       if (full) return;
@@ -145,7 +145,7 @@ export function paintPrototypeFlow(ctx: CanvasRenderingContext2D, options: Proto
       const link = node.interactions?.find((item) => item.action === "navigate" && item.targetId);
       if (!link?.targetId) return;
       const target = doc.nodes[link.targetId];
-      if (!target || target.type !== "page") return;
+      if (!target || target.type !== "page" || !isPageVisibleByGroup(doc, target)) return;
       const from = worldRect(doc, node.id);
       const to = worldRect(doc, target.id);
       if (!from || !to) return;

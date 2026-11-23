@@ -2,10 +2,11 @@
  * 画布与左栏共用的右键菜单内容：页面一套、元素一套（规格见 ai-native-polish 票 17）。
  * 只读文档状态 + 调已有动作，不自己写文档。
  */
-import { newId, type DocNode, type NodeId } from "@sqraft/core";
+import { getPageGroups, newId, type DocNode, type NodeId } from "@sqraft/core";
 import { openContextMenu, type ContextMenuItem } from "./context-menu";
 import { copySelectionAction } from "./canvas/node-clipboard";
 import { canDeletePage, deletePage } from "./canvas/page-actions";
+import { assignPagesToGroup, createPageGroup } from "./canvas/page-group-actions";
 import { enterPresenter } from "./presenter";
 import { keyOf } from "./shortcuts";
 import { dispatch, docStore, hooks, select, ui } from "./store";
@@ -20,6 +21,53 @@ function pageOf(nodeId: NodeId): NodeId | null {
     cur = cur.parentId ? docStore.doc.nodes[cur.parentId] : undefined;
   }
   return null;
+}
+
+/** 页面右键的「移入分组」子菜单（同时支持单页与多选画板批量归组）。 */
+function buildMoveToGroupItems(pageIds: readonly NodeId[]): ContextMenuItem[] {
+  const pages = pageIds
+    .map((id) => docStore.doc.nodes[id])
+    .filter((n): n is DocNode => n?.type === "page");
+  if (pages.length === 0) return [];
+  const groupIds = new Set(pages.map((p) => p.groupId ?? null));
+  const commonGroupId = groupIds.size === 1 ? [...groupIds][0] : null;
+  const anyInGroup = pages.some((p) => Boolean(p.groupId));
+  const groups = getPageGroups(docStore.doc);
+  const items: ContextMenuItem[] = groups.map((g) => ({
+    label: g.name,
+    disabled: g.id === commonGroupId || g.locked === true,
+    run: () => assignPagesToGroup(pageIds, g.id),
+  }));
+  if (anyInGroup) {
+    items.push({
+      label: t("pageGroups.removeFromGroup"),
+      separator: items.length > 0,
+      run: () => assignPagesToGroup(pageIds, null),
+    });
+  }
+  items.push({
+    label: t("pageGroups.newWithPage"),
+    separator: items.length > 0,
+    run: () => createPageGroup(undefined, [...pageIds]),
+  });
+  return items;
+}
+
+/** 右键多选画板：批量移入分组等操作。 */
+export function openPagesMenu(pageIds: readonly NodeId[], position: { x: number; y: number }): void {
+  const valid = pageIds.filter((id) => docStore.doc.nodes[id]?.type === "page");
+  if (valid.length === 0) return;
+  if (valid.length === 1) {
+    openPageMenu(valid[0], position);
+    return;
+  }
+  const items: ContextMenuItem[] = [
+    {
+      label: t("pageGroups.moveManyTo", { n: valid.length }),
+      children: buildMoveToGroupItems(valid),
+    },
+  ];
+  openContextMenu(position, items);
 }
 
 /** 元素/页面右键的 Copy as 子菜单：格式 × 倍率在点菜单时定死。 */
@@ -59,6 +107,11 @@ export function openPageMenu(pageId: NodeId, position: { x: number; y: number })
       label: t("objectMenu.copyAs"),
       hint: keyOf("edit.copyImage"),
       children: copyAsItems(),
+    },
+    {
+      label: t("pageGroups.moveTo"),
+      separator: true,
+      children: buildMoveToGroupItems([pageId]),
     },
     { label: t("common.rename"), hint: keyOf("edit.rename"), separator: true, run: () => hooks.startRenameOf(pageId) },
     {

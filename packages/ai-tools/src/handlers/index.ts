@@ -2,6 +2,7 @@
 import * as components from "./components";
 import * as document from "./document";
 import * as nodes from "./nodes";
+import * as pageGroups from "./page-groups";
 import * as pages from "./pages";
 import * as read from "./read";
 import * as tokens from "./tokens";
@@ -13,6 +14,10 @@ export const MUTATING_TOOLS: ReadonlySet<string> = new Set([
   "rename_token",
   "delete_token",
   "create_page",
+  "create_page_group",
+  "update_page_group",
+  "delete_page_group",
+  "assign_pages_to_group",
   "create_node",
   "create_nodes",
   "create_instance",
@@ -47,6 +52,10 @@ export const handlers: Record<string, Handler> = {
   "rename_token": tokens.handleRenameToken,
   "delete_token": tokens.handleDeleteToken,
   "create_page": pages.handleCreatePage,
+  "create_page_group": pageGroups.handleCreatePageGroup,
+  "update_page_group": pageGroups.handleUpdatePageGroup,
+  "delete_page_group": pageGroups.handleDeletePageGroup,
+  "assign_pages_to_group": pageGroups.handleAssignPagesToGroup,
   "create_node": nodes.handleCreateNode,
   "create_nodes": nodes.handleCreateNodes,
   "create_instance": components.handleCreateInstance,

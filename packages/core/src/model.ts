@@ -8,9 +8,10 @@ import type { Effect } from "./effects";
 import { effectPadding } from "./effects";
 
 export type NodeId = string;
+export type PageGroupId = string;
 
 /** 当前文件格式版本：新增字段时 +1，并在 migrate 里补一段迁移。 */
-export const CURRENT_FORMAT_VERSION = 11;
+export const CURRENT_FORMAT_VERSION = 12;
 
 /** 节点类型的运行时真源（类型与搜索白名单都从这里取，避免两处手抄）。 */
 export const NODE_TYPES = [
@@ -341,6 +342,8 @@ export interface DocNode {
   isMask?: boolean;
   /** 参考线：仅 page 使用，页面本地坐标（页面左上角为原点） */
   guides?: { x: number[]; y: number[] };
+  /** 所属页面分组：仅 page 使用，缺省表示未分组 */
+  groupId?: PageGroupId;
   /** 演示模式的滚动方向：仅 page 使用，缺省 none */
   scrollDirection?: ScrollDirection;
   /** 原型链接：只有页面子树里的节点可以持有（见 interaction.ts） */
@@ -375,12 +378,30 @@ export interface FontEntry {
   mime: string;
 }
 
+/** 页面分组：逻辑归组画板（用于版本归档、多端布局隔离等场景）。 */
+export interface PageGroup {
+  id: PageGroupId;
+  name: string;
+  /** 标签色（可选，用于左栏色点与画布分区框） */
+  color?: string;
+  /** 是否可见：缺省 true；false 时组内所有页面不渲染也不参与命中 */
+  visible?: boolean;
+  /** 是否锁定：缺省 false；true 时组内页面及子节点不可编辑 */
+  locked?: boolean;
+  /** 组内新建页面的默认尺寸（例如 iPad 分组 1024×1366） */
+  defaultPageSize?: { width: number; height: number };
+  /** 预留扩展元信息（如版本说明、tag、来源分组 id） */
+  meta?: Record<string, string>;
+}
+
 export interface DocState {
   version: number;
   /** 文件格式版本；旧文件缺省按 1 处理 */
   formatVersion?: number;
   rootIds: NodeId[];
   nodes: Record<NodeId, DocNode>;
+  /** 页面分组列表（有序，缺省为空） */
+  pageGroups?: PageGroup[];
   /** Token 表：key 形如 "color/primary"（单一取值，无模式） */
   tokens: Record<string, TokenEntry>;
   /** 字体表：导入并嵌入文档的字体（缺省为空） */
@@ -396,6 +417,11 @@ let idCounter = 0;
 export function newId(): NodeId {
   idCounter += 1;
   return `n_${Date.now().toString(36)}_${idCounter.toString(36)}`;
+}
+
+export function newGroupId(): PageGroupId {
+  idCounter += 1;
+  return `g_${Date.now().toString(36)}_${idCounter.toString(36)}`;
 }
 
 export function createNode(type: NodeType, patch: Partial<DocNode> = {}): DocNode {
@@ -443,6 +469,7 @@ export function createEmptyDoc(): DocState {
     formatVersion: CURRENT_FORMAT_VERSION,
     rootIds: [],
     nodes: {},
+    pageGroups: [],
     tokens: {},
     strictTokens: false,
   };

@@ -57,6 +57,7 @@ export function serializeNode(store: DocStore, n: DocNode, depth: number): Recor
     ...(n.overrides ? { overrides: n.overrides } : {}),
     ...(n.slotFilled !== undefined ? { slotFilled: n.slotFilled } : {}),
     ...(n.propertyDefs ? { propertyDefs: n.propertyDefs } : {}),
+    ...(n.groupId ? { groupId: n.groupId } : {}),
     ...(n.scrollDirection ? { scrollDirection: n.scrollDirection } : {}),
     ...(n.interactions?.length
       ? {

@@ -39,7 +39,7 @@ describe("右键菜单内容", () => {
   it("页面菜单把复制收进「复制为」子菜单", () => {
     const { pageId } = setup();
     openPageMenu(pageId, { x: 0, y: 0 });
-    expect(labels()).toEqual(["适配该页", "从这里开始演示", "复制为", "重命名", "删除页面"]);
+    expect(labels()).toEqual(["适配该页", "从这里开始演示", "复制为", "移入分组", "重命名", "删除页面"]);
     expect(copyAsLabels()).toEqual(["PNG 1×", "PNG 2×", "PNG 4×", "SVG"]);
   });
 

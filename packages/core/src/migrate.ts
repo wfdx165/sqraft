@@ -130,6 +130,11 @@ export function migrateDoc(state: DocState, fromVersion = state.formatVersion ??
   // 11：Token 新增可选的渐变类型（ADR-0039）。旧文件的 color / number Token 结构不变，
   //     不需要改数据；旧版本读到渐变 Token 会把值当颜色画，所以必须靠版本号拒开。
   if (version < 11) version = 11;
+  // 12：文档新增可选的 `pageGroups` 与页面 `groupId`。老文件缺省即无分组，归一为空数组。
+  if (version < 12) {
+    state.pageGroups = Array.isArray(state.pageGroups) ? state.pageGroups : [];
+    version = 12;
+  }
   state.formatVersion = CURRENT_FORMAT_VERSION;
   return state;
 }

@@ -8,6 +8,7 @@ import type { DocNode, DocState, Effect, NodeId, Rect, VectorPath } from "@sqraf
 import {
   cornerRadiusOf,
   imageCropOf,
+  isPageVisibleByGroup,
   maskPlan,
   resolvePaint,
   resolvePaintSpec,
@@ -358,7 +359,7 @@ export function rootDrawPlan(
     const node = doc.nodes[id];
     if (!node) continue;
     if (node.type === "page") {
-      if (!onlyPageIds || onlyPageIds.includes(id)) pages.push(node);
+      if (onlyPageIds ? onlyPageIds.includes(id) : isPageVisibleByGroup(doc, node)) pages.push(node);
     } else if ((node.type === "component" || node.type === "componentSet") && !onlyPageIds) {
       components.push(node);
     }

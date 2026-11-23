@@ -1,6 +1,6 @@
 // 工具名直接分派；每个分支保持原实现，ctx 提供 store 与宿主能力。
-import type { Interaction, NodeId } from "../shared";
-import { DEFAULT_DISSOLVE_MS, DEFAULT_PAGE_HEIGHT, DEFAULT_PAGE_WIDTH, createNode, getPages, newId, nextPageName, nextPagePosition, walkSubtree } from "../shared";
+import type { Interaction, NodeId, PageGroupId } from "../shared";
+import { DEFAULT_DISSOLVE_MS, DEFAULT_PAGE_HEIGHT, DEFAULT_PAGE_WIDTH, createNode, getPageGroup, getPages, newId, nextPageName, nextPagePositionInGroup, walkSubtree } from "../shared";
 import type { Handler } from "../types";
 
 /** `set_interaction` */
@@ -80,11 +80,15 @@ export const handleListInteractions: Handler = async (ctx, args) => {
 
 /** `create_page` */
 export const handleCreatePage: Handler = async (ctx, args) => {
-    const position = nextPagePosition(ctx.store.doc);
+    const groupId = typeof args.groupId === "string" && args.groupId.trim() ? (args.groupId.trim() as PageGroupId) : undefined;
+    const group = groupId ? getPageGroup(ctx.store.doc, groupId) : undefined;
+    if (groupId && !group) throw new Error(`分组 ${groupId} 不存在`);
+    if (group?.locked) throw new Error(`分组「${group.name}」已锁定`);
+    const position = nextPagePositionInGroup(ctx.store.doc, groupId);
     const name = args.name === undefined ? nextPageName(ctx.store.doc, ctx.defaultName?.("page") ?? "页面") : String(args.name).trim();
     if (!name) throw new Error("页面名不能为空");
-    const width = args.width === undefined ? DEFAULT_PAGE_WIDTH : Number(args.width);
-    const height = args.height === undefined ? DEFAULT_PAGE_HEIGHT : Number(args.height);
+    const width = args.width === undefined ? (group?.defaultPageSize?.width ?? DEFAULT_PAGE_WIDTH) : Number(args.width);
+    const height = args.height === undefined ? (group?.defaultPageSize?.height ?? DEFAULT_PAGE_HEIGHT) : Number(args.height);
     if (!Number.isFinite(width) || width <= 0 || !Number.isFinite(height) || height <= 0) {
       throw new Error("页面宽高必须是正数");
     }
@@ -94,9 +98,10 @@ export const handleCreatePage: Handler = async (ctx, args) => {
       y: typeof args.y === "number" ? args.y : position.y,
       width,
       height,
+      ...(groupId ? { groupId } : {}),
     });
     ctx.store.apply({ type: "node.create", params: { nodes: [page], parentId: null } }, "ai:create_page");
     // 让后续不带 parentId 的操作默认落到新页（与左栏「+」一致）
     ctx.host?.activatePage?.(page.id);
-    return JSON.stringify({ ok: true, pageId: page.id, name });
+    return JSON.stringify({ ok: true, pageId: page.id, name, ...(groupId ? { groupId } : {}) });
 };

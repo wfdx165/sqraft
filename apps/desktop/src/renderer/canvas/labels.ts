@@ -5,7 +5,7 @@
  * 整个矩形，画布上没有任何像素能命中母版本体，只能靠标签抓。
  * 因此命中与绘制共用同一几何计算（`rootLabelRect` / `chipRect`）。
  */
-import type { DocNode, Rect } from "@sqraft/core";
+import { isPageVisibleByGroup, type DocNode, type Rect } from "@sqraft/core";
 import { worldToScreen, type Viewport } from "@sqraft/render";
 import { ICON_PATHS, ICON_STROKE, ICON_VIEWBOX } from "../icons";
 import { docStore, ui } from "../store";
@@ -185,6 +185,7 @@ function paintRootLabels(
   for (const id of roots) {
     const node = docStore.doc.nodes[id];
     if (!node || node.type !== type || !node.visible) continue;
+    if (type === "page" && !isPageVisibleByGroup(docStore.doc, node)) continue;
     if (opts.renameId === node.id) continue;
     if (rootLabelHidden(node, vp, opts.selection)) continue;
     const origin = labelOrigin(node, opts);
@@ -256,6 +257,7 @@ export function labelAt(
     for (let i = roots.length - 1; i >= 0; i--) {
       const node = docStore.doc.nodes[roots[i]];
       if (!node || node.type !== type || !node.visible) continue;
+      if (type === "page" && !isPageVisibleByGroup(docStore.doc, node)) continue;
       const r = rootLabelRect(node, vp, ctx);
       if (!r) continue;
       if (sx >= r.x && sx <= r.x + r.width && sy >= r.y && sy <= r.y + r.height) return node;

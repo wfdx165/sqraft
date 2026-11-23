@@ -22,4 +22,5 @@ export * from "./token-refs";
 export * from "./token-resolve";
 export * from "./token-fields";
 export * from "./color";
+export * from "./page-group";
 export { NUMERIC_TOKEN_CHANGED } from "./token-commands";

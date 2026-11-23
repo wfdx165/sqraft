@@ -2,22 +2,28 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from "vue";
 import {
   createNode,
+  getPageGroups,
   getPages,
+  getPagesInGroup,
   nextPagePosition,
   overridePatchOf,
   DEFAULT_PAGE_HEIGHT,
   DEFAULT_PAGE_WIDTH,
   type DocNode,
   type NodeId,
+  type PageGroup,
+  type PageGroupId,
 } from "@sqraft/core";
 import { dispatch, docStore, hooks, select, ui } from "../store";
 import { canDeletePage, deletePage as deletePageAction } from "../canvas/page-actions";
+import { assignPageToGroup, createPageGroup } from "../canvas/page-group-actions";
 import { openNodeMenu, openPageMenu } from "../object-menu";
 import { registerShortcuts } from "../shortcuts";
 import { planLayerDrop, type DropPosition } from "../canvas/layer-drag";
 import { canExpand, isLayerExpanded } from "../canvas/layer-tree";
 import { t } from "../i18n";
 import Icon from "./Icon.vue";
+import PageGroupHeader from "./PageGroupHeader.vue";
 import { assetUrl } from "../assets";
 import { linkedPreviewUrl, linkedVersion } from "../linked-images";
 
@@ -30,6 +36,87 @@ const pages = computed(() => {
   void ui.version;
   return getPages(docStore.doc);
 });
+
+const groups = computed(() => {
+  void ui.version;
+  return getPageGroups(docStore.doc).map((g) => ({ ...g }));
+});
+
+interface PageSection {
+  kind: "flat" | "group" | "ungrouped";
+  id: string;
+  group?: PageGroup;
+  totalCount: number;
+  pages: DocNode[];
+}
+
+const sections = computed<PageSection[]>(() => {
+  void ui.version;
+  const q = query.value;
+  if (groups.value.length === 0) {
+    return [{ kind: "flat", id: "__flat__", totalCount: pages.value.length, pages: filteredPages.value }];
+  }
+  const out: PageSection[] = [];
+  for (const group of groups.value) {
+    const all = getPagesInGroup(docStore.doc, group.id);
+    const groupHit = q.length > 0 && group.name.toLowerCase().includes(q);
+    const matched = !q || groupHit
+      ? all
+      : all.filter((p) => p.name.toLowerCase().includes(q) || p.id === renamingId.value);
+    if (q && !groupHit && matched.length === 0) continue;
+    out.push({ kind: "group", id: group.id, group, totalCount: all.length, pages: matched });
+  }
+  const ungroupedAll = getPagesInGroup(docStore.doc, null);
+  const ungroupedMatched = !q
+    ? ungroupedAll
+    : ungroupedAll.filter((p) => p.name.toLowerCase().includes(q) || p.id === renamingId.value);
+  if (ungroupedMatched.length > 0 || (draggingPageId.value && !q)) {
+    out.push({ kind: "ungrouped", id: "__ungrouped__", totalCount: ungroupedAll.length, pages: ungroupedMatched });
+  }
+  return out;
+});
+
+function toggleGroupCollapse(groupId: PageGroupId) {
+  ui.collapsedGroups[groupId] = !ui.collapsedGroups[groupId];
+}
+
+/* ---------- 页面拖拽归组 ---------- */
+
+const draggingPageId = ref<NodeId | null>(null);
+const dropGroupId = ref<string | null>(null);
+
+function onPageDragStart(page: DocNode, e: DragEvent) {
+  draggingPageId.value = page.id;
+  e.dataTransfer?.setData("text/x-sqraft-page", page.id);
+  if (e.dataTransfer) e.dataTransfer.effectAllowed = "move";
+}
+
+function onPageDragEnd() {
+  draggingPageId.value = null;
+  dropGroupId.value = null;
+}
+
+function onGroupDragOver(targetId: string, e: DragEvent) {
+  if (!draggingPageId.value) return;
+  e.preventDefault();
+  dropGroupId.value = targetId;
+}
+
+function onGroupDragLeave(targetId: string) {
+  if (dropGroupId.value === targetId) dropGroupId.value = null;
+}
+
+function onGroupDrop(targetGroupId: PageGroupId | null) {
+  const pageId = draggingPageId.value;
+  draggingPageId.value = null;
+  dropGroupId.value = null;
+  if (!pageId) return;
+  assignPageToGroup(pageId, targetGroupId);
+}
+
+function addGroup() {
+  createPageGroup();
+}
 
 /* ---------- 搜索 ---------- */
 
@@ -307,7 +394,10 @@ function onLayerDelete(id: NodeId) {
   <div class="panel">
     <header>
       <span class="micro-label">{{ t("panel.pages") }}</span>
-      <button class="add" :title="t('pages.add')" @click="addPage"><Icon name="plus" :size="13" /></button>
+      <div class="header-actions">
+        <button class="add" :title="t('pageGroups.add')" @click="addGroup"><Icon name="open" :size="13" /></button>
+        <button class="add" :title="t('pages.add')" @click="addPage"><Icon name="plus" :size="13" /></button>
+      </div>
     </header>
 
     <div class="search-row">
@@ -323,14 +413,52 @@ function onLayerDelete(id: NodeId) {
     </div>
 
     <div class="pages">
-      <div v-if="filteredPages.length === 0" class="empty-pages">{{ t("pages.noMatch") }}</div>
-      <div v-for="page in filteredPages" :key="page.id" class="page-block">
+      <div v-if="sections.length === 0 || (sections.length === 1 && sections[0].kind === 'flat' && sections[0].pages.length === 0)" class="empty-pages">{{ t("pages.noMatch") }}</div>
+      <div v-for="section in sections" :key="section.id" class="page-section" :class="{ grouped: section.kind === 'group' }">
+        <PageGroupHeader
+          v-if="section.kind === 'group' && section.group"
+          :group="section.group"
+          :page-count="section.totalCount"
+          :collapsed="Boolean(ui.collapsedGroups[section.group.id]) && !query"
+          :drop-active="dropGroupId === section.group.id"
+          @toggle="toggleGroupCollapse(section.group.id)"
+          @dragover="onGroupDragOver(section.group.id, $event)"
+          @dragleave="onGroupDragLeave(section.group.id)"
+          @drop="onGroupDrop(section.group.id)"
+        />
         <div
-          class="page-row"
-          :class="{ active: ui.expandedPageId === page.id, 'active-page': ui.mode === 'edit' && ui.activePageId === page.id }"
-          @click="togglePage(page.id)"
-          @contextmenu.prevent.stop="onPageMenu(page, $event)"
+          v-else-if="section.kind === 'ungrouped'"
+          class="ungrouped-header"
+          :class="{ 'drop-active': dropGroupId === '__ungrouped__' }"
+          @dragover="onGroupDragOver('__ungrouped__', $event)"
+          @dragleave="onGroupDragLeave('__ungrouped__')"
+          @drop.prevent="onGroupDrop(null)"
         >
+          <span>{{ t("pageGroups.ungrouped") }}</span>
+          <span class="count">{{ section.totalCount }}</span>
+        </div>
+
+        <template v-if="section.kind !== 'group' || !section.group || !ui.collapsedGroups[section.group.id] || query">
+          <div v-if="section.kind === 'group' && section.pages.length === 0" class="empty-group">{{ t("pageGroups.empty") }}</div>
+          <div
+            v-for="page in section.pages"
+            :key="page.id"
+            class="page-block"
+            :class="{ indented: section.kind === 'group' }"
+          >
+            <div
+              class="page-row"
+              :class="{
+                active: ui.expandedPageId === page.id,
+                'active-page': ui.mode === 'edit' && ui.activePageId === page.id,
+                'dragging-page': draggingPageId === page.id,
+              }"
+              draggable="true"
+              @dragstart="onPageDragStart(page, $event)"
+              @dragend="onPageDragEnd"
+              @click="togglePage(page.id)"
+              @contextmenu.prevent.stop="onPageMenu(page, $event)"
+            >
           <button
             class="caret-btn"
             :title="ui.expandedPageId === page.id ? t('pages.collapseLayers') : t('pages.expandLayers')"
@@ -421,6 +549,8 @@ function onLayerDelete(id: NodeId) {
           </div>
         </div>
       </div>
+        </template>
+      </div>
     </div>
   </div>
 </template>
@@ -489,10 +619,13 @@ header {
 }
 
 .add {
-  display: grid;
-  place-items: center;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   width: 22px;
   height: 22px;
+  padding: 0;
+  line-height: 0;
   border: 1px solid var(--hairline);
   border-radius: 7px;
   background: transparent;
@@ -759,5 +892,48 @@ header {
 .act:hover {
   color: var(--danger);
   background: rgba(242, 109, 109, 0.1);
+}
+
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.page-section.grouped {
+  margin-bottom: 4px;
+}
+
+.ungrouped-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 24px;
+  padding: 0 8px;
+  margin-top: 4px;
+  border-radius: 6px;
+  font-size: 10.5px;
+  font-weight: 600;
+  color: var(--text-faint);
+}
+
+.ungrouped-header.drop-active {
+  background: var(--accent-soft);
+  outline: 1.5px dashed var(--accent);
+  outline-offset: -1.5px;
+}
+
+.empty-group {
+  padding: 4px 10px 6px 26px;
+  font-size: 11px;
+  color: var(--text-faint);
+}
+
+.page-block.indented {
+  padding-left: 10px;
+}
+
+.page-row.dragging-page {
+  opacity: 0.45;
 }
 </style>
