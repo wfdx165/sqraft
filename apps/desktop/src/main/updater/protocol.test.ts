@@ -66,7 +66,12 @@ describe("latest.json 校验", () => {
     );
   });
 
-  it("缺 mac-arm64 或 sha256 不对都拒绝", () => {
+  it("只有 mac-x64 资产也接受（Intel 包）", () => {
+    const manifest = parseLatest({ version: "0.1.0", assets: { "mac-x64": asset() } });
+    expect(manifest.assets["mac-x64"].sha256).toBe(sha);
+  });
+
+  it("缺 macOS 资产或 sha256 不对都拒绝", () => {
     expect(errorKey(() => parseLatest({ version: "0.1.0", assets: {} }))).toBe("update.manifestAsset");
     expect(
       errorKey(() => parseLatest({ version: "0.1.0", assets: { "mac-arm64": asset({ sha256: "zz" }) } })),

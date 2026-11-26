@@ -7,7 +7,7 @@
  */
 import type { UpdateState } from "../../shared/ipc";
 import type { UpdatePreferences } from "../preferences";
-import { compareVersions, MAC_ARM64_ASSET, type LatestManifest, type UpdateAsset } from "./protocol";
+import { compareVersions, macAssetKey, type LatestManifest, type UpdateAsset } from "./protocol";
 
 /**
  * 两次自动检查之间的最小间隔：4 小时。
@@ -102,6 +102,8 @@ export interface LatestPlanInput {
   installable: boolean;
   /** 自动下载开关：关闭后即使能就地安装也只提示 */
   autoDownload: boolean;
+  /** 当前进程架构（arm64 / x64）：决定读 `mac-arm64` 还是 `mac-x64` 资产 */
+  arch: string;
 }
 
 export type LatestPlan =
@@ -117,13 +119,16 @@ export type LatestPlan =
     };
 
 export function planForLatest(input: LatestPlanInput): LatestPlan {
-  const { currentVersion, manifest, failedVersion, manual, installable, autoDownload } = input;
+  const { currentVersion, manifest, failedVersion, manual, installable, autoDownload, arch } = input;
   const meta = { version: manifest.version, notes: manifest.notes, publishedAt: manifest.publishedAt };
   if (compareVersions(manifest.version, currentVersion) <= 0) return { kind: "up-to-date", ...meta };
   // 自动检查不重试已知坏版本；手动检查是用户明确要求，放行
   if (!manual && failedVersion && failedVersion === manifest.version) {
     return { kind: "skipped-failed", version: manifest.version };
   }
-  if (!installable || !autoDownload) return { kind: "available", ...meta };
-  return { kind: "update", ...meta, asset: manifest.assets[MAC_ARM64_ASSET] };
+  // 清单里没有当前架构的包（例如刚切双架构、旧清单只有 arm64）→ 只提示，绝不装错架构
+  const assetKey = macAssetKey(arch);
+  const asset = assetKey ? manifest.assets[assetKey] : undefined;
+  if (!installable || !autoDownload || !asset) return { kind: "available", ...meta };
+  return { kind: "update", ...meta, asset };
 }

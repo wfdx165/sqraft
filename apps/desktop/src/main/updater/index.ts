@@ -192,6 +192,7 @@ async function runCheck(manual: boolean, cause: CheckCause): Promise<UpdateState
       manual,
       installable: support.mode === "install",
       autoDownload: state.autoDownload,
+      arch: process.arch,
     });
 
     if (plan.kind === "up-to-date") {

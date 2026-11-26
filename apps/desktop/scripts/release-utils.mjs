@@ -1,9 +1,40 @@
 /**
  * 发布脚本共用的小工具（纯函数，便于单测）。
  *
- * 抽出来是为了让 release.mjs 与 stage-update.mjs 对"哪个文件才算 arm64 产物"
- * 只有一个答案——macOS zip 的默认文件名带 -mac，曾经两边各写一套导致漂移。
+ * 抽出来是为了让 dist / release / stage-update 对"哪个文件才是某个架构的产物"
+ * 只有一个答案——macOS 的 dmg / zip 命名与输出目录都按架构区分（ADR-0046）。
  */
+
+/** macOS 支持的两个架构；顺序固定，脚本输出与清单都按这个顺序。 */
+export const MAC_ARCHES = ["arm64", "x64"];
+
+/** electron-builder 的 macOS 输出目录：arm64 → `mac-arm64`，x64 → `mac`。 */
+export function macOutDirName(arch) {
+  if (!MAC_ARCHES.includes(arch)) throw new Error(`未知架构 ${arch}`);
+  return arch === "arm64" ? "mac-arm64" : "mac";
+}
+
+/** 从 `.app` 路径反推架构（`release/mac-arm64/...` 或 `release/mac/...`）。 */
+export function archFromAppPath(appPath) {
+  return /[\\/]mac-arm64[\\/]/.test(appPath) ? "arm64" : "x64";
+}
+
+/**
+ * `dist:resume` 的逐架构计划（纯函数，便于单测）。三种动作：
+ * - build：连已签名的 `.app` 都没有——上一个架构公证失败时，本架构压根没构建；
+ * - notarize：`.app` 在，但公证状态不是 Accepted + staple（提交就失败过，或从没提交）；
+ * - repack：已公证，只重打 dmg / zip。
+ *
+ * `appExists(arch)` 由调用方注入，这里不碰文件系统。
+ */
+export function planResumeArches({ states = {}, appExists = () => false }) {
+  return MAC_ARCHES.map((arch) => {
+    const state = states[arch];
+    if (!appExists(arch)) return { arch, action: "build" };
+    if (state?.status !== "Accepted" || !state?.stapledAt) return { arch, action: "notarize" };
+    return { arch, action: "repack" };
+  });
+}
 
 /** 只处理 x.y.z；容忍 v 前缀。 */
 export function compareVersions(a, b) {
@@ -18,14 +49,16 @@ export function compareVersions(a, b) {
   return 0;
 }
 
-/** electron-builder 的 macOS zip 默认带 -mac；两种后缀都认。 */
-export function pickArm64Zip(names, version) {
-  const suffixes = [`-${version}-arm64.zip`, `-${version}-arm64-mac.zip`];
-  return names.find((name) => suffixes.some((suffix) => name.endsWith(suffix))) ?? null;
+/** macOS 产物命名：`Sqraft-<version>-<arch>.dmg` / `.zip`（见 electron-builder.yml 的 artifactName）。 */
+export function pickMacDmg(names, version, arch) {
+  return names.find((name) => name.endsWith(`-${version}-${arch}.dmg`)) ?? null;
 }
 
-export function pickArm64Dmg(names, version) {
-  return names.find((name) => name.endsWith(`-${version}-arm64.dmg`)) ?? null;
+export function pickMacZip(names, version, arch) {
+  const suffixes = [`-${version}-${arch}.zip`];
+  // 0.1.1 及以前只有 arm64，zip 默认名带 -mac；保留兼容，避免旧产物认不出来
+  if (arch === "arm64") suffixes.push(`-${version}-arm64-mac.zip`);
+  return names.find((name) => suffixes.some((suffix) => name.endsWith(suffix))) ?? null;
 }
 
 /** Windows NSIS 安装包：`Sqraft-Setup-0.0.5.exe`（见 electron-builder.yml 的 artifactName）。 */
@@ -94,14 +127,15 @@ export function signingProblems(signing) {
 /**
  * verify-pack 的命令行解析：位置参数是产物路径，其余是开关。
  *
- * 返回 `{ target, expectSigned, expectNotarized, expectedTeam }` 或 `{ error }`。
- * `--team-id` 缺值必须报错——静默退化成空串会让 Team 比对被跳过、脚本仍报"通过"。
+ * 返回 `{ target, expectSigned, expectNotarized, expectedTeam, expectedArch }` 或 `{ error }`。
+ * `--team-id` / `--arch` 缺值必须报错——静默退化会让对应断言被跳过、脚本仍报"通过"。
  */
 export function parseVerifyPackArgs(argv) {
   let target = null;
   let expectSigned = false;
   let expectNotarized = false;
   let expectedTeam = "";
+  let expectedArch = "";
   for (let i = 0; i < argv.length; i++) {
     const arg = argv[i];
     if (arg === "--expect-signed") {
@@ -115,6 +149,13 @@ export function parseVerifyPackArgs(argv) {
       }
       expectedTeam = value;
       i++;
+    } else if (arg === "--arch") {
+      const value = argv[i + 1];
+      if (!MAC_ARCHES.includes(value)) {
+        return { error: `--arch 只认 ${MAC_ARCHES.join(" / ")}（收到 ${value ?? "空"}）` };
+      }
+      expectedArch = value;
+      i++;
     } else if (arg.startsWith("--")) {
       return { error: `不认识的参数 ${arg}` };
     } else if (target == null) {
@@ -123,5 +164,5 @@ export function parseVerifyPackArgs(argv) {
       return { error: `只能指定一个产物路径（多余：${arg}）` };
     }
   }
-  return { target, expectSigned, expectNotarized, expectedTeam };
+  return { target, expectSigned, expectNotarized, expectedTeam, expectedArch };
 }

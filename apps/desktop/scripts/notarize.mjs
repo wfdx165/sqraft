@@ -13,12 +13,12 @@
  * 纯函数（参数拼装、状态判定、状态文件解析、续跑计划）单独导出，便于单测。
  */
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
-import { notaryCredentialSource } from "./release-utils.mjs";
+import { archFromAppPath, notaryCredentialSource } from "./release-utils.mjs";
 
 /** 轮询上限：Apple 处理通常 1–5 分钟；超过一小时就是异常，宁可失败也不要静默挂一天。 */
 export const NOTARY_TIMEOUT_MS = 60 * 60 * 1000;
@@ -157,19 +157,42 @@ export function summarizeNotaryLog(text) {
 
 /* ---------- 状态文件 ---------- */
 
-export function readNotaryState(releaseDir) {
+/**
+ * `notary.json` 按架构分槽：`{ "arm64": {…}, "x64": {…} }`。
+ * 0.1.1 的单架构状态对象（直接带 `submissionId`）读成 arm64。
+ */
+export function readNotaryStates(releaseDir) {
   const file = join(releaseDir, NOTARY_STATE_FILE);
-  if (!existsSync(file)) return null;
+  if (!existsSync(file)) return {};
   try {
-    return parseNotaryState(readFileSync(file, "utf8"));
+    const value = parseNotaryState(readFileSync(file, "utf8"));
+    if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+    if (typeof value.submissionId === "string") return { arm64: value };
+    const states = {};
+    for (const [arch, state] of Object.entries(value)) {
+      if (state && typeof state === "object" && !Array.isArray(state)) states[arch] = state;
+    }
+    return states;
   } catch {
-    return null;
+    return {};
   }
 }
 
-function writeNotaryState(releaseDir, state) {
+export function readNotaryState(releaseDir, arch) {
+  return readNotaryStates(releaseDir)[arch] ?? null;
+}
+
+function writeNotaryState(releaseDir, arch, state) {
+  const all = readNotaryStates(releaseDir);
+  all[arch] = state;
   mkdirSync(releaseDir, { recursive: true });
-  writeFileSync(join(releaseDir, NOTARY_STATE_FILE), `${JSON.stringify(state, null, 2)}\n`, "utf8");
+  const file = join(releaseDir, NOTARY_STATE_FILE);
+  // read-modify-write：依赖 electron-builder 按架构串行构建（current 行为）。
+  // 将来若改成并行构建，这里要加文件锁，否则会丢掉一个架构的槽位。
+  // 先写临时文件再 rename：中途退出不会留下半个 JSON（读侧会把它当成"没有状态"重提公证）。
+  const tmp = `${file}.${process.pid}.tmp`;
+  writeFileSync(tmp, `${JSON.stringify(all, null, 2)}\n`, "utf8");
+  renameSync(tmp, file);
 }
 
 /* ---------- 副作用 ---------- */
@@ -279,6 +302,7 @@ async function waitForAcceptance({ submissionId, auth, log, pollMs, timeoutMs, o
 export async function notarizeApp({
   appPath,
   releaseDir,
+  arch = "",
   env = process.env,
   log = (line) => console.log(line),
   pollMs = NOTARY_POLL_MS,
@@ -286,13 +310,15 @@ export async function notarizeApp({
 }) {
   const absoluteApp = resolve(appPath);
   if (!existsSync(absoluteApp)) fail(`notarize: 找不到 .app：${absoluteApp}`);
+  // 架构决定 notary.json 的槽位；调用方不传时从 release/mac-arm64 或 release/mac 反推
+  const targetArch = arch || archFromAppPath(absoluteApp);
 
   const cdHash = codeHashOf(absoluteApp);
-  const state = readNotaryState(releaseDir);
+  const state = readNotaryState(releaseDir, targetArch);
   const plan = planNotarization({ state, appPath: absoluteApp, cdHash });
 
   if (plan.action === "done") {
-    log(`notarize: ${NOTARY_STATE_FILE} 显示已公证并 staple（${state.submissionId}），跳过`);
+    log(`notarize: ${targetArch} 的 ${NOTARY_STATE_FILE} 显示已公证并 staple（${state.submissionId}），跳过`);
     return state;
   }
 
@@ -321,7 +347,7 @@ export async function notarizeApp({
     const submitted = submitApp({ appPath: absoluteApp, auth, log });
     submissionId = submitted.submissionId;
     status = submitted.status;
-    writeNotaryState(releaseDir, {
+    writeNotaryState(releaseDir, targetArch, {
       submissionId,
       status,
       appPath: absoluteApp,
@@ -329,7 +355,7 @@ export async function notarizeApp({
       submittedAt,
     });
   } else if (plan.action === "poll") {
-    log(`notarize: 续跑提交 ${submissionId}（上次状态 ${status}）`);
+    log(`notarize: ${targetArch} 续跑提交 ${submissionId}（上次状态 ${status}）`);
   }
 
   if (!isNotaryAccepted(status)) {
@@ -341,7 +367,7 @@ export async function notarizeApp({
       timeoutMs,
       onState: (next) => {
         status = next;
-        writeNotaryState(releaseDir, {
+        writeNotaryState(releaseDir, targetArch, {
           submissionId,
           status,
           appPath: absoluteApp,
@@ -378,8 +404,8 @@ export async function notarizeApp({
     submittedAt,
     stapledAt: new Date().toISOString(),
   };
-  writeNotaryState(releaseDir, done);
-  log(`notarize: 完成（提交 ${submissionId}，票据已 staple）`);
+  writeNotaryState(releaseDir, targetArch, done);
+  log(`notarize: ${targetArch} 完成（提交 ${submissionId}，票据已 staple）`);
   return done;
 }
 
@@ -391,11 +417,11 @@ const invokedDirectly =
 if (invokedDirectly) {
   const appArg = process.argv[2];
   if (!appArg) {
-    console.error("用法：node scripts/notarize.mjs <Sqraft.app>（状态写在 release/notary.json）");
+    console.error("用法：node scripts/notarize.mjs <Sqraft.app> [releaseDir] [arm64|x64]");
     process.exit(1);
   }
   const releaseDir = resolve(process.argv[3] ?? join(process.cwd(), "release"));
-  notarizeApp({ appPath: resolve(appArg), releaseDir }).catch((error) => {
+  notarizeApp({ appPath: resolve(appArg), releaseDir, arch: process.argv[4] ?? "" }).catch((error) => {
     console.error(error instanceof Error ? error.message : String(error));
     process.exit(1);
   });

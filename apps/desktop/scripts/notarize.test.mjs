@@ -1,5 +1,9 @@
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  NOTARY_STATE_FILE,
   NOTARY_TIMEOUT_MS,
   formatDuration,
   isNotaryAccepted,
@@ -10,6 +14,8 @@ import {
   parseNotaryJson,
   parseNotaryState,
   planNotarization,
+  readNotaryState,
+  readNotaryStates,
   summarizeNotaryLog,
 } from "./notarize.mjs";
 
@@ -107,6 +113,35 @@ describe("notarytool 输出解析", () => {
     expect(parseNotaryState("")).toBeNull();
     expect(parseNotaryState("{broken")).toBeNull();
     expect(parseNotaryState('"text"')).toBeNull();
+  });
+});
+
+describe("公证状态按架构分槽", () => {
+  it("0.1.1 的单架构状态读成 arm64；新文件按 arch 取", () => {
+    const dir = mkdtempSync(join(tmpdir(), "sqraft-notary-test-"));
+    try {
+      writeFileSync(
+        join(dir, NOTARY_STATE_FILE),
+        JSON.stringify({ submissionId: "old", status: "Accepted" }),
+      );
+      expect(readNotaryState(dir, "arm64")?.submissionId).toBe("old");
+      expect(readNotaryState(dir, "x64")).toBeNull();
+
+      writeFileSync(
+        join(dir, NOTARY_STATE_FILE),
+        JSON.stringify({
+          arm64: { submissionId: "a", status: "Accepted" },
+          x64: { submissionId: "b", status: "In Progress" },
+        }),
+      );
+      expect(readNotaryStates(dir)).toEqual({
+        arm64: { submissionId: "a", status: "Accepted" },
+        x64: { submissionId: "b", status: "In Progress" },
+      });
+      expect(readNotaryState(dir, "x64")?.submissionId).toBe("b");
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

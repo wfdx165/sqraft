@@ -17,7 +17,7 @@ change gets merged.
 
 | Tool | Version | Notes |
 |---|---|---|
-| macOS | Apple Silicon | Intel Macs are not supported |
+| macOS | 11.7+ | Apple Silicon and Intel are both supported |
 | Windows | 10 22H2+ / 11, x64 | ARM64 Windows is not supported |
 | Node.js | 22.12.0 | see `.nvmrc` |
 | pnpm | 10.33.4 | `packageManager` in `package.json` |
@@ -34,7 +34,7 @@ pnpm test     # vitest in @sqraft/core, @sqraft/ai-tools, @sqraft/desktop
 pnpm build    # type check (main / preload / renderer) + production bundle
 ```
 
-Packaging runs on the host platform: macOS produces the arm64 dmg + zip
+Packaging runs on the host platform: macOS produces the arm64 and x64 dmg + zip
 (signed with a Developer ID certificate and notarized by Apple), Windows
 produces the x64 NSIS installer (unsigned). `pnpm dist` therefore needs a
 Developer ID certificate and Apple notarization credentials on the build
@@ -42,7 +42,7 @@ machine; use `pnpm dist:dir` for an unsigned local package. Cross-compiling is
 not supported (the Windows installer must be built and checked on Windows):
 
 ```bash
-pnpm dist     # macOS: arm64 dmg + zip; Windows: Sqraft-Setup-<version>.exe
+pnpm dist     # macOS: arm64 + x64 dmg + zip; Windows: Sqraft-Setup-<version>.exe
 ```
 
 ## Project layout

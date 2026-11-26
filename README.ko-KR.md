@@ -14,9 +14,10 @@
 
 ### [⬇ 최신 버전 다운로드](https://github.com/wfdx165/sqraft/releases/latest)
 
-- **macOS · Apple Silicon(M 시리즈)** · 약 120 MB
+- **macOS 11.7 이상(0.1.2부터) · Apple Silicon** · 약 120 MB · `Sqraft-<버전>-arm64.dmg`
+- **macOS 11.7 이상(0.1.2부터) · Intel** · 약 120 MB · `Sqraft-<버전>-x64.dmg`
 - **Windows · x64** · 약 100 MB · 미서명
-- Releases 페이지의 **Assets**에서 `Sqraft-<버전>-arm64.dmg`(수동 설치) 또는 `Sqraft-Setup-<버전>.exe`를 선택하세요. `.zip`은 macOS 자동 업데이트가 내려받는 패키지입니다
+- Releases 페이지의 **Assets**에서 Mac에 맞는 `.dmg`(`arm64` / `x64`) 또는 `Sqraft-Setup-<버전>.exe`를 선택하세요. 해당 `.zip`은 macOS 자동 업데이트가 내려받는 패키지입니다
 - Windows는 Windows 10 22H2 이상 또는 Windows 11(x64)이 필요합니다. Linux는 지원하지 않습니다
 - 이전 버전과 업데이트 내용은 [Releases](https://github.com/wfdx165/sqraft/releases)에서 확인할 수 있습니다
 
@@ -151,14 +152,14 @@ url = "http://127.0.0.1:7331/mcp"
 
 ## 소스에서 빌드
 
-macOS(Apple Silicon) 또는 Windows(x64), Node.js 22.12(`.nvmrc` 참고), pnpm 10.33.4가 필요합니다.
+macOS 11.7 이상(Sqraft 0.1.2부터, Apple Silicon 또는 Intel) 또는 Windows(x64), Node.js 22.12(`.nvmrc` 참고), pnpm 10.33.4가 필요합니다.
 
 ```bash
 pnpm install
 pnpm dev      # 개발 서버, 렌더러 HMR
 pnpm test     # 각 패키지의 vitest
 pnpm build    # 타입 검사 + 프로덕션 빌드
-pnpm dist     # 호스트 플랫폼용 빌드(macOS는 arm64 dmg와 zip, Windows는 x64 설치 프로그램)
+pnpm dist     # 호스트 플랫폼용 빌드(macOS는 arm64와 x64 dmg와 zip, Windows는 x64 설치 프로그램)
 ```
 
 `pnpm dist`는 macOS 빌드에 서명하고 공증하므로 Developer ID 인증서와 Apple 공증 자격 증명이 필요합니다. 서명 없는 로컬 확인에는 `pnpm dist:dir`을 사용하세요.
@@ -167,7 +168,7 @@ pnpm dist     # 호스트 플랫폼용 빌드(macOS는 arm64 dmg와 zip, Windows
 
 ## 시스템 요구 사항과 알려진 제한
 
-- **macOS Apple Silicon(M 시리즈)**. Intel Mac은 지원하지 않습니다
+- **macOS 11.7 이상**, Apple Silicon과 Intel 모두 지원
 - **Windows 10 22H2 이상 또는 Windows 11(x64)**. Windows ARM64(Windows on ARM)와 Linux는 지원하지 않습니다
 - macOS 버전은 **서명 및 공증 완료** 상태라 첫 실행부터 더블 클릭으로 열립니다(「설치」 참고). Windows 설치 프로그램은 **미서명**이므로 첫 실행 시 SmartScreen 경고가 나타납니다
 - 자동 업데이트는 macOS에서만 제공합니다. Windows에서는 새 설치 프로그램을 직접 내려받아 실행합니다

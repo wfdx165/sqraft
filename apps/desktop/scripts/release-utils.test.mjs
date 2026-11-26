@@ -1,28 +1,39 @@
 import { describe, expect, it } from "vitest";
 import {
+  MAC_ARCHES,
+  archFromAppPath,
   compareVersions,
+  macOutDirName,
   notaryCredentialSource,
   parseVerifyPackArgs,
-  pickArm64Dmg,
-  pickArm64Zip,
+  pickMacDmg,
+  pickMacZip,
   pickWinSetup,
+  planResumeArches,
   signingProblems,
 } from "./release-utils.mjs";
 
 describe("发布产物匹配", () => {
-  it("接受 electron-builder 默认的 -mac zip 后缀", () => {
-    const names = ["Sqraft-0.0.2-arm64-mac.zip", "Sqraft-0.0.2-arm64-mac.zip.blockmap"];
-    expect(pickArm64Zip(names, "0.0.2")).toBe("Sqraft-0.0.2-arm64-mac.zip");
+  it("按架构匹配 zip，并忽略 blockmap", () => {
+    const names = ["Sqraft-0.1.2-arm64.zip", "Sqraft-0.1.2-x64.zip", "Sqraft-0.1.2-arm64.zip.blockmap"];
+    expect(pickMacZip(names, "0.1.2", "arm64")).toBe("Sqraft-0.1.2-arm64.zip");
+    expect(pickMacZip(names, "0.1.2", "x64")).toBe("Sqraft-0.1.2-x64.zip");
+    expect(pickMacZip(["Sqraft-0.1.2-arm64.zip.blockmap"], "0.1.2", "arm64")).toBeNull();
   });
 
-  it("也接受不带 -mac 的 zip，并忽略 blockmap", () => {
-    expect(pickArm64Zip(["Sqraft-0.0.2-arm64.zip"], "0.0.2")).toBe("Sqraft-0.0.2-arm64.zip");
-    expect(pickArm64Zip(["Sqraft-0.0.2-arm64.zip.blockmap"], "0.0.2")).toBeNull();
+  it("兼容 0.1.1 的 -arm64-mac.zip，但不把它当成 x64", () => {
+    expect(pickMacZip(["Sqraft-0.1.1-arm64-mac.zip"], "0.1.1", "arm64")).toBe(
+      "Sqraft-0.1.1-arm64-mac.zip",
+    );
+    expect(pickMacZip(["Sqraft-0.1.1-arm64-mac.zip"], "0.1.1", "x64")).toBeNull();
   });
 
-  it("只匹配当前版本，并正确找到 dmg", () => {
-    expect(pickArm64Zip(["Sqraft-0.0.1-arm64-mac.zip"], "0.0.2")).toBeNull();
-    expect(pickArm64Dmg(["Sqraft-0.0.2-arm64.dmg"], "0.0.2")).toBe("Sqraft-0.0.2-arm64.dmg");
+  it("只匹配当前版本，并按架构找 dmg", () => {
+    expect(pickMacZip(["Sqraft-0.1.1-arm64-mac.zip"], "0.1.2", "arm64")).toBeNull();
+    expect(
+      pickMacDmg(["Sqraft-0.1.2-arm64.dmg", "Sqraft-0.1.2-x64.dmg"], "0.1.2", "x64"),
+    ).toBe("Sqraft-0.1.2-x64.dmg");
+    expect(pickMacDmg(["Sqraft-0.1.2-arm64.dmg"], "0.1.2", "x64")).toBeNull();
   });
 
   it("Windows 只认当前版本的 Setup exe", () => {
@@ -30,6 +41,20 @@ describe("发布产物匹配", () => {
     expect(pickWinSetup(names, "0.0.2")).toBe("Sqraft-Setup-0.0.2.exe");
     expect(pickWinSetup(["Sqraft-Setup-0.0.1.exe"], "0.0.2")).toBeNull();
     expect(pickWinSetup(["Sqraft Setup 0.0.2.exe"], "0.0.2")).toBeNull();
+  });
+});
+
+describe("架构目录", () => {
+  it("arm64 → mac-arm64，x64 → mac；未知架构直接报错", () => {
+    expect(MAC_ARCHES).toEqual(["arm64", "x64"]);
+    expect(macOutDirName("arm64")).toBe("mac-arm64");
+    expect(macOutDirName("x64")).toBe("mac");
+    expect(() => macOutDirName("ia32")).toThrow();
+  });
+
+  it("从 .app 路径反推架构", () => {
+    expect(archFromAppPath("/repo/release/mac-arm64/Sqraft.app")).toBe("arm64");
+    expect(archFromAppPath("/repo/release/mac/Sqraft.app")).toBe("x64");
   });
 });
 
@@ -110,21 +135,32 @@ describe("发版签名 / 公证闸门", () => {
 });
 
 describe("verify-pack 参数解析", () => {
-  it("默认：无产物路径、不断言签名", () => {
+  it("默认：无产物路径、不断言签名、不断言架构", () => {
     expect(parseVerifyPackArgs([])).toEqual({
       target: null,
       expectSigned: false,
       expectNotarized: false,
       expectedTeam: "",
+      expectedArch: "",
     });
   });
 
   it("发版时 dist / release 会传的组合", () => {
-    expect(parseVerifyPackArgs(["dist/mac/Sqraft.app", "--expect-signed", "--team-id", "5BJLY53QWY"])).toEqual({
-      target: "dist/mac/Sqraft.app",
+    expect(
+      parseVerifyPackArgs([
+        "dist/mac-arm64/Sqraft.app",
+        "--arch",
+        "arm64",
+        "--expect-signed",
+        "--team-id",
+        "5BJLY53QWY",
+      ]),
+    ).toEqual({
+      target: "dist/mac-arm64/Sqraft.app",
       expectSigned: true,
       expectNotarized: false,
       expectedTeam: "5BJLY53QWY",
+      expectedArch: "arm64",
     });
   });
 
@@ -134,7 +170,15 @@ describe("verify-pack 参数解析", () => {
       expectSigned: true,
       expectNotarized: true,
       expectedTeam: "5BJLY53QWY",
+      expectedArch: "",
     });
+  });
+
+  it("--arch 只认 arm64 / x64，缺值或写错都报错", () => {
+    expect(parseVerifyPackArgs(["Sqraft.app", "--arch", "x64"]).expectedArch).toBe("x64");
+    expect(parseVerifyPackArgs(["--arch"]).error).toContain("只认 arm64 / x64");
+    expect(parseVerifyPackArgs(["--arch", "ia32"]).error).toContain("只认 arm64 / x64");
+    expect(parseVerifyPackArgs(["--arch", "--expect-signed"]).error).toContain("只认 arm64 / x64");
   });
 
   it("--team-id 缺值必须报错，不能静默跳过 Team 比对", () => {
@@ -145,5 +189,45 @@ describe("verify-pack 参数解析", () => {
   it("未知参数与多余路径都报错", () => {
     expect(parseVerifyPackArgs(["--signed"]).error).toContain("不认识的参数");
     expect(parseVerifyPackArgs(["a.app", "b.app"]).error).toContain("只能指定一个产物路径");
+  });
+});
+
+describe("dist:resume 的逐架构计划", () => {
+  const accepted = { submissionId: "1", status: "Accepted", stapledAt: "2026-01-01T00:00:00Z" };
+  const running = { submissionId: "2", status: "In Progress" };
+
+  it("arm64 已公证、x64 连 .app 都没有 → x64 补完整构建", () => {
+    const plan = planResumeArches({ states: { arm64: accepted }, appExists: (arch) => arch === "arm64" });
+    expect(plan).toEqual([
+      { arch: "arm64", action: "repack" },
+      { arch: "x64", action: "build" },
+    ]);
+  });
+
+  it("x64 已公证、arm64 没有 → arm64 补完整构建（顺序固定 arm64 在前）", () => {
+    const plan = planResumeArches({ states: { x64: accepted }, appExists: (arch) => arch === "x64" });
+    expect(plan).toEqual([
+      { arch: "arm64", action: "build" },
+      { arch: "x64", action: "repack" },
+    ]);
+  });
+
+  it(".app 在但公证超时 / 从没提交 → 只补公证", () => {
+    expect(
+      planResumeArches({ states: { arm64: accepted, x64: running }, appExists: () => true }),
+    ).toEqual([
+      { arch: "arm64", action: "repack" },
+      { arch: "x64", action: "notarize" },
+    ]);
+    expect(
+      planResumeArches({ states: { arm64: accepted }, appExists: () => true })[1],
+    ).toEqual({ arch: "x64", action: "notarize" });
+  });
+
+  it("什么都没留下 → 两个架构都要构建（调用方据此拒绝续跑）", () => {
+    expect(planResumeArches({ states: {}, appExists: () => false })).toEqual([
+      { arch: "arm64", action: "build" },
+      { arch: "x64", action: "build" },
+    ]);
   });
 });

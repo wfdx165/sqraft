@@ -14,9 +14,10 @@
 
 ### [⬇ 下载最新版](https://github.com/wfdx165/sqraft/releases/latest)
 
-- **macOS · Apple Silicon（M 系列）** · 约 120 MB
+- **macOS 11.7 及以上（0.1.2 起）· Apple Silicon** · 约 120 MB · `Sqraft-<版本>-arm64.dmg`
+- **macOS 11.7 及以上（0.1.2 起）· Intel** · 约 120 MB · `Sqraft-<版本>-x64.dmg`
 - **Windows · x64** · 约 100 MB · 未签名
-- 在 Releases 页面的 **Assets** 里选 `Sqraft-<版本>-arm64.dmg`（手动安装）或 `Sqraft-Setup-<版本>.exe`；`.zip` 是 macOS 自动更新下载的包
+- 在 Releases 页面的 **Assets** 里按芯片选对应的 `.dmg`（`arm64` / `x64`）或 `Sqraft-Setup-<版本>.exe`；对应的 `.zip` 是 macOS 自动更新下载的包
 - Windows 需要 Windows 10 22H2 或 Windows 11（x64）；Linux 暂不支持
 - 历史版本与更新说明见 [Releases](https://github.com/wfdx165/sqraft/releases)
 
@@ -151,14 +152,14 @@ url = "http://127.0.0.1:7331/mcp"
 
 ## 从源码构建
 
-需要 macOS（Apple Silicon）或 Windows（x64）、Node.js 22.12（见 `.nvmrc`）与 pnpm 10.33.4。
+需要 macOS 11.7 及以上（Sqraft 0.1.2 起，Apple Silicon 或 Intel）或 Windows（x64）、Node.js 22.12（见 `.nvmrc`）与 pnpm 10.33.4。
 
 ```bash
 pnpm install
 pnpm dev      # 开发模式，渲染层 HMR
 pnpm test     # 各包的 vitest
 pnpm build    # 类型检查 + 生产构建
-pnpm dist     # 按宿主平台出包：macOS 出 arm64 dmg 与 zip，Windows 出 x64 安装器
+pnpm dist     # 按宿主平台出包：macOS 出 arm64 与 x64 各一套 dmg 与 zip，Windows 出 x64 安装器
 ```
 
 `pnpm dist` 会签名并公证 macOS 包，需要 Developer ID 证书与 Apple 公证凭据；本机快验用 `pnpm dist:dir`（不签名、不公证）。
@@ -167,7 +168,7 @@ pnpm dist     # 按宿主平台出包：macOS 出 arm64 dmg 与 zip，Windows �
 
 ## 系统要求与已知限制
 
-- **macOS Apple Silicon（M 系列）**；Intel Mac 不支持
+- **macOS 11.7 及以上**，Apple Silicon 与 Intel 均支持
 - **Windows 10 22H2 及以上或 Windows 11（x64）**；Windows ARM64 与 Linux 不支持
 - macOS 包**已签名并公证**：双击即开，不再需要手动放行（见「安装」）；Windows 安装器**未签名**，首次运行会弹 SmartScreen
 - 自动更新只在 macOS 上提供；Windows 需要自己下载新版安装器覆盖安装

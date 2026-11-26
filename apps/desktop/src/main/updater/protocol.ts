@@ -18,10 +18,17 @@ export class UpdateManifestError extends Error {
   }
 }
 
-/** 自动安装用的平台资产键：只有 macOS arm64 会下载并替换（ADR-0029）。 */
-export const MAC_ARM64_ASSET = "mac-arm64";
-/** 同一版本的手动安装包，给"没装更新器"的用户与回滚用。 */
-export const MAC_ARM64_DMG_ASSET = "mac-arm64-dmg";
+/**
+ * macOS 可自动安装的资产键：按 `process.arch` 选（ADR-0046）。
+ * 清单里另有 `<key>-dmg`（同一版本的手动安装包，给没装更新器与新装用户），
+ * 客户端不读它，所以这里不强制要求。
+ */
+export const MAC_ASSET_KEYS = ["mac-arm64", "mac-x64"] as const;
+
+/** 当前架构对应的资产键；未知架构返回 null（调用方退化为“只提示”）。 */
+export function macAssetKey(arch: string): string | null {
+  return arch === "arm64" || arch === "x64" ? `mac-${arch}` : null;
+}
 // Windows 的 `win-x64`（Setup.exe）由 release.mjs 写入；客户端只读 version 做提示，
 // 这个键留给以后接静默安装（ADR-0033）——不要在 requireAsset 里强制要求它。
 
@@ -111,7 +118,7 @@ export function parseLatest(raw: unknown): LatestManifest {
     const asset = asAsset(value);
     if (asset) assets[key] = asset;
   }
-  if (!assets[MAC_ARM64_ASSET]) throw new UpdateManifestError("update.manifestAsset");
+  if (!MAC_ASSET_KEYS.some((key) => assets[key])) throw new UpdateManifestError("update.manifestAsset");
 
   const publishedAt = typeof record.publishedAt === "string" ? record.publishedAt : null;
   const notes = typeof record.notes === "string" && record.notes.trim() ? record.notes : null;

@@ -7,8 +7,8 @@
  * 也不提供 `--win` 这类强制指定平台的口子。
  *
  * 目标写死而不用默认值：
- * - macOS 永远 `--mac --arm64`：`release-utils.mjs`、`latest.json` 与更新器都只认 arm64，
- *   Intel 机器上出 x64 会在发版时炸在"找不到 arm64 产物"。
+ * - macOS 永远 `--mac --arm64 --x64`：两个架构各出一套 dmg / zip（ADR-0046），
+ *   分架构是为了体积与构建时间；不做 universal。
  * - Windows 永远 `--win --x64`：只发 NSIS 安装器（ADR-0033），且它是将来静默更新的路径。
  *
  * 不支持的平台直接报错，不退化：`electron-builder.yml` 没有 `linux:` 段，
@@ -36,8 +36,8 @@ import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "
 import { createRequire } from "node:module";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { notaryAuthArgs, notarizeApp, readNotaryState } from "./notarize.mjs";
-import { notaryCredentialSource } from "./release-utils.mjs";
+import { notaryAuthArgs, notarizeApp, readNotaryStates } from "./notarize.mjs";
+import { MAC_ARCHES, macOutDirName, notaryCredentialSource, planResumeArches } from "./release-utils.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const desktopRoot = resolve(here, "..");
@@ -53,7 +53,7 @@ const isMac = process.platform === "darwin";
 
 /** 宿主 → electron-builder 参数；不支持的平台返回 null。 */
 function builderArgs(platform) {
-  if (platform === "darwin") return ["--mac", "--arm64"];
+  if (platform === "darwin") return ["--mac", "--arm64", "--x64"];
   if (platform === "win32") return ["--win", "--x64"];
   return null;
 }
@@ -167,7 +167,7 @@ function notaryPreflight(env) {
 const args = builderArgs(process.platform);
 if (!args) {
   console.error(
-    `dist: 不支持在 ${process.platform} 上出包——本项目只在 macOS（arm64）与 Windows（x64）上打包。\n` +
+    `dist: 不支持在 ${process.platform} 上出包——本项目只在 macOS（arm64 / x64）与 Windows（x64）上打包。\n` +
       "  只想验证构建：pnpm build；只想快速出个未打包目录：pnpm dist:dir。",
   );
   process.exit(1);
@@ -197,54 +197,65 @@ if (resume && !isMac) {
 }
 
 /**
- * `pnpm dist:resume`：公证失败 / 超时后复用已签好的 `.app`。
+ * `pnpm dist:resume`：公证失败 / 超时后按架构补齐，再重打 dmg / zip。
  *
- * 只补"公证 → staple → 打 dmg / zip"，不跑类型检查、构建与重签。
- * `--prepackaged` 让 electron-builder 跳过打包与签名（afterSign 也不会再触发），
- * 直接对已 staple 的 `.app` 生成产物——票据因此不会因为重新签名而失效。
+ * 三种动作（见 `planResumeArches`）：
+ * - 已公证 → 只 `--prepackaged` 重打包，不重新构建、不重新签名（票据因此不会失效）；
+ * - `.app` 在但没公证 → 补公证；
+ * - 连 `.app` 都没有 → 补跑这个架构的完整构建（含签名 + 公证）。
+ *
+ * 最后一种必须有：electron-builder 按 arm64 → x64 串行构建，arm64 公证失败时
+ * `release/mac` 根本不生成，只补公证的 resume 会卡在"找不到 x64 产物"死胡同。
  */
 async function resumeBuild() {
-  // 只认本流程留下的公证记录：否则会拿一份"碰巧在 release/ 里的旧 .app"去提交公证
-  const state = readNotaryState(releaseDir);
-  if (!state?.submissionId) {
+  const states = readNotaryStates(releaseDir);
+  const appPathOf = (arch) => join(releaseDir, macOutDirName(arch), "Sqraft.app");
+  const plan = planResumeArches({ states, appExists: (arch) => existsSync(appPathOf(arch)) });
+  // 必须至少有一次公证提交记录：否则可能只是 dist:dir 留下的未签名目录，拿它去提交公证
+  // 只会换来一次必然 Invalid 的提交。这种情况要的是 pnpm dist，不是 resume。
+  if (!MAC_ARCHES.some((arch) => states[arch]?.submissionId)) {
     console.error(
-      `dist: --resume 需要 ${join(releaseDir, "notary.json")}（上一次公证的 submission id）。\n` +
+      `dist: --resume 需要 ${join(releaseDir, "notary.json")} 里至少一个架构的 submission id。\n` +
         "  只有 pnpm dist 在公证阶段失败 / 超时后才用它；完整构建请跑 pnpm dist",
     );
     process.exit(1);
   }
-  const appOutDir = join(releaseDir, "mac-arm64");
-  const recordedApp = typeof state.appPath === "string" && state.appPath.endsWith(".app") ? state.appPath : "";
-  if (recordedApp && !existsSync(recordedApp)) {
-    console.error(`dist: --resume 记录的 .app 不在了：${recordedApp}。重跑 pnpm dist`);
-    process.exit(1);
-  }
-  if (!recordedApp && !existsSync(appOutDir)) {
-    console.error(`dist: --resume 需要已签名的产物：${appOutDir} 不存在。先跑 pnpm dist`);
-    process.exit(1);
-  }
-  const appName = recordedApp ? "" : readdirSync(appOutDir).find((name) => name.endsWith(".app"));
-  if (!recordedApp && !appName) {
-    console.error(`dist: --resume 在 ${appOutDir} 里找不到 .app。先跑 pnpm dist`);
-    process.exit(1);
-  }
-  const appPath = recordedApp || join(appOutDir, appName);
   const identity = macIdentity();
-  console.log(`dist: --resume 复用 ${appPath}（不重新构建、不重新签名）`);
-  const next = await notarizeApp({ appPath, releaseDir });
-  if (next?.status !== "Accepted" || !next?.stapledAt) {
-    console.error("dist: 公证状态不是 Accepted 或票据没有 staple，中止");
-    process.exit(1);
+  const arches = {};
+  for (const { arch, action } of plan) {
+    const appPath = appPathOf(arch);
+    if (action === "build") {
+      console.log(`dist: --resume ${arch} 还没有 .app，补跑完整构建（签名 + 公证）`);
+      // 这条走完整流程：不能带 SQRAFT_SKIP_NOTARIZE
+      run(process.execPath, [builderCli, "--mac", `--${arch}`], { env: { ...process.env } });
+    } else if (action === "notarize") {
+      console.log(`dist: --resume ${arch} 复用 ${appPath}，补公证（不重新构建、不重新签名）`);
+      const next = await notarizeApp({ appPath, releaseDir, arch });
+      if (next?.status !== "Accepted" || !next?.stapledAt) {
+        console.error(`dist: ${arch} 公证状态不是 Accepted 或票据没有 staple，中止`);
+        process.exit(1);
+      }
+    }
+    if (action !== "build") {
+      // 补跑完整构建时 electron-builder 已经打过 dmg / zip，不必再打一遍
+      console.log(`dist: --resume ${arch} 重打 dmg / zip`);
+      run(process.execPath, [builderCli, "--mac", `--${arch}`, "--prepackaged", appPath], {
+        // 每条命令独立 env：绝不复用被污染的 builderEnv，否则后面的补构建会静默跳过公证
+        env: { ...process.env, SQRAFT_SKIP_NOTARIZE: "1" },
+      });
+    }
+    const done = readNotaryStates(releaseDir)[arch];
+    if (done?.status !== "Accepted" || !done?.stapledAt) {
+      console.error(`dist: --resume ${arch} 结束后仍没有 Accepted + staple 的记录，中止`);
+      process.exit(1);
+    }
+    arches[arch] = { submissionId: done.submissionId, notarizedAt: done.stapledAt };
   }
-  console.log("dist: 公证完成，用 --prepackaged 重打 dmg / zip");
-  builderEnv.SQRAFT_SKIP_NOTARIZE = "1";
-  run(process.execPath, [builderCli, "--mac", "--arm64", "--prepackaged", appPath], { env: builderEnv });
   return {
     ...identity,
     credential: notaryCredentialSource(process.env)?.kind ?? null,
     notarized: true,
-    submissionId: next.submissionId,
-    notarizedAt: next.stapledAt,
+    arches,
   };
 }
 
@@ -289,27 +300,46 @@ if (isMac && resume) {
   // afterSign 已经把公证结果写进 release/notary.json：这里只做交叉确认，避免钩子被跳过
   // （例如有人把 electron-builder.yml 的 afterSign 删了）还继续打出一个没公证的包。
   if (signing?.notarized) {
-    const state = readNotaryState(releaseDir);
-    if (state?.status !== "Accepted" || !state.stapledAt) {
+    const states = readNotaryStates(releaseDir);
+    const missing = MAC_ARCHES.filter(
+      (arch) => states[arch]?.status !== "Accepted" || !states[arch]?.stapledAt,
+    );
+    if (missing.length > 0) {
       console.error(
-        "dist: afterSign 没有留下已通过的公证状态（release/notary.json 缺失或未 staple）。\n" +
+        `dist: afterSign 没有留下已通过的公证状态（缺失 ${missing.join("、")}；release/notary.json）。\n` +
           "  检查 electron-builder.yml 的 afterSign 是否仍指向 scripts/after-sign.mjs",
       );
       process.exit(1);
     }
-    signing = { ...signing, submissionId: state.submissionId, notarizedAt: state.stapledAt };
+    signing = {
+      ...signing,
+      arches: Object.fromEntries(
+        MAC_ARCHES.map((arch) => [
+          arch,
+          { submissionId: states[arch].submissionId, notarizedAt: states[arch].stapledAt },
+        ]),
+      ),
+    };
   }
 }
 
 // 成品防护验收（ADR-0030 / ADR-0034）：源码 / 依赖漏回包里、或包没签好 / 没公证，都在这里中止。
-const verifyArgs = [join(desktopRoot, "scripts", "verify-pack.mjs")];
-if (signing) {
-  verifyArgs.push("--expect-signed");
-  if (signing.teamId) verifyArgs.push("--team-id", signing.teamId);
-  // 公证默认开启：Gatekeeper 接受 + 票据已 staple；只有 --no-notarize 才跳过这两条
-  if (signing.notarized) verifyArgs.push("--expect-notarized");
+// macOS 两个架构各验一遍（并且断言主程序的 Mach-O 架构与目录一致）；Windows 仍是一个 win-unpacked。
+const verifyScript = join(desktopRoot, "scripts", "verify-pack.mjs");
+const verifyTargets = isMac
+  ? MAC_ARCHES.map((arch) => ({ arch, target: join(releaseDir, macOutDirName(arch), "Sqraft.app") }))
+  : [{ arch: "", target: null }];
+for (const { arch, target } of verifyTargets) {
+  const verifyArgs = [verifyScript];
+  if (target) verifyArgs.push(target, "--arch", arch);
+  if (signing) {
+    verifyArgs.push("--expect-signed");
+    if (signing.teamId) verifyArgs.push("--team-id", signing.teamId);
+    // 公证默认开启：Gatekeeper 接受 + 票据已 staple；只有 --no-notarize 才跳过这两条
+    if (signing.notarized) verifyArgs.push("--expect-notarized");
+  }
+  run(process.execPath, verifyArgs);
 }
-run(process.execPath, verifyArgs);
 
 /* ---------- 构建印章（release.mjs 用它确认产物来自当前提交） ---------- */
 
@@ -340,6 +370,8 @@ if (dirOnly) {
     version,
     ...gitInfo(),
     platform: process.platform,
+    // macOS 两个架构的分架构产物；Windows 只有 x64
+    arches: isMac ? MAC_ARCHES : ["x64"],
     builtAt: new Date().toISOString(),
     // macOS 发版带签名与公证信息；Windows 与 --dir 构建为 null。真正的结果由
     // verify-pack 断言，这里只用来让 release 拒绝"未签名 / 未公证 / 切换前的旧包"。

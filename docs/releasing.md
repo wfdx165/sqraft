@@ -1,6 +1,6 @@
 # 发版手册
 
-Sqraft 发布 **macOS arm64** 与 **Windows x64** 两个平台的安装包：
+Sqraft 发布 **macOS（arm64 与 x64）** 与 **Windows x64** 的安装包：
 源码、安装包与下载页都在同一个公开仓库 [`wfdx165/sqraft`](https://github.com/wfdx165/sqraft)。
 macOS 的自动更新靠该仓库的 `releases/latest/download/latest.json`（ADR-0029）；
 Windows 只做「检查并提示」，更新靠手动下载安装器（ADR-0033）。
@@ -117,10 +117,10 @@ pnpm release
 依次执行：预检（发布说明存在、版本大于最新已发布版本、发行仓没有同名 release、gh 可用且仓库 public、
 四语言 README 一致、`dependencies` 为空）→ 读 `release/build.json`（版本要对、commit 必须是 HEAD、
 签名信息齐全且 `signing.notarized === true`；`--no-notarize` 的应急包在这里被拒收）→
-检查 `release/` 里 dmg / zip / exe 齐全 → `pnpm test` →
+检查 `release/` 里两个架构的 dmg / zip 与 exe 齐全 → `pnpm test` →
 `verify-pack --expect-signed --expect-notarized`（ADR-0030 / ADR-0034）→
-sha256 → `latest.json`（`mac-arm64` / `mac-arm64-dmg` / `win-x64` 三个键）→
-`gh release create v<version> --draft` → 逐个 `gh release upload --clobber` → 回读断言四个资产齐全。
+sha256 → `latest.json`（`mac-arm64` / `mac-arm64-dmg` / `mac-x64` / `mac-x64-dmg` / `win-x64`）→
+`gh release create v<version> --draft` → 逐个 `gh release upload --clobber` → 回读断言六个资产齐全。
 
 `build.json` 是"构建与上传解耦"的防护：commit 不是 HEAD、版本对不上、或产物不在清单里，
 都直接中止——不会出现"改完代码忘了重新 dist，把旧包发出去"。构建时工作区不干净只告警。
@@ -145,7 +145,9 @@ draft 阶段线上不可见（`/releases/latest` 仍指向上一个版本），�
 ```bash
 gh release upload v<version> \
   apps/desktop/release/Sqraft-<version>-arm64.dmg \
-  apps/desktop/release/Sqraft-<version>-arm64-mac.zip \
+  apps/desktop/release/Sqraft-<version>-arm64.zip \
+  apps/desktop/release/Sqraft-<version>-x64.dmg \
+  apps/desktop/release/Sqraft-<version>-x64.zip \
   apps/desktop/release/Sqraft-Setup-<version>.exe \
   apps/desktop/release/latest.json \
   --repo wfdx165/sqraft --clobber
@@ -164,8 +166,8 @@ gh release view v0.0.2 --repo wfdx165/sqraft --json isDraft,assets \
   --jq '{draft:.isDraft, assets:[.assets[].name]}'
 ```
 
-应看到四个资产：`Sqraft-<version>-arm64.dmg`、`Sqraft-<version>-arm64-mac.zip`、
-`Sqraft-Setup-<version>.exe`、`latest.json`。
+应看到六个资产：`Sqraft-<version>-arm64.dmg`、`Sqraft-<version>-arm64.zip`、
+`Sqraft-<version>-x64.dmg`、`Sqraft-<version>-x64.zip`、`Sqraft-Setup-<version>.exe`、`latest.json`。
 
 macOS 装一次再发布。**用浏览器下载**（这样会带上隔离标记，才是用户真实路径），别用 `gh`：
 
@@ -178,7 +180,7 @@ open https://github.com/wfdx165/sqraft/releases   # 找到 v<version> 的 draft�
 也不应出现「已损坏」。若提示与此不符，先在本机复查产物：
 
 ```bash
-APP=apps/desktop/release/mac-arm64/Sqraft.app
+APP=apps/desktop/release/mac-arm64/Sqraft.app   # x64 包在 release/mac/Sqraft.app
 codesign --verify --deep --strict --verbose=2 "$APP"
 codesign -dv --verbose=4 "$APP" | grep -E "Authority|TeamIdentifier|flags"
 spctl --assess --type execute --verbose=4 "$APP"   # 应为 source=Notarized Developer ID
@@ -272,8 +274,10 @@ pnpm --filter @sqraft/desktop run check:readmes
   "publishedAt": "2026-11-08T09:00:00.000Z",
   "notes": "…",
   "assets": {
-    "mac-arm64": { "url": "…zip", "size": 123, "sha256": "…" },
-    "mac-arm64-dmg": { "url": "…dmg", "size": 123, "sha256": "…" },
+    "mac-arm64": { "url": "…arm64.zip", "size": 123, "sha256": "…" },
+    "mac-arm64-dmg": { "url": "…arm64.dmg", "size": 123, "sha256": "…" },
+    "mac-x64": { "url": "…x64.zip", "size": 123, "sha256": "…" },
+    "mac-x64-dmg": { "url": "…x64.dmg", "size": 123, "sha256": "…" },
     "win-x64": { "url": "…exe", "size": 123, "sha256": "…" }
   }
 }
@@ -289,13 +293,13 @@ pnpm --filter @sqraft/desktop run check:readmes
 
 公证默认开启：`pnpm dist` 在签完 `.app` 后由 `afterSign`（`scripts/after-sign.mjs`）提交
 notarytool、轮询、staple，然后 electron-builder 才打 dmg / zip（票据必须进包）。
-状态写在 `release/notary.json`（submission id、状态、CDHash、staple 时间），
-`pnpm dist:resume` 靠它续跑；`pnpm clean` 会随 `release/` 一起清掉。
+状态写在 `release/notary.json`（按架构分槽：`{ arm64, x64 }`，各含 submission id、状态、CDHash、staple 时间），
+`pnpm dist:resume` 靠它决定每个架构做什么；`pnpm clean` 会随 `release/` 一起清掉。
 
 ### 卡住 / 超时 / 失败
 
 - 轮询上限 60 分钟，超时**不自动重试**（重试会在 Apple 侧堆重复提交）。
-  `dist` 以非 0 退出并打出 submission id，`.app` 已签好留在 `release/mac-arm64/`。
+  `dist` 以非 0 退出并打出 submission id，`.app` 已签好留在对应架构目录（`release/mac-arm64/` 或 `release/mac/`）。
 - 先查状态与原因（只读）：
 
   ```bash
@@ -308,8 +312,12 @@ notarytool、轮询、staple，然后 electron-builder 才打 dmg / zip（票据
 - 状态已是 `Accepted` 时接着走，不重新构建：
 
   ```bash
-  pnpm dist:resume   # 复用已签名的 .app：补轮询 / staple，再 --prepackaged 重打 dmg + zip
+  pnpm dist:resume
   ```
+
+  `dist:resume` 按架构决定动作：已公证 → 只 `--prepackaged` 重打 dmg + zip（不重签，票据不会失效）；
+  `.app` 在但公证没完成 → 补轮询 / staple；**某个架构连 `.app` 都没有**（前一个架构失败时，
+  electron-builder 不会继续构建后一个）→ 补跑该架构的完整构建，含签名与一次新的公证提交。
 
 - 状态是 `Invalid`：`dist` 会自己把 `notarytool log` 的问题列表打出来；修正后重跑 `pnpm dist`。
 - 轮询期间机器休眠会让 `notarytool` 以 `-1009 offline` 退出：用 `caffeinate -i pnpm dist`。

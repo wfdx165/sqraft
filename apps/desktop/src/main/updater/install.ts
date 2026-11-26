@@ -37,7 +37,7 @@ export function appBundlePathOf(executable: string): string | null {
 
 export interface InstallSupport {
   /**
-   * install：能下载并替换应用包（macOS arm64）。
+   * install：能下载并替换应用包（macOS arm64 / x64，同名架构包）。
    * notify：只能提示新版本并打开下载页（Windows，本版不做静默安装）。
    * none：连检查都不做（开发态 / 其他平台）。
    */
@@ -77,7 +77,7 @@ export async function resolveInstallSupport(options: SupportOptions): Promise<In
   if (options.platform !== "darwin") {
     return { mode: "none", reason: t("update.reasonPlatform"), appPath: null };
   }
-  if (options.arch !== "arm64") {
+  if (options.arch !== "arm64" && options.arch !== "x64") {
     return { mode: "none", reason: t("update.reasonArch"), appPath: null };
   }
   const appPath = appBundlePathOf(options.executable);

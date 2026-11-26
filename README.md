@@ -14,9 +14,10 @@ The app is fully local: no account, no cloud, no model calls. A design is simply
 
 ### [⬇ Download the latest version](https://github.com/wfdx165/sqraft/releases/latest)
 
-- **macOS · Apple Silicon (M series)** · about 120 MB
+- **macOS 11.7+ (0.1.2+) · Apple Silicon** · about 120 MB · `Sqraft-<version>-arm64.dmg`
+- **macOS 11.7+ (0.1.2+) · Intel** · about 120 MB · `Sqraft-<version>-x64.dmg`
 - **Windows · x64** · about 100 MB · unsigned
-- Under **Assets** on the Releases page pick `Sqraft-<version>-arm64.dmg` (manual install) or `Sqraft-Setup-<version>.exe`; the `.zip` is what the macOS updater downloads
+- Under **Assets** on the Releases page pick the `.dmg` for your Mac (`arm64` or `x64`) or `Sqraft-Setup-<version>.exe`; the matching `.zip` is what the macOS updater downloads
 - Windows 10 22H2 or Windows 11, x64. Linux is not supported
 - Older versions and release notes: [Releases](https://github.com/wfdx165/sqraft/releases)
 
@@ -151,14 +152,14 @@ The endpoint only listens on `127.0.0.1` and rejects requests carrying an `Origi
 
 ## Build from source
 
-Requirements: macOS on Apple Silicon or Windows x64, Node.js 22.12 (see `.nvmrc`) and pnpm 10.33.4.
+Requirements: macOS 11.7 or later, Sqraft 0.1.2+ (Apple Silicon or Intel) or Windows x64, Node.js 22.12 (see `.nvmrc`) and pnpm 10.33.4.
 
 ```bash
 pnpm install
 pnpm dev      # electron-vite dev server with renderer HMR
 pnpm test     # vitest across packages
 pnpm build    # type check + production bundle
-pnpm dist     # host platform: macOS arm64 dmg + zip, or the Windows x64 installer
+pnpm dist     # host platform: macOS arm64 + x64 dmg + zip each, or the Windows x64 installer
 ```
 
 `pnpm dist` signs and notarizes the macOS build, so it needs a Developer ID certificate and Apple notarization credentials; use `pnpm dist:dir` for an unsigned local package.
@@ -167,7 +168,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the project layout and the review pro
 
 ## Requirements and known limitations
 
-- **macOS Apple Silicon (M series)**; Intel Macs are not supported
+- **macOS 11.7+** on Apple Silicon or Intel
 - **Windows 10 22H2+ or Windows 11 (x64)**; Windows on ARM (ARM64) and Linux are not supported
 - The macOS app is **signed and notarized**: it opens on the first try without a Gatekeeper prompt. The Windows installer is **unsigned**, so SmartScreen warns on the first run
 - Auto-update is macOS-only; on Windows you download and run the new installer yourself

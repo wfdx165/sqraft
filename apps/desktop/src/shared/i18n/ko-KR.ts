@@ -383,7 +383,7 @@ export const koKR: Record<keyof typeof zhCN, string> = {
   "update.incomplete": "업데이트 패키지가 불완전합니다: {total}바이트가 필요하지만 {received}바이트만 받았습니다",
   "update.shaMismatch": "업데이트 패키지 검증에 실패했습니다(sha256 불일치)",
   "update.reasonPlatform": "이 운영 체제는 업데이트 확인을 지원하지 않습니다",
-  "update.reasonArch": "이 칩은 자동 업데이트를 지원하지 않습니다(Apple Silicon만 지원)",
+  "update.reasonArch": "이 칩에서는 자동 업데이트를 지원하지 않습니다",
   "update.reasonNoApp": "앱 번들을 찾을 수 없습니다. Sqraft를 다시 설치하세요.",
   "update.reasonReadOnly": "Sqraft가 읽기 전용 위치에서 실행 중입니다. '응용 프로그램'으로 옮긴 후 다시 확인하세요.",
   "update.reasonNoPermission": "'응용 프로그램'에 쓸 권한이 없습니다. 새 버전을 수동으로 다운로드하여 설치하세요.",
@@ -393,7 +393,7 @@ export const koKR: Record<keyof typeof zhCN, string> = {
   "update.manifestNotObject": "latest.json이 객체가 아닙니다",
   "update.manifestVersion": "latest.json의 버전이 잘못되었습니다: {value}",
   "update.manifestAssets": "latest.json에 assets가 없습니다",
-  "update.manifestAsset": "latest.json에 사용 가능한 mac-arm64 자산이 없습니다",
+  "update.manifestAsset": "latest.json에 이 Mac에서 사용할 수 있는 업데이트 자산이 없습니다",
 
   // 도구 모음
   "toolbar.select": "선택",

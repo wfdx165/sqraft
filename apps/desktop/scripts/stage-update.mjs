@@ -8,6 +8,8 @@
  * 用法（仓库根）：
  *   pnpm stage:update                 # 用 release/ 里与 apps/desktop/package.json 同版本的 zip
  *   pnpm stage:update --zip path.zip  # 指定包
+ *   pnpm stage:update --arch x64      # 指定架构（默认按目标 .app 的实际架构，再退到宿主架构）
+ *   pnpm stage:update --app <Sqraft.app>  # 指定演练目标（默认 /Applications/Sqraft.app）
  *   pnpm stage:update --force         # 应用还开着也继续（不推荐）
  *
  * 前提：目标版本必须**高于**当前安装的版本，否则启动时会被当成残留清掉。
@@ -18,7 +20,7 @@ import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { pickArm64Zip } from "./release-utils.mjs";
+import { MAC_ARCHES, pickMacZip } from "./release-utils.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../..");
@@ -28,6 +30,35 @@ const releaseDir = join(desktopRoot, "release");
 const force = process.argv.includes("--force");
 const zipArgIndex = process.argv.indexOf("--zip");
 const zipArg = zipArgIndex === -1 ? null : process.argv[zipArgIndex + 1];
+
+/** 读 `.app` 主程序的 Mach-O 架构；读不到返回空串（不猜）。 */
+function archOfApp(appPath) {
+  const bin = join(appPath, "Contents", "MacOS", "Sqraft");
+  if (!existsSync(bin)) return "";
+  const lipo = spawnSync("lipo", ["-archs", bin], { encoding: "utf8" });
+  if (lipo.status !== 0) return "";
+  const archs = (lipo.stdout ?? "").trim().split(/\s+/);
+  if (archs.includes("arm64")) return "arm64";
+  if (archs.includes("x86_64")) return "x64";
+  return "";
+}
+
+const appArgIndex = process.argv.indexOf("--app");
+const appArg = appArgIndex === -1 ? "" : (process.argv[appArgIndex + 1] ?? "");
+/**
+ * 演练哪个架构：`--arch` > 演练目标 `.app` 的实际架构 > 宿主 node 架构。
+ * 不能只看宿主：M 系列上用 Rosetta 演练 x64 包时，宿主的 process.arch 仍是 arm64，
+ * 会挑成 arm64 zip 塞给 x64 应用，替换后起不来、被误判成"更新器坏了"。
+ */
+const archArgIndex = process.argv.indexOf("--arch");
+const archArg = archArgIndex === -1 ? "" : (process.argv[archArgIndex + 1] ?? "");
+const arch =
+  archArg || archOfApp(appArg || "/Applications/Sqraft.app") || (process.arch === "x64" ? "x64" : "arm64");
+if (!MAC_ARCHES.includes(arch)) {
+  console.error(`stage:update: --arch 只认 ${MAC_ARCHES.join(" / ")}，收到 ${arch}`);
+  process.exit(1);
+}
+console.log(`stage:update: 演练 ${arch} 包（来源：${archArg ? "--arch" : "目标 app / 宿主架构"}）`);
 
 function fail(message) {
   console.error(`stage:update: ${message}`);
@@ -58,8 +89,8 @@ const version = JSON.parse(readFileSync(join(desktopRoot, "package.json"), "utf8
 
 let zipPath = zipArg ? resolve(repoRoot, zipArg) : null;
 if (!zipPath) {
-  const candidate = pickArm64Zip(readdirSync(releaseDir), version);
-  if (!candidate) fail(`release/ 里找不到 ${version} 的 arm64 zip，先跑 pnpm dist`);
+  const candidate = pickMacZip(readdirSync(releaseDir), version, arch);
+  if (!candidate) fail(`release/ 里找不到 ${version} 的 ${arch} zip，先跑 pnpm dist`);
   zipPath = join(releaseDir, candidate);
 }
 if (!existsSync(zipPath)) fail(`找不到 ${zipPath}`);

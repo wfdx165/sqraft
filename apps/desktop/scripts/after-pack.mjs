@@ -37,7 +37,8 @@ function runPlutil(args) {
  * fuse 配置（ADR-0030）。
  *
  * - `strictlyRequireAllFuses`：Electron 升级新增 fuse 时直接构建失败，逼着我们复核一次，
- *   而不是默默继承默认值。
+ *   而不是默默继承默认值。当前列表对应 Electron 37（8 个 fuse，没有 Electron 45 的
+ *   `WasmTrapHandlers`）；升级 / 降级时先 `pnpm exec electron-fuses read` 对照再改。
  * - `resetAdHocDarwinSignature`：翻 fuse 会改主二进制、破坏 adhoc 签名，arm64 上
  *   macOS 会拒绝启动未签名的主二进制；这里让 fuses 自己补一遍 adhoc。
  * - `EnableEmbeddedAsarIntegrityValidation` 保持关：哈希写在 `Info.plist` 里，签名之后才受保护
@@ -56,8 +57,6 @@ const FUSE_CONFIG = {
   [FuseV1Options.EnableCookieEncryption]: false,
   [FuseV1Options.LoadBrowserProcessSpecificV8Snapshot]: false,
   [FuseV1Options.GrantFileProtocolExtraPrivileges]: true,
-  // Electron 45 新增（@electron/fuses 2.x）；保持默认开启，关掉会影响 WebAssembly 的 trap 处理
-  [FuseV1Options.WasmTrapHandlers]: true,
 };
 
 function removeKey(plist, key) {

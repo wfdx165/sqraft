@@ -383,7 +383,7 @@ export const zhCN = {
   "update.incomplete": "更新包不完整：应有 {total} 字节，实际 {received} 字节",
   "update.shaMismatch": "更新包校验失败（sha256 不匹配）",
   "update.reasonPlatform": "当前系统暂不支持检查更新",
-  "update.reasonArch": "当前芯片暂不支持自动更新（只支持 Apple Silicon）",
+  "update.reasonArch": "当前芯片架构暂不支持自动更新",
   "update.reasonNoApp": "无法定位应用包，请重新安装 Sqraft",
   "update.reasonReadOnly": "Sqraft 正在只读位置运行，请先把它拖进「应用程序」再检查更新",
   "update.reasonNoPermission": "没有写入「应用程序」的权限，请手动下载新版覆盖安装",
@@ -393,7 +393,7 @@ export const zhCN = {
   "update.manifestNotObject": "latest.json 不是对象",
   "update.manifestVersion": "latest.json 的版本号不合法：{value}",
   "update.manifestAssets": "latest.json 缺少 assets",
-  "update.manifestAsset": "latest.json 缺少可用的 mac-arm64 资产",
+  "update.manifestAsset": "latest.json 缺少当前架构可用的更新资产",
 
   // 工具栏
   "toolbar.select": "选择",

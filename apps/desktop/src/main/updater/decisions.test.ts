@@ -16,12 +16,12 @@ import { parseLatest } from "./protocol";
 const now = 1_700_000_000_000;
 const sha = "b".repeat(64);
 
-function manifest(version: string) {
+function manifest(version: string, assets?: Record<string, unknown>) {
   return parseLatest({
     version,
     notes: "说明",
     publishedAt: "2026-11-03T00:00:00Z",
-    assets: {
+    assets: assets ?? {
       "mac-arm64": {
         url: "https://github.com/wfdx165/sqraft/releases/download/v2/Sqraft.zip",
         sha256: sha,
@@ -124,6 +124,7 @@ describe("拿到 latest.json 之后", () => {
     manual: false,
     installable: true,
     autoDownload: true,
+    arch: "arm64",
   } as const;
 
   it("不高于当前版本 → 已是最新，不下载", () => {
@@ -135,12 +136,32 @@ describe("拿到 latest.json 之后", () => {
     );
   });
 
-  it("更高版本 → 带 mac-arm64 资产去下载", () => {
+  it("更高版本 → 带当前架构的资产去下载", () => {
     const plan = planForLatest({ ...base, manifest: manifest("0.2.0") });
     expect(plan.kind).toBe("update");
     if (plan.kind !== "update") throw new Error("unreachable");
     expect(plan.asset.sha256).toBe(sha);
     expect(plan.notes).toBe("说明");
+  });
+
+  it("x64 机器选 mac-x64 资产，不拿 arm64 顶替", () => {
+    const asset = (name: string) => ({
+      url: `https://github.com/wfdx165/sqraft/releases/download/v2/${name}`,
+      sha256: sha,
+    });
+    const plan = planForLatest({
+      ...base,
+      arch: "x64",
+      manifest: manifest("0.2.0", { "mac-arm64": asset("arm64.zip"), "mac-x64": asset("x64.zip") }),
+    });
+    expect(plan.kind).toBe("update");
+    if (plan.kind !== "update") throw new Error("unreachable");
+    expect(plan.asset.url).toContain("x64.zip");
+  });
+
+  it("清单里没有当前架构的包 → 只提示手动下载，绝不装错架构", () => {
+    const plan = planForLatest({ ...base, arch: "x64", manifest: manifest("0.2.0") });
+    expect(plan.kind).toBe("available");
   });
 
   it("不能就地安装的平台（Windows）只提示新版本，不要求资产", () => {

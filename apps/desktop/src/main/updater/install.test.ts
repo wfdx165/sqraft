@@ -39,11 +39,23 @@ describe("更新支持判定", () => {
     expect(support.appPath).toBe("/Applications/Sqraft.app");
   });
 
-  it("macOS Intel 不支持（本版只出 arm64）", async () => {
+  it("macOS x64 且可写 → 同样就地安装（ADR-0046）", async () => {
     const support = await resolveInstallSupport({
       packaged: true,
       platform: "darwin",
       arch: "x64",
+      executable: "/Applications/Sqraft.app/Contents/MacOS/Sqraft",
+      isWritable: writable,
+    });
+    expect(support.mode).toBe("install");
+    expect(support.appPath).toBe("/Applications/Sqraft.app");
+  });
+
+  it("macOS 其它架构（如 ia32）不检查", async () => {
+    const support = await resolveInstallSupport({
+      packaged: true,
+      platform: "darwin",
+      arch: "ia32",
       executable: "/Applications/Sqraft.app/Contents/MacOS/Sqraft",
       isWritable: writable,
     });

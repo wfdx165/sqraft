@@ -19,7 +19,8 @@ export default async function afterSign(context) {
   }
   const appPath = join(context.appOutDir, `${context.packager.appInfo.productFilename}.app`);
   if (!existsSync(appPath)) throw new Error(`[after-sign] 找不到 ${appPath}`);
-  // outDir 是 release/（electron-builder 的 output 目录）；拿不到时按 mac-arm64 的上一级兜底
-  const releaseDir = context.outDir ? resolve(context.outDir) : resolve(context.appOutDir, "..", "..");
+  // outDir 是 release/（electron-builder 的 output 目录）；拿不到时从 appOutDir
+  // （release/mac-arm64 或 release/mac）退一级兜底
+  const releaseDir = context.outDir ? resolve(context.outDir) : resolve(context.appOutDir, "..");
   await notarizeApp({ appPath, releaseDir });
 }

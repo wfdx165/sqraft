@@ -14,9 +14,10 @@
 
 ### [⬇ 最新版をダウンロード](https://github.com/wfdx165/sqraft/releases/latest)
 
-- **macOS · Apple Silicon（M シリーズ）** · 約 120 MB
+- **macOS 11.7 以降（0.1.2 以降）· Apple Silicon** · 約 120 MB · `Sqraft-<バージョン>-arm64.dmg`
+- **macOS 11.7 以降（0.1.2 以降）· Intel** · 約 120 MB · `Sqraft-<バージョン>-x64.dmg`
 - **Windows · x64** · 約 100 MB · 未署名
-- Releases ページの **Assets** から `Sqraft-<バージョン>-arm64.dmg`（手動インストール）または `Sqraft-Setup-<バージョン>.exe` を選んでください。`.zip` は macOS の自動更新がダウンロードするパッケージです
+- Releases ページの **Assets** から、お使いの Mac に合う `.dmg`（`arm64` / `x64`）または `Sqraft-Setup-<バージョン>.exe` を選んでください。対応する `.zip` は macOS の自動更新がダウンロードするパッケージです
 - Windows は Windows 10 22H2 以降または Windows 11（x64）が必要です。Linux は未対応
 - 過去のバージョンと更新内容は [Releases](https://github.com/wfdx165/sqraft/releases) を参照
 
@@ -151,14 +152,14 @@ url = "http://127.0.0.1:7331/mcp"
 
 ## ソースからビルド
 
-macOS（Apple Silicon）または Windows（x64）、Node.js 22.12（`.nvmrc` を参照）、pnpm 10.33.4 が必要です。
+macOS 11.7 以降（Sqraft 0.1.2 以降、Apple Silicon または Intel）または Windows（x64）、Node.js 22.12（`.nvmrc` を参照）、pnpm 10.33.4 が必要です。
 
 ```bash
 pnpm install
 pnpm dev      # 開発サーバー（レンダラーは HMR）
 pnpm test     # 各パッケージの vitest
 pnpm build    # 型チェック + 本番ビルド
-pnpm dist     # ホスト OS 向けにビルド（macOS は arm64 dmg と zip、Windows は x64 インストーラー）
+pnpm dist     # ホスト OS 向けにビルド（macOS は arm64 と x64 の dmg と zip、Windows は x64 インストーラー）
 ```
 
 `pnpm dist` は macOS 版の署名と公証を行うため、Developer ID 証明書と Apple の公証資格情報が必要です。署名なしのローカル確認には `pnpm dist:dir` を使ってください。
@@ -167,7 +168,7 @@ pnpm dist     # ホスト OS 向けにビルド（macOS は arm64 dmg と zip、
 
 ## 動作環境と既知の制限
 
-- **macOS Apple Silicon（M シリーズ）**。Intel Mac は未対応
+- **macOS 11.7 以降**（Apple Silicon / Intel 両対応）
 - **Windows 10 22H2 以降または Windows 11（x64）**。Windows ARM64（Windows on ARM）と Linux は未対応
 - macOS 版は**署名・公証済み**のため、初回からダブルクリックで起動できます（「インストール」を参照）。Windows 版インストーラーは**未署名**のため、初回実行時に SmartScreen が警告します
 - 自動更新は macOS のみ。Windows では新しいインストーラーを自分でダウンロードして実行します

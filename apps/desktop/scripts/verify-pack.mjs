@@ -14,8 +14,9 @@
  *    entitlements；再加 `--expect-notarized` 断言 Gatekeeper 接受与公证票据已 staple
  *    （公证默认开启后，`pnpm dist` 与 `pnpm release` 都会传这个开关）。
  *
- * 用法：`node scripts/verify-pack.mjs [产物路径] [--expect-signed] [--expect-notarized] [--team-id <id>]`。
- * 默认按平台挑：Windows 用 `release/win-unpacked`，其余用 `release/mac-arm64/Sqraft.app`。
+ * 用法：`node scripts/verify-pack.mjs [产物路径] [--expect-signed] [--expect-notarized] [--team-id <id>] [--arch arm64|x64]`。
+ * 默认按平台挑：Windows 用 `release/win-unpacked`，macOS 优先 `release/mac-arm64/Sqraft.app`、
+ * 再退到 `release/mac/Sqraft.app`；发版链路会给两个架构各传一次显式路径与 `--arch`（ADR-0046）。
  */
 import { spawnSync } from "node:child_process";
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync, statSync } from "node:fs";
@@ -26,6 +27,7 @@ import { parseVerifyPackArgs } from "./release-utils.mjs";
 
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const MAC_APP = join(packageRoot, "release", "mac-arm64", "Sqraft.app");
+const MAC_APP_X64 = join(packageRoot, "release", "mac", "Sqraft.app");
 const WIN_DIR = join(packageRoot, "release", "win-unpacked");
 
 /** 命令行：位置参数是产物路径，其余是开关。发版时 dist/release 会传 `--expect-signed`。 */
@@ -34,13 +36,14 @@ if (parsedArgs.error) {
   console.error(`verify-pack: ${parsedArgs.error}`);
   process.exit(1);
 }
-const { target: targetArg, expectSigned, expectNotarized, expectedTeam } = parsedArgs;
+const { target: targetArg, expectSigned, expectNotarized, expectedTeam, expectedArch } = parsedArgs;
 
 /** 默认产物：显式参数优先；否则看 release/ 里实际有什么。 */
 function defaultTarget() {
   if (targetArg) return targetArg;
   if (existsSync(WIN_DIR) && process.platform === "win32") return WIN_DIR;
   if (existsSync(MAC_APP)) return MAC_APP;
+  if (existsSync(MAC_APP_X64)) return MAC_APP_X64;
   if (existsSync(WIN_DIR)) return WIN_DIR;
   return MAC_APP;
 }
@@ -147,6 +150,12 @@ if (bundles.length === 0) {
 
 /* ---------- 4. fuse ---------- */
 
+/** 跑一条外部命令并把 stdout + stderr 合起来（codesign / spctl / lipo 主要往 stderr 写）。 */
+function exec(command, commandArgs) {
+  const result = spawnSync(command, commandArgs, { encoding: "utf8" });
+  return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim() };
+}
+
 /** Windows 主程序：优先 `Sqraft.exe`；只有一个 exe 时接受它，多个就明确报错而不是猜。 */
 function windowsBinaryOf(dir) {
   const preferred = join(dir, "Sqraft.exe");
@@ -162,6 +171,21 @@ function windowsBinaryOf(dir) {
 const binary = isMacBundle
   ? join(appPath, "Contents", "MacOS", product)
   : windowsBinaryOf(appPath);
+
+// 主程序的 Mach-O 架构必须与目录 / --arch 一致：双架构后这是最贵也最容易悄悄错位的一项
+const wantArch =
+  expectedArch ||
+  (appPath.includes("/mac-arm64/") ? "arm64" : appPath.includes("/release/mac/") ? "x64" : "");
+if (isMacBundle && wantArch) {
+  const lipo = exec("lipo", ["-archs", binary]);
+  const archs = lipo.out.split(/\s+/).filter(Boolean);
+  const want = wantArch === "arm64" ? "arm64" : "x86_64";
+  if (!archs.includes(want)) {
+    problems.push(
+      `主程序架构是 ${archs.join(" ") || "读不到"}，与要求的 ${wantArch} 不符（${binary}）`,
+    );
+  }
+}
 const EXPECTED = [
   [FuseV1Options.RunAsNode, FuseState.DISABLE, "以 Node 运行主进程"],
   [FuseV1Options.EnableNodeOptionsEnvironmentVariable, FuseState.DISABLE, "从 NODE_OPTIONS 注入"],
@@ -183,12 +207,6 @@ try {
 }
 
 /* ---------- 5. macOS 签名 / 公证（仅 --expect-signed） ---------- */
-
-/** 跑一条 macOS 工具命令并把 stdout + stderr 合起来（codesign / spctl 主要往 stderr 写）。 */
-function exec(command, commandArgs) {
-  const result = spawnSync(command, commandArgs, { encoding: "utf8" });
-  return { status: result.status ?? -1, out: `${result.stdout ?? ""}${result.stderr ?? ""}`.trim() };
-}
 
 if (expectSigned) {
   if (!isMacBundle) {

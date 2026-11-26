@@ -23,10 +23,10 @@
  *   pnpm publish:release                      # 把现有 draft 翻成正式发布
  *
  * 发布门槛：发布说明必须存在且非空、pnpm test 必须通过、build.json 的 commit 必须是 HEAD、
- * build.json 记录签名已完成（macOS）、release/ 里 dmg / zip / exe 齐全；任一不满足即中止。
+ * build.json 记录签名已完成（macOS）、release/ 里两个架构的 dmg / zip 与 exe 齐全；任一不满足即中止。
  * 版本策略：0.0.1 是内部开发版；0.0.2 是首个公开版；之后每次发版 patch。
- * macOS 只出 arm64；Windows 出 x64 的 NSIS 安装包，但必须在 Windows 机器上构建
- * （本机 mac 交叉构建不可靠，且无法验收）。两者缺一即中止发版。
+ * macOS 出 arm64 与 x64 两套包（ADR-0046）；Windows 出 x64 的 NSIS 安装包，但必须在 Windows
+ * 机器上构建（本机 mac 交叉构建不可靠，且无法验收）。缺一即中止发版。
  * 仓库地址来自 apps/desktop/update.config.json（客户端读同一份）。
  */
 import { createHash } from "node:crypto";
@@ -35,7 +35,15 @@ import { copyFileSync, createReadStream, existsSync, mkdirSync, readFileSync, re
 import { basename, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import { compareVersions, pickArm64Dmg, pickArm64Zip, pickWinSetup, signingProblems } from "./release-utils.mjs";
+import {
+  MAC_ARCHES,
+  compareVersions,
+  macOutDirName,
+  pickMacDmg,
+  pickMacZip,
+  pickWinSetup,
+  signingProblems,
+} from "./release-utils.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, "../../..");
@@ -46,7 +54,7 @@ const args = process.argv.slice(2);
 const has = (name) => args.includes(name);
 
 const HELP = `用法：
-  pnpm dist                                 构建（macOS: dmg + zip；Windows: NSIS 安装器）
+  pnpm dist                                 构建（macOS: arm64 / x64 各一套 dmg + zip；Windows: NSIS 安装器）
   pnpm release                              验收 release/ 里的产物并创建 draft release
   pnpm release --publish                    验收后直接发布
   pnpm release --win <路径>                  把 Windows 产出的 Setup.exe 收进 release/ 再发版
@@ -56,9 +64,9 @@ const HELP = `用法：
 版本号：手动改 apps/desktop/package.json；release 不接受版本参数。
 前置：先跑 pnpm dist（它会写 release/build.json）；Windows 的 exe 手动放进 release/。
 发布门槛：docs/releases/vX.md 存在且非空 + pnpm test 通过 + GitHub 凭证可用
-          + build.json 的 commit 是 HEAD + release/ 里 dmg / zip / exe 齐全。
+          + build.json 的 commit 是 HEAD + release/ 里两个架构的 dmg / zip 与 exe 齐全。
 本地 git 分支 / tag 不参与判断；发行仓的 tag 由 gh release create 创建。
-平台：macOS 只出 arm64（本机构建）；Windows 出 x64 安装包（必须在 Windows 机器上构建）。
+平台：macOS 出 arm64 与 x64 两套包（本机构建）；Windows 出 x64 安装包（必须在 Windows 机器上构建）。
 版本策略：0.0.1 内部开发版；0.0.2 首个公开版；之后每次 patch。`;
 
 if (has("--help") || has("-h")) {
@@ -115,7 +123,7 @@ const publishDraft = flags.includes("--publish-draft");
 
 if (publish && publishDraft) fail("--publish 与 --publish-draft 不能同时用");
 
-// 发版编排只在 macOS 上成立：它要上传 arm64 的 dmg/zip（在 mac 上构建）。
+// 发版编排只在 macOS 上成立：它要上传 arm64 / x64 的 dmg 与 zip（在 mac 上构建）。
 // --publish-draft 只翻 GitHub 上的 draft，不构建，不受此限。
 if (process.platform !== "darwin" && !publishDraft) {
   fail(
@@ -319,43 +327,49 @@ function stampProblems() {
   return { problems, stamp };
 }
 
-/** release/ 里必须同时有当前版本的 dmg / zip / exe；缺哪个说哪个，不自动构建。 */
+/** release/ 里必须有当前版本两个架构的 dmg / zip 与 Windows 安装包；缺哪个说哪个。 */
 function artifactProblems(stamp) {
   const problems = [];
   const files = existsSync(releaseDir) ? readdirSync(releaseDir) : [];
-  const dmg = pickArm64Dmg(files, version);
-  const zip = pickArm64Zip(files, version);
+  const mac = MAC_ARCHES.map((arch) => ({
+    arch,
+    dmg: pickMacDmg(files, version, arch),
+    zip: pickMacZip(files, version, arch),
+  }));
   const exe = pickWinSetup(files, version);
   const missing = [];
-  if (!dmg) missing.push(`macOS dmg（Sqraft-${version}-arm64.dmg）`);
-  if (!zip) missing.push(`macOS zip（Sqraft-${version}-arm64-mac.zip，自动更新只认它）`);
+  for (const { arch, dmg, zip } of mac) {
+    if (!dmg) missing.push(`macOS ${arch} dmg（Sqraft-${version}-${arch}.dmg）`);
+    if (!zip) missing.push(`macOS ${arch} zip（Sqraft-${version}-${arch}.zip，自动更新只认它）`);
+  }
   if (!exe) missing.push(`Windows 安装包（Sqraft-Setup-${version}.exe）`);
   if (missing.length > 0) {
     problems.push(
       `release/ 里缺少：${missing.join("、")}\n` +
-        "  本机产物：pnpm dist；Windows 产物：在 Windows 机器上 pnpm dist 后拷进 release/，" +
+        "  本机产物：pnpm dist（macOS 会出 arm64 与 x64 两套）；Windows 产物：在 Windows 机器上 pnpm dist 后拷进 release/，" +
         "或用 --win <路径> 指定",
     );
     return { problems, artifacts: null };
   }
 
-  // 本机构建的印章里应该列出 dmg/zip：对不上说明 release/ 混进了上一版或手工放的文件
+  const macNames = mac.flatMap(({ dmg, zip }) => [dmg, zip]);
+  // 本机构建的印章里应该列出这些产物：对不上说明 release/ 混进了上一版或手工放的文件
   const stamped = new Set((stamp?.artifacts ?? []).map((item) => item.name));
   if (stamped.size === 0) {
     problems.push("build.json 里没有产物清单：那是 dist:dir 的构建，发版请用 pnpm dist");
   }
-  for (const name of [dmg, zip]) {
+  for (const name of macNames) {
     if (stamped.size > 0 && !stamped.has(name)) {
       problems.push(`${name} 不在本次构建的产物清单里（build.json）：重跑 pnpm dist`);
     }
   }
 
-  for (const name of [dmg, zip, exe]) {
+  for (const name of [...macNames, exe]) {
     if (statSync(join(releaseDir, name)).size < 1024 * 1024) {
       problems.push(`${name} 体积异常，构建可能没完成`);
     }
   }
-  return { problems, artifacts: { dmg, zip, exe } };
+  return { problems, artifacts: { mac, exe } };
 }
 
 function sha256(path) {
@@ -368,31 +382,27 @@ function sha256(path) {
   });
 }
 
-async function writeManifest({ dmg, zip, exe }) {
+async function writeManifest({ mac, exe }) {
   const notes = readFileSync(notesPath, "utf8");
   const assetUrl = (name) => `https://github.com/${repo}/releases/download/${tag}/${encodeURIComponent(name)}`;
+  const entry = async (file) => ({
+    url: assetUrl(file),
+    size: statSync(join(releaseDir, file)).size,
+    sha256: await sha256(join(releaseDir, file)),
+  });
+  const assets = {};
+  // 客户端按 process.arch 选 mac-arm64 / mac-x64；-dmg 只给手动下载页
+  for (const { arch, dmg, zip } of mac) {
+    assets[`mac-${arch}`] = await entry(zip);
+    assets[`mac-${arch}-dmg`] = await entry(dmg);
+  }
+  // Windows 客户端只读 version 做提示，不下载：地址留着给以后接自动安装
+  assets["win-x64"] = await entry(exe);
   const manifest = {
     version,
     publishedAt: new Date().toISOString(),
     notes,
-    assets: {
-      "mac-arm64": {
-        url: assetUrl(zip),
-        size: statSync(join(releaseDir, zip)).size,
-        sha256: await sha256(join(releaseDir, zip)),
-      },
-      "mac-arm64-dmg": {
-        url: assetUrl(dmg),
-        size: statSync(join(releaseDir, dmg)).size,
-        sha256: await sha256(join(releaseDir, dmg)),
-      },
-      // Windows 客户端只读 version 做提示，不下载：地址留着给以后接自动安装
-      "win-x64": {
-        url: assetUrl(exe),
-        size: statSync(join(releaseDir, exe)).size,
-        sha256: await sha256(join(releaseDir, exe)),
-      },
-    },
+    assets,
   };
   const manifestPath = join(releaseDir, "latest.json");
   writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`, "utf8");
@@ -452,14 +462,21 @@ if (publishDraft) {
   const info = JSON.parse(view.stdout);
   if (!info.isDraft) fail(`${tag} 已经是正式发布`);
   const names = (info.assets ?? []).map((asset) => asset.name);
-  const missing = ["latest.json", "dmg", "zip", "exe"].filter(
-    (required) => !names.some((name) => name.includes(required)),
-  );
+  const missing = [];
+  if (!names.includes("latest.json")) missing.push("latest.json");
+  if (!pickWinSetup(names, version)) missing.push(`Windows 安装包（Sqraft-Setup-${version}.exe）`);
+  for (const arch of MAC_ARCHES) {
+    if (!pickMacDmg(names, version, arch)) missing.push(`macOS ${arch} dmg`);
+    if (!pickMacZip(names, version, arch)) missing.push(`macOS ${arch} zip`);
+  }
   if (missing.length > 0) {
+    const files = MAC_ARCHES.flatMap((arch) => [
+      `apps/desktop/release/Sqraft-${version}-${arch}.dmg`,
+      `apps/desktop/release/Sqraft-${version}-${arch}.zip`,
+    ]);
     fail(
       `draft 里缺少 ${missing.join("、")} 资产；补传再做发布（不用重新构建）：\n` +
-        `  gh release upload ${tag} apps/desktop/release/Sqraft-${version}-arm64.dmg ` +
-        `apps/desktop/release/Sqraft-${version}-arm64-mac.zip ` +
+        `  gh release upload ${tag} ${files.join(" ")} ` +
         `apps/desktop/release/Sqraft-Setup-${version}.exe ` +
         `apps/desktop/release/latest.json --repo ${repo} --clobber`,
     );
@@ -481,16 +498,21 @@ report(artifactProblemsList);
 
 // 3) 成品防护验收（ADR-0030 / ADR-0034）：源码 / 依赖漏回包里、或签名不合格，都在这里中止，
 //    而不是把包传上去。它只读产物、秒级完成，所以放在测试前面——产物不合格时不必先等一遍测试。
-const verifyPackArgs = [
-  join(desktopRoot, "scripts", "verify-pack.mjs"),
-  "--expect-signed",
-  "--expect-notarized",
-];
 const builtTeam = stamp?.signing?.teamId;
-if (builtTeam) verifyPackArgs.push("--team-id", builtTeam);
-// 公证默认开启（ADR-0034 / 2026-11-22 修订）：发版包必须过 Gatekeeper 且票据已 staple。
-// build.json 的 signing.notarized 不是 true 时，stampProblems() 已经先中止了。
-run("node", verifyPackArgs, { cwd: desktopRoot });
+for (const arch of MAC_ARCHES) {
+  const verifyPackArgs = [
+    join(desktopRoot, "scripts", "verify-pack.mjs"),
+    join(releaseDir, macOutDirName(arch), "Sqraft.app"),
+    "--arch",
+    arch,
+    "--expect-signed",
+    "--expect-notarized",
+  ];
+  if (builtTeam) verifyPackArgs.push("--team-id", builtTeam);
+  // 公证默认开启（ADR-0034 / 2026-11-22 修订）：发版包必须过 Gatekeeper 且票据已 staple。
+  // build.json 的 signing.notarized 不是 true 时，stampProblems() 已经先中止了。
+  run("node", verifyPackArgs, { cwd: desktopRoot });
+}
 // 4) 发版闸门：没测过不发版（本脚本不再构建，测试是唯一与产物无关的硬检查）
 run("pnpm", ["test"]);
 
@@ -498,8 +520,11 @@ run("pnpm", ["test"]);
 report(remoteProblems({ tagCheck: "absent" }));
 
 const { manifestPath } = await writeManifest(artifacts);
-const uploads = [artifacts.dmg, artifacts.zip, artifacts.exe].map((name) => join(releaseDir, name));
-uploads.push(manifestPath);
+const uploads = [
+  ...artifacts.mac.flatMap(({ dmg, zip }) => [join(releaseDir, dmg), join(releaseDir, zip)]),
+  join(releaseDir, artifacts.exe),
+  manifestPath,
+];
 
 // 6) 先建 draft，再逐个上传：单文件失败能定位、能直接重试，不会留下"只有 latest.json"的半成品。
 run("gh", [
@@ -524,7 +549,11 @@ for (const file of uploads) {
 const view = gh(["release", "view", tag, "--repo", repo, "--json", "assets"]);
 if (view.status !== 0) fail(`读取 ${tag} 的资产失败：${(view.stderr ?? "").trim()}`);
 const uploaded = (JSON.parse(view.stdout).assets ?? []).map((asset) => asset.name);
-const expected = [artifacts.dmg, artifacts.zip, artifacts.exe, "latest.json"];
+const expected = [
+  ...artifacts.mac.flatMap(({ dmg, zip }) => [dmg, zip]),
+  artifacts.exe,
+  "latest.json",
+];
 const missingAssets = expected.filter((name) => !uploaded.includes(name));
 if (missingAssets.length > 0) {
   fail(

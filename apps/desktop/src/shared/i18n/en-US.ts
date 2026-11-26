@@ -383,7 +383,7 @@ export const enUS: Record<keyof typeof zhCN, string> = {
   "update.incomplete": "Incomplete update package: expected {total} bytes, received {received}",
   "update.shaMismatch": "Update package verification failed (sha256 mismatch)",
   "update.reasonPlatform": "Update checks are not supported on this platform",
-  "update.reasonArch": "Automatic updates are not supported on this chip (Apple Silicon only)",
+  "update.reasonArch": "Automatic updates aren't supported on this chip",
   "update.reasonNoApp": "Could not locate the app bundle. Reinstall Sqraft.",
   "update.reasonReadOnly": "Sqraft is running from a read-only location. Move it to Applications, then check for updates again.",
   "update.reasonNoPermission": "No permission to write to Applications. Download the new version and install it manually.",
@@ -393,7 +393,7 @@ export const enUS: Record<keyof typeof zhCN, string> = {
   "update.manifestNotObject": "latest.json is not an object",
   "update.manifestVersion": "Invalid version in latest.json: {value}",
   "update.manifestAssets": "latest.json is missing assets",
-  "update.manifestAsset": "latest.json is missing a usable mac-arm64 asset",
+  "update.manifestAsset": "latest.json is missing an update asset for this Mac",
 
   // Toolbar
   "toolbar.select": "Select",

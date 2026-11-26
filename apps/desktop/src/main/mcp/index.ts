@@ -2,7 +2,7 @@
  * MCP 主进程侧：把协议层（server.ts）与渲染层桥接起来。
  * 工具清单与执行器都在渲染层（@sqraft/ai-tools 的真源），这里只转发。
  */
-import { app, BrowserWindow, ClipboardItem, clipboard, ipcMain } from "electron";
+import { app, BrowserWindow, clipboard, ipcMain, nativeImage } from "electron";
 import { chmod, readFile, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -37,22 +37,21 @@ let clientService: ClientService | null = null;
 
 /** 与渲染层 `MAX_ASSET_BYTES` 对齐的读盘上限（主进程拿不到渲染层常量）。 */
 const MAX_CLIPBOARD_BYTES = 20 * 1024 * 1024;
+/** 剪贴板位图转 PNG 后的上限（5K 截图约 10–20 MB）；挡住异常大图把 IPC 内存打满。 */
+const MAX_CLIPBOARD_IMAGE_BYTES = 64 * 1024 * 1024;
 
 /**
- * 节点剪贴板的自定义类型。
+ * 节点剪贴板的自定义格式。
  *
- * 不能用 W3C 风格的 `application/x-sqraft+nodes`：macOS 会把它变成
- * `dyn.ah62d4rv4…` 这类动态 UTI，`clipboard.has()` 直接返回 false、`read()` 也拿不到内容
- * （Electron 45 实测）。Electron 文档留的口子是平台原始类型，即
- * `electron application/osclipboard;format="<UTI>"`；反向域名形式的 UTI 能正常往返。
+ * Electron 37 没有 W3C 风格的 `ClipboardItem` / `clipboard.read()`，只有
+ * `writeBuffer(format)` / `readBuffer(format)` / `availableFormats()`；
+ * 读取侧按最后写入的格式取，不需要遍历条目。
  *
- * 这个 `electron ` 前缀**改不掉**：实测（2026-11，Electron 45）换成
- * `sqraft application/osclipboard;format="…"` 或裸 `com.sqraft.nodes` 之后
- * `clipboard.read()` 都匹配不到写进去的条目——它是 Electron 识别平台原始类型的编码，
- * 不是可以随便换的展示串。该串只有剪贴板检查工具能看到，普通用户无感。
+ * format 直接当平台类型用：macOS 上反向域名形式的 UTI 能正常往返，
+ * 不要用 `application/x-sqraft+nodes`——它会变成 `dyn.ah62d4…` 动态类型，
+ * 读写两边对不上（Electron 45 时代实测过同类问题）。
  */
-const NODES_UTI = "com.sqraft.nodes";
-const NODES_FORMAT = `electron application/osclipboard;format="${NODES_UTI}"`;
+const NODES_FORMAT = "com.sqraft.nodes";
 
 interface PendingCall {
   resolve: (value: string) => void;
@@ -148,71 +147,76 @@ export function registerMcpChannels(): void {
 
   ipcMain.handle(CHANNELS.appClipboardText, () => clipboard.readText());
 
-  ipcMain.handle(CHANNELS.appClipboardImageWrite, async (_event, dataUrl: string) => {
+  ipcMain.handle(CHANNELS.appClipboardImageWrite, (_event, dataUrl: string) => {
     const match = /^data:image\/png;base64,(.+)$/.exec(String(dataUrl));
     if (!match) return false;
     const bytes = Buffer.from(match[1], "base64");
     if (bytes.length === 0) return false;
-    const blob = new Blob([bytes], { type: "image/png" });
-    await clipboard.write([new ClipboardItem({ "image/png": blob })]);
+    const image = nativeImage.createFromBuffer(bytes);
+    if (image.isEmpty()) return false;
+    clipboard.writeImage(image);
     return true;
   });
 
-  ipcMain.handle(CHANNELS.appClipboardNodesWrite, async (_event, json: string) => {
+  ipcMain.handle(CHANNELS.appClipboardNodesWrite, (_event, json: string) => {
     const text = String(json);
     if (text.length === 0) {
       logWarn("clipboard", "write nodes: 空载荷，已忽略");
       return;
     }
     // 一次 write 原子提交：载荷是 JSON 字符串，图片已经内联成 base64
+    const payload = Buffer.from(text, "utf8");
     try {
-      const blob = new Blob([text], { type: "application/octet-stream" });
-      await clipboard.write([new ClipboardItem({ [NODES_FORMAT]: blob })]);
-      logInfo("clipboard", "write nodes ok", { bytes: text.length });
+      clipboard.writeBuffer(NODES_FORMAT, payload);
+      // 自检：write 成功不代表平台认这个类型（Electron 45 时代 UTI 被改写成 dyn.ah62d4…，
+      // 写入成功、读取却拿不到）。读回不一致就直接失败，让渲染层弹「复制失败」，
+      // 而不是复制"成功"、粘贴时没反应。
+      const back = clipboard.readBuffer(NODES_FORMAT);
+      if (!back.equals(payload)) {
+        logError("clipboard", "write nodes 读回不一致", {
+          format: NODES_FORMAT,
+          wrote: payload.length,
+          read: back.length,
+          formats: clipboard.availableFormats().slice(0, 8),
+        });
+        throw new Error(`clipboard round-trip failed: ${NODES_FORMAT}`);
+      }
+      logInfo("clipboard", "write nodes ok", { bytes: payload.length });
     } catch (error) {
       logError("clipboard", "write nodes failed", { error: String(error) });
       throw error;
     }
   });
 
-  ipcMain.handle(CHANNELS.appClipboardNodesRead, async () => {
-    // 不用 has() 提前返回：它对自定义类型不可靠，直接遍历 types 匹配更实在
+  ipcMain.handle(CHANNELS.appClipboardNodesRead, () => {
     try {
-      for (const item of await clipboard.read()) {
-        if (!item.types.includes(NODES_FORMAT)) continue;
-        const value = await item.getType(NODES_FORMAT);
-        const text = typeof value === "string" ? value : await (value as Blob).text();
-        if (!text) {
-          logWarn("clipboard", "read nodes: 类型存在但内容为空");
-          return null;
-        }
-        return text;
+      const raw = clipboard.readBuffer(NODES_FORMAT);
+      if (raw.length === 0) return null;
+      const text = raw.toString("utf8");
+      if (!text) {
+        logWarn("clipboard", "read nodes: 类型存在但内容为空");
+        return null;
       }
+      return text;
     } catch (error) {
       logError("clipboard", "read nodes failed", { error: String(error) });
       return null;
     }
-    return null;
   });
 
-  ipcMain.handle(CHANNELS.appClipboardImage, async () => {
-    // Electron 45 的剪贴板是 W3C 风格：has/read/getType，不再有 readImage。
-    // 真实格式交给渲染层的 magic bytes 判定，这里只负责挑一种能读的表示：
-    // 常见格式优先，实在只有 TIFF 之类也照传，让上层报"不支持的格式"而不是静默。
-    const preferred = ["image/png", "image/jpeg", "image/webp", "image/gif"];
-    let fallback: Uint8Array | null = null;
-    for (const item of await clipboard.read()) {
-      const exact = preferred.find((mime) => item.types.includes(mime));
-      const type = exact ?? item.types.find((mime) => mime.startsWith("image/"));
-      if (!type) continue;
-      const blob = (await item.getType(type)) as Blob;
-      const bytes = new Uint8Array(await blob.arrayBuffer());
-      if (bytes.length === 0) continue;
-      if (exact) return bytes;
-      fallback ??= bytes;
+  ipcMain.handle(CHANNELS.appClipboardImage, () => {
+    // Electron 37 只有 readImage()，拿不到原始编码：位图统一转 PNG，
+    // 格式判定仍交给渲染层的 magic bytes。Finder 里复制的是"文件"而不是位图，
+    // 剪贴板只有 file URL，退回按路径读一次（保留 GIF 等原始编码）。
+    const image = clipboard.readImage();
+    if (!image.isEmpty()) {
+      const png = image.toPNG();
+      if (png.length > MAX_CLIPBOARD_IMAGE_BYTES) {
+        logWarn("clipboard", "剪贴板图片过大", { bytes: png.length });
+        return null;
+      }
+      if (png.length > 0) return new Uint8Array(png);
     }
-    if (fallback) return fallback;
-    // Finder 里复制的是"文件"而不是位图：剪贴板只有文件 URL，按路径读一次
     return clipboardFileImage();
   });
 
@@ -373,36 +377,39 @@ function callRenderer(
  * 先 stat 再读：复制一个几百 MB 的文件不该先把内存吃掉再报错。
  */
 async function clipboardFileImage(): Promise<Uint8Array | null> {
-  for (const item of await clipboard.read()) {
-    const type = item.types.find((t) => t === "text/uri-list" || t.includes("file-url"));
-    if (!type) continue;
-    let text: string;
-    try {
-      const value = await item.getType(type);
-      text = typeof value === "string" ? value : await (value as Blob).text();
-    } catch {
-      continue;
-    }
-    const line = text.split(/\r?\n/).find((entry) => entry && !entry.startsWith("#"));
-    if (!line) continue;
-    let path: string;
-    try {
-      path = fileURLToPath(line.trim());
-    } catch {
-      continue;
-    }
-    if (!/\.(png|jpe?g|webp|gif|svg)$/i.test(path)) continue;
-    try {
-      const info = await stat(path);
-      if (!info.isFile() || info.size === 0 || info.size > MAX_CLIPBOARD_BYTES) continue;
-      const bytes = new Uint8Array(await readFile(path));
-      if (bytes.length === 0 || bytes.length > MAX_CLIPBOARD_BYTES) continue;
-      return bytes;
-    } catch {
-      continue;
-    }
+  let type: string | undefined;
+  try {
+    type = clipboard
+      .availableFormats()
+      .find((format) => format === "text/uri-list" || format.includes("file-url"));
+  } catch {
+    return null;
   }
-  return null;
+  if (!type) return null;
+  let text: string;
+  try {
+    text = clipboard.readBuffer(type).toString("utf8");
+  } catch {
+    return null;
+  }
+  const line = text.split(/\r?\n/).find((entry) => entry && !entry.startsWith("#"));
+  if (!line) return null;
+  let path: string;
+  try {
+    path = fileURLToPath(line.trim());
+  } catch {
+    return null;
+  }
+  if (!/\.(png|jpe?g|webp|gif|svg)$/i.test(path)) return null;
+  try {
+    const info = await stat(path);
+    if (!info.isFile() || info.size === 0 || info.size > MAX_CLIPBOARD_BYTES) return null;
+    const bytes = new Uint8Array(await readFile(path));
+    if (bytes.length === 0 || bytes.length > MAX_CLIPBOARD_BYTES) return null;
+    return bytes;
+  } catch {
+    return null;
+  }
 }
 
 /** 退出前关掉监听；HTTP 没有长连接广播，客户端下次请求会发现连不上。 */

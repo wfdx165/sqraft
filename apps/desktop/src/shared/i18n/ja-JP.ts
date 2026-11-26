@@ -383,7 +383,7 @@ export const jaJP: Record<keyof typeof zhCN, string> = {
   "update.incomplete": "アップデートパッケージが不完全です：{total} バイト必要ですが {received} バイトのみです",
   "update.shaMismatch": "アップデートパッケージの検証に失敗しました（sha256 不一致）",
   "update.reasonPlatform": "この OS はアップデートの確認に対応していません",
-  "update.reasonArch": "このチップは自動アップデートに対応していません（Apple Silicon のみ）",
+  "update.reasonArch": "このチップでは自動アップデートに対応していません",
   "update.reasonNoApp": "アプリバンドルが見つかりません。Sqraft を再インストールしてください。",
   "update.reasonReadOnly": "Sqraft は読み取り専用の場所から実行されています。「アプリケーション」に移動してから再度確認してください。",
   "update.reasonNoPermission": "「アプリケーション」への書き込み権限がありません。新しいバージョンを手動でダウンロードしてインストールしてください。",
@@ -393,7 +393,7 @@ export const jaJP: Record<keyof typeof zhCN, string> = {
   "update.manifestNotObject": "latest.json がオブジェクトではありません",
   "update.manifestVersion": "latest.json のバージョンが不正です：{value}",
   "update.manifestAssets": "latest.json に assets がありません",
-  "update.manifestAsset": "latest.json に使用可能な mac-arm64 アセットがありません",
+  "update.manifestAsset": "latest.json にこの Mac で使える更新アセットがありません",
 
   // ツールバー
   "toolbar.select": "選択",
