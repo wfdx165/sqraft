@@ -43,9 +43,16 @@ export interface LatestManifest {
   publishedAt: string | null;
   notes: string | null;
   assets: Record<string, UpdateAsset>;
+  /**
+   * 可选：运行该版本所需的最低 macOS 版本（如 `"12.0"`）。
+   * 缺省 = 不限制；客户端必须在清单填值之前就认识它，否则老系统用户会白下载一次。
+   */
+  minOS: string | null;
 }
 
 const VERSION_PATTERN = /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/;
+/** macOS 版本号：允许 `12` / `12.0` / `12.0.1`，不允许预发布串。 */
+const MIN_OS_PATTERN = /^\d+(?:\.\d+){0,2}$/;
 const SHA256_PATTERN = /^[a-f0-9]{64}$/i;
 
 /** 拆成三段数字 + 预发布串；非法段按 0 处理，保证比较不抛错。 */
@@ -122,5 +129,16 @@ export function parseLatest(raw: unknown): LatestManifest {
 
   const publishedAt = typeof record.publishedAt === "string" ? record.publishedAt : null;
   const notes = typeof record.notes === "string" && record.notes.trim() ? record.notes : null;
-  return { version, publishedAt, notes, assets };
+
+  // minOS 可选：JSON 里省略或写 null 都表示不限制；写了字符串就必须是合法的 macOS 版本号
+  let minOS: string | null = null;
+  if (record.minOS !== undefined && record.minOS !== null) {
+    const value = typeof record.minOS === "string" ? record.minOS.trim() : "";
+    if (!value || !MIN_OS_PATTERN.test(value)) {
+      throw new UpdateManifestError("update.manifestMinOS", { value: String(record.minOS) });
+    }
+    minOS = value;
+  }
+
+  return { version, publishedAt, notes, assets, minOS };
 }

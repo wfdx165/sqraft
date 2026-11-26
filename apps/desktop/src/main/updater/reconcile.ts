@@ -45,6 +45,7 @@ function idle(currentVersion: string): UpdateState {
     latestVersion: null,
     notes: null,
     publishedAt: null,
+    minOS: null,
     progress: 0,
     message: null,
     readyAt: null,

@@ -357,8 +357,11 @@ export const zhCN = {
   "update.downloading": "正在下载 {percent}%",
   "update.ready": "新版本 {version} 已就绪，重启后安装",
   "update.available": "新版本 {version} 已发布，需手动下载安装",
+  "update.incompatible": "新版本 {version} 需要 macOS {os}；当前版本仍可继续使用",
   "update.waiting": "新版本 {version} 已发现，空闲时自动下载",
   "update.download": "前往下载",
+  "update.incompatibleChip": "需要 macOS {os}",
+  "update.viewReleases": "查看发布页",
   "update.openPageFailed": "打不开系统浏览器，请手动访问 GitHub Releases 页面",
   "update.upToDate": "已是最新版本",
   "update.failed": "检查更新失败",
@@ -394,6 +397,7 @@ export const zhCN = {
   "update.manifestVersion": "latest.json 的版本号不合法：{value}",
   "update.manifestAssets": "latest.json 缺少 assets",
   "update.manifestAsset": "latest.json 缺少当前架构可用的更新资产",
+  "update.manifestMinOS": "latest.json 的 minOS 不合法：{value}",
 
   // 工具栏
   "toolbar.select": "选择",

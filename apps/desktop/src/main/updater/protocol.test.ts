@@ -71,6 +71,27 @@ describe("latest.json 校验", () => {
     expect(manifest.assets["mac-x64"].sha256).toBe(sha);
   });
 
+  it("minOS 可选；写了必须是合法 macOS 版本", () => {
+    const withMin = parseLatest({ version: "0.1.0", minOS: "12.0", assets: { "mac-arm64": asset() } });
+    expect(withMin.minOS).toBe("12.0");
+
+    const withoutMin = parseLatest({ version: "0.1.0", assets: { "mac-arm64": asset() } });
+    expect(withoutMin.minOS).toBeNull();
+
+    const explicitNull = parseLatest({ version: "0.1.0", minOS: null, assets: { "mac-arm64": asset() } });
+    expect(explicitNull.minOS).toBeNull();
+
+    expect(
+      errorKey(() => parseLatest({ version: "0.1.0", minOS: "12.x", assets: { "mac-arm64": asset() } })),
+    ).toBe("update.manifestMinOS");
+    expect(
+      errorKey(() => parseLatest({ version: "0.1.0", minOS: "", assets: { "mac-arm64": asset() } })),
+    ).toBe("update.manifestMinOS");
+    expect(
+      errorKey(() => parseLatest({ version: "0.1.0", minOS: 12, assets: { "mac-arm64": asset() } })),
+    ).toBe("update.manifestMinOS");
+  });
+
   it("缺 macOS 资产或 sha256 不对都拒绝", () => {
     expect(errorKey(() => parseLatest({ version: "0.1.0", assets: {} }))).toBe("update.manifestAsset");
     expect(

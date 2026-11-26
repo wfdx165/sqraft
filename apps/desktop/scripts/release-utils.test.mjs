@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
+  MACOS_BASELINE,
   MAC_ARCHES,
   archFromAppPath,
   compareVersions,
   macOutDirName,
+  minOSProblems,
+  normalizeMinOS,
   notaryCredentialSource,
   parseVerifyPackArgs,
   pickMacDmg,
@@ -63,6 +66,41 @@ describe("版本比较", () => {
     expect(compareVersions("0.10.0", "0.9.0")).toBe(1);
     expect(compareVersions("v0.0.3", "0.0.3")).toBe(0);
     expect(compareVersions("0.0.2", "0.0.3")).toBe(-1);
+  });
+});
+
+describe("minOS 发布闸门", () => {
+  it("缺省/null 返回 null，合法版本原样返回", () => {
+    expect(MACOS_BASELINE).toBe("11.0");
+    expect(normalizeMinOS(undefined)).toBeNull();
+    expect(normalizeMinOS(null)).toBeNull();
+    expect(normalizeMinOS("12.0")).toBe("12.0");
+    expect(normalizeMinOS(" 12 ")).toBe("12");
+    expect(normalizeMinOS("12.0.1")).toBe("12.0.1");
+  });
+
+  it("非法值直接抛错", () => {
+    for (const value of ["", "12.x", "12.0-beta", 12, {}, []]) {
+      expect(() => normalizeMinOS(value)).toThrow(/minOS/);
+    }
+  });
+
+  it("两个架构的 floor 不一致 → 中止", () => {
+    expect(minOSProblems({ minOS: "11.0", floors: ["11.0", "12.0"] })).toHaveLength(1);
+  });
+
+  it("0.1.2：floor 11.0 + minOS null → 通过", () => {
+    expect(minOSProblems({ minOS: null, floors: ["11.0", "11.0"] })).toEqual([]);
+  });
+
+  it("抬了 floor 却没填 minOS → 中止", () => {
+    expect(minOSProblems({ minOS: null, floors: ["12.0", "12.0"] })[0]).toContain("minOS 为空");
+  });
+
+  it("minOS 低于 floor → 中止；等于/高于 → 通过", () => {
+    expect(minOSProblems({ minOS: "11.7", floors: ["12.0", "12.0"] })[0]).toContain("低于");
+    expect(minOSProblems({ minOS: "12.0", floors: ["12.0", "12.0"] })).toEqual([]);
+    expect(minOSProblems({ minOS: "12.1", floors: ["12.0", "12.0"] })).toEqual([]);
   });
 });
 

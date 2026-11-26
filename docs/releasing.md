@@ -4,6 +4,7 @@ Sqraft 发布 **macOS（arm64 与 x64）** 与 **Windows x64** 的安装包：
 源码、安装包与下载页都在同一个公开仓库 [`wfdx165/sqraft`](https://github.com/wfdx165/sqraft)。
 macOS 的自动更新靠该仓库的 `releases/latest/download/latest.json`（ADR-0029）；
 Windows 只做「检查并提示」，更新靠手动下载安装器（ADR-0033）。
+版本号、更新节奏、撤回与安全例外见 ADR-0049。
 macOS 包自 2026-11 起用 **Developer ID Application 签名**，并由 Apple **公证**（ADR-0034）。
 公证在 `afterSign` 阶段完成：提交后每 20 秒轮询一次，60 分钟上限，成功后把票据 staple 进 `.app`；
 失败或超时用 `pnpm dist:resume` 续跑，排障与回退见本文末「公证排障与回退」。
@@ -56,11 +57,13 @@ gh auth status         # 确认账号对 wfdx165/sqraft 有写权限
 |---|---|
 | `0.0.1` | 内部开发版，不发布 |
 | `0.0.2` | 第一个公开版 |
-| `0.0.3`、`0.0.4` … | 日常发版，**一律 patch** |
+| `0.0.3` – `0.1.x` | 日常发版，**一律 patch** |
+| `0.2.0` | 只在破坏性变更时使用：文件格式不兼容旧版、停止支持 macOS 11、更新协议不兼容（ADR-0049） |
+| `1.0.0` | 暂不承诺，等格式与协作能力稳定后再定 |
 
 - 版本号唯一真源是 `apps/desktop/package.json`；根 `package.json` 不带 `version` 字段。
 - **完全手动**：直接编辑那个字段，`pnpm release` 只读不写，也不接受 `--bump` / `--version` 参数。
-- 不做预发布版本，每次发版一律 patch。
+- 不做预发布版本号；GitHub 的 pre-release 只作为撤回坏版本的手段，不作为发布通道（ADR-0049）。
 - 发版门槛只有两件与源码仓库无关的事：**发布说明必须存在且非空**、`pnpm test` 通过。脚本不检查分支、工作区或 tag。
 
 ## 每次发版
@@ -82,7 +85,7 @@ gh auth status         # 确认账号对 wfdx165/sqraft 有写权限
 **公证首发那版要写明**：macOS 包已签名并通过 Apple 公证，双击即可打开，不再需要手动放行。
 从旧版本（未公证）更新上来的用户，更新完成后同样进入"双击即开"状态；这一次替换仍由旧版执行。
 
-**文件格式变更必须写进说明**：`.sqraft` 的 `formatVersion` 提升后，旧版本客户端打开新文件不会报错，但会**静默丢弃**它不认识的新字段（例如 0.0.4 的原型链接）。发布说明里要写清"用旧版本打开会丢失什么"，不能只列新增功能。
+**文件格式变更必须写进说明**：`.sqraft` 的 `formatVersion` 提升后，旧版本客户端会**明确拒绝打开**并提示升级（`error.newerFormat`），不会“尽量解析”出一份坏稿，也不会静默丢字段（ADR-0029）。发布说明里要写清“旧版本需要先升级 Sqraft 才能打开”，不能只列新增功能。
 
 ### 3. 出包 + 创建 draft
 
@@ -127,6 +130,10 @@ sha256 → `latest.json`（`mac-arm64` / `mac-arm64-dmg` / `mac-x64` / `mac-x64-
 
 `pnpm release` 不接受版本参数：版本只认 `apps/desktop/package.json`。
 发布说明缺失、测试失败、产物缺失都会直接中止，不会创建 draft。
+
+**抬 macOS 下限时**：同步改 `apps/desktop/electron-builder.yml` 的 `mac.minimumSystemVersion` 与
+`apps/desktop/update.config.json` 的 `minOS`；`release.mjs` 会读两个架构 `.app` 的 `Info.plist` 交叉校验，
+抬了下限却没填 `minOS`、或 `minOS` 低于实际下限都会中止（ADR-0049）。
 
 脚本**不看分支与源码 tag**；发行仓的 `v<version>` tag 由 `gh release create` 创建，
 同时充当源码的版本标记。
@@ -240,6 +247,22 @@ pnpm --filter @sqraft/desktop run check:readmes
 5. 回滚演练：退出应用 → `pnpm stage:update` → 启动 → 重启更新，确认替换与备份清理；
    把 `update.zip` 换成坏包重复一次，确认"回滚 + 提示 + 胶囊不再出现"。
 
+## 撤回一个坏版本（零代码）
+
+发布后才发现包坏了，按 ADR-0049 走发布侧撤回，不改客户端：
+
+1. 删除坏版本的 release（`gh release delete v<version> --repo wfdx165/sqraft --yes`），或把它改成 **pre-release**（`gh release edit v<version> --repo wfdx165/sqraft --prerelease`）。
+   `releases/latest` 会回到上一个正式版本，客户端比较版本号后当作“已最新”。
+2. 不删上一版的 release 与资产，保留下载入口。
+3. **已经下载完、进入“就绪”的用户仍会安装坏版本**；客户端不做自动降级，尽快发下一个 patch 修复。
+4. 撤回后复查 `latest.json` 已回到上一版：
+
+   ```bash
+   curl -s https://github.com/wfdx165/sqraft/releases/latest/download/latest.json | head -c 200
+   ```
+
+不要用“改 `latest.json` 指向旧版本”的方式撤回：GitHub 的 `releases/latest` 跟随最新的正式 release，单独换资产容易留下不一致的清单。删 release / 改 pre-release 是唯一需要记的步骤。
+
 ## 故障处理
 
 | 症状 | 处理 |
@@ -261,7 +284,8 @@ pnpm --filter @sqraft/desktop run check:readmes
 | 签名阶段异常慢（5 分钟以上/每次发版都这样） | 代理把 `timestamp.apple.com` 劫持到 `198.18.x.x`（fake-ip）会让 `codesign --timestamp` 反复重试。给该域名加 **DIRECT** 规则或临时关 VPN；验收：`dig +short timestamp.apple.com` 返回真实 Apple IP |
 | 构建失败 | 版本号已改好，修完直接重跑 `pnpm dist` |
 | 资产缺失 / 体积异常 | 删掉 draft 重跑，不要手动补传（sha256 必须和包一致） |
-| 发布后才发现包坏了 | 用户侧会回滚；发下一个 patch 版本修复，不回滚 tag |
+| 发布后才发现包坏了 | 按「撤回一个坏版本（零代码）」删 release / 改 pre-release；已下载的用户仍会安装，尽快发修复版；不回滚 tag |
+| 发布后很久没有自动更新 | 自动检查有 4 小时最小间隔，安装发生在退出时；让用户「帮助 → 检查更新…」立即检查，或等下一周期（ADR-0049） |
 | `latest.json` 一时还是旧版本 | GitHub 缓存，等几十秒重试；`publish:release` 已经内置轮询 |
 
 ## 元数据与文件
@@ -284,6 +308,8 @@ pnpm --filter @sqraft/desktop run check:readmes
 ```
 
 - `win-x64` 指向 `Sqraft-Setup-<version>.exe`；Windows 客户端当前只读 `version` 做提示，键为以后接静默安装预留
+- `minOS`（可选，当前不填）：值在 `apps/desktop/update.config.json` 的 `minOS`；`pnpm release` 会读两个 `.app` 的 `LSMinimumSystemVersion` 交叉校验——抬了下限却没填、或 `minOS` 低于下限，直接中止。0.1.2 起客户端识别，低于该版本的系统只提示、不下载（ADR-0049）
+- Windows 客户端至少到 0.2 只提示，不下载、不安装；NSIS 静默升级不在本轮范围（ADR-0049）
 - 仓库地址的唯一真源：`apps/desktop/update.config.json`（客户端与脚本读同一份）
 - 发布说明：`docs/releases/v<version>.md`（必须存在且非空）
 - 下载页 README 有四份，改一份要同步其余三份（`pnpm --filter @sqraft/desktop run check:readmes` 会校验）

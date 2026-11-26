@@ -39,6 +39,8 @@ import {
   MAC_ARCHES,
   compareVersions,
   macOutDirName,
+  minOSProblems,
+  normalizeMinOS,
   pickMacDmg,
   pickMacZip,
   pickWinSetup,
@@ -138,7 +140,8 @@ const version = desktopPkg.version;
 if (typeof version !== "string" || !/^\d+\.\d+\.\d+$/.test(version)) {
   fail(`apps/desktop/package.json 的 version 不合法：${String(version)}（必须是 x.y.z）`);
 }
-const repo = JSON.parse(readFileSync(join(desktopRoot, "update.config.json"), "utf8")).repo;
+const updateConfig = JSON.parse(readFileSync(join(desktopRoot, "update.config.json"), "utf8"));
+const repo = updateConfig.repo;
 
 if (!/^[^/\s]+\/[^/\s]+$/.test(repo)) fail(`update.config.json 的 repo 不合法：${repo}`);
 const tag = `v${version}`;
@@ -382,8 +385,29 @@ function sha256(path) {
   });
 }
 
+/** 读打包产物的 `LSMinimumSystemVersion`；读不到直接中止，不猜。 */
+function readAppFloor(arch) {
+  const plist = join(releaseDir, macOutDirName(arch), "Sqraft.app", "Contents", "Info.plist");
+  const result = spawnSync(
+    "/usr/libexec/PlistBuddy",
+    ["-c", "Print :LSMinimumSystemVersion", plist],
+    { encoding: "utf8" },
+  );
+  const value = (result.stdout ?? "").trim();
+  if (result.status !== 0 || !value) fail(`读不到 ${arch} 包的 LSMinimumSystemVersion：${plist}`);
+  return value;
+}
+
 async function writeManifest({ mac, exe }) {
   const notes = readFileSync(notesPath, "utf8");
+  // minOS 不是手改 latest.json：从 update.config.json 读，并与两个 .app 的实际下限交叉校验
+  const minOS = normalizeMinOS(updateConfig.minOS);
+  const floors = mac.map(({ arch }) => readAppFloor(arch));
+  const problems = minOSProblems({ minOS, floors });
+  if (problems.length) fail(problems.join("\n"));
+  if (minOS && compareVersions(minOS, floors[0]) > 0) {
+    console.warn(`release: minOS ${minOS} 高于 app 下限 ${floors[0]}，会挡住本可运行的系统`);
+  }
   const assetUrl = (name) => `https://github.com/${repo}/releases/download/${tag}/${encodeURIComponent(name)}`;
   const entry = async (file) => ({
     url: assetUrl(file),
@@ -402,6 +426,7 @@ async function writeManifest({ mac, exe }) {
     version,
     publishedAt: new Date().toISOString(),
     notes,
+    ...(minOS ? { minOS } : {}),
     assets,
   };
   const manifestPath = join(releaseDir, "latest.json");

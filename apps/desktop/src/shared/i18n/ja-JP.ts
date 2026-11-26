@@ -357,8 +357,11 @@ export const jaJP: Record<keyof typeof zhCN, string> = {
   "update.downloading": "ダウンロード中 {percent}%",
   "update.ready": "バージョン {version} の準備ができました。再起動してインストールしてください。",
   "update.available": "バージョン {version} が公開されました。ダウンロードして更新してください。",
+  "update.incompatible": "新しいバージョン {version} には macOS {os} が必要です。現在のバージョンは引き続き使用できます",
   "update.waiting": "新バージョン {version} を検出しました。離席時に自動でダウンロードします",
   "update.download": "ダウンロード",
+  "update.incompatibleChip": "macOS {os} が必要",
+  "update.viewReleases": "リリースを見る",
   "update.openPageFailed": "ブラウザを開けませんでした。GitHub の Releases ページを直接開いてください。",
   "update.upToDate": "最新バージョンです",
   "update.failed": "アップデートの確認に失敗しました",
@@ -394,6 +397,7 @@ export const jaJP: Record<keyof typeof zhCN, string> = {
   "update.manifestVersion": "latest.json のバージョンが不正です：{value}",
   "update.manifestAssets": "latest.json に assets がありません",
   "update.manifestAsset": "latest.json にこの Mac で使える更新アセットがありません",
+  "update.manifestMinOS": "latest.json の minOS が不正です：{value}",
 
   // ツールバー
   "toolbar.select": "選択",

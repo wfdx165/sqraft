@@ -1,7 +1,16 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref } from "vue";
 import type { AppInfo } from "../../shared/ipc";
-import { checkForUpdates, downloadUpdate, restartToUpdate, updateAvailable, updateReady, updateStatusText, updateUi } from "../update";
+import {
+  checkForUpdates,
+  downloadUpdate,
+  restartToUpdate,
+  updateAvailable,
+  updateIncompatible,
+  updateReady,
+  updateStatusText,
+  updateUi,
+} from "../update";
 import { t } from "../i18n";
 
 const emit = defineEmits<{ close: [] }>();
@@ -12,7 +21,7 @@ const busy = computed(() => updateUi.phase === "checking" || updateUi.phase === 
 /** 已就绪时这个按钮变成"重启更新"：用户在这里点也不必去找工具栏胶囊。 */
 function onUpdateAction(): void {
   if (updateReady.value) restartToUpdate();
-  else if (updateAvailable.value) void downloadUpdate();
+  else if (updateAvailable.value || updateIncompatible.value) void downloadUpdate();
   else void checkForUpdates(true);
 }
 
@@ -55,18 +64,22 @@ function openLicenses(): void {
             {{
               updateReady
                 ? t("about.restart")
-                : updateAvailable
-                  ? t("update.download")
-                  : busy
-                    ? updateUi.phase === "waiting"
-                      ? t("about.waiting")
-                      : t("about.checking")
-                    : t("about.check")
+                : updateIncompatible
+                  ? t("update.viewReleases")
+                  : updateAvailable
+                    ? t("update.download")
+                    : busy
+                      ? updateUi.phase === "waiting"
+                        ? t("about.waiting")
+                        : t("about.checking")
+                      : t("about.check")
             }}
           </button>
         </div>
         <p class="foot">{{ updateStatusText() }}</p>
-        <p v-if="(updateReady || updateAvailable) && updateUi.notes" class="notes">{{ updateUi.notes }}</p>
+        <p v-if="(updateReady || updateAvailable || updateIncompatible) && updateUi.notes" class="notes">
+          {{ updateUi.notes }}
+        </p>
       </section>
 
       <section>

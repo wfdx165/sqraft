@@ -104,27 +104,60 @@ export interface LatestPlanInput {
   autoDownload: boolean;
   /** 当前进程架构（arm64 / x64）：决定读 `mac-arm64` 还是 `mac-x64` 资产 */
   arch: string;
+  /** 当前 macOS 版本（`process.getSystemVersion()`）；null/空 = 读不到，按不兼容处理（不自动下载） */
+  systemVersion: string | null;
 }
 
 export type LatestPlan =
-  | { kind: "up-to-date"; version: string; notes: string | null; publishedAt: string | null }
+  | {
+      kind: "up-to-date";
+      version: string;
+      notes: string | null;
+      publishedAt: string | null;
+      minOS: string | null;
+    }
   | { kind: "skipped-failed"; version: string }
-  | { kind: "available"; version: string; notes: string | null; publishedAt: string | null }
+  | {
+      kind: "incompatible";
+      version: string;
+      notes: string | null;
+      publishedAt: string | null;
+      minOS: string;
+    }
+  | {
+      kind: "available";
+      version: string;
+      notes: string | null;
+      publishedAt: string | null;
+      minOS: string | null;
+    }
   | {
       kind: "update";
       version: string;
       notes: string | null;
       publishedAt: string | null;
+      minOS: string | null;
       asset: UpdateAsset;
     };
 
 export function planForLatest(input: LatestPlanInput): LatestPlan {
-  const { currentVersion, manifest, failedVersion, manual, installable, autoDownload, arch } = input;
-  const meta = { version: manifest.version, notes: manifest.notes, publishedAt: manifest.publishedAt };
+  const { currentVersion, manifest, failedVersion, manual, installable, autoDownload, arch, systemVersion } = input;
+  const meta = {
+    version: manifest.version,
+    notes: manifest.notes,
+    publishedAt: manifest.publishedAt,
+    minOS: manifest.minOS,
+  };
   if (compareVersions(manifest.version, currentVersion) <= 0) return { kind: "up-to-date", ...meta };
   // 自动检查不重试已知坏版本；手动检查是用户明确要求，放行
   if (!manual && failedVersion && failedVersion === manifest.version) {
     return { kind: "skipped-failed", version: manifest.version };
+  }
+  // 当前系统低于清单要求，或读不到系统版本：不下载，提示用户停在可用版本（ADR-0049）。
+  // 只在能就地安装的平台检查；Windows 读同一份清单，但 minOS 是 macOS 的约束。
+  const minOS = manifest.minOS;
+  if (installable && minOS && (!systemVersion || compareVersions(systemVersion, minOS) < 0)) {
+    return { kind: "incompatible", ...meta, minOS };
   }
   // 清单里没有当前架构的包（例如刚切双架构、旧清单只有 arm64）→ 只提示，绝不装错架构
   const assetKey = macAssetKey(arch);

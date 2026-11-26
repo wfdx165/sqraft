@@ -15,6 +15,7 @@ export const updateUi = reactive<UpdateState>({
   latestVersion: null,
   notes: null,
   publishedAt: null,
+  minOS: null,
   progress: 0,
   message: null,
   readyAt: null,
@@ -45,12 +46,18 @@ export const updateReady = computed(() => updateUi.phase === "ready");
 /** 有新版本但本平台只能手动下载（Windows） */
 export const updateAvailable = computed(() => updateUi.phase === "available");
 
+/** 新版本要求更高的 macOS：停在当前版本，不下载 */
+export const updateIncompatible = computed(() => updateUi.phase === "incompatible");
+
 /** 手动检查：失败原因用 toast 说一次，状态本身留在关于面板里 */
 export async function checkForUpdates(manual = true): Promise<void> {
   try {
     const next = await window.sqraft.update.check(manual);
     apply(next);
     if (next.phase === "up-to-date") showToast(t("update.latest", { version: next.currentVersion }));
+    if (next.phase === "incompatible") {
+      showToast(t("update.incompatible", { version: next.latestVersion ?? "", os: next.minOS ?? "" }));
+    }
     if (next.phase === "error" && next.message) showToast(next.message, "error");
     if (next.phase === "unsupported" || next.phase === "dev") {
       if (next.message) showToast(next.message);
@@ -99,6 +106,8 @@ export function updateStatusText(): string {
       return t("update.ready", { version: updateUi.latestVersion ?? "" });
     case "available":
       return t("update.available", { version: updateUi.latestVersion ?? "" });
+    case "incompatible":
+      return t("update.incompatible", { version: updateUi.latestVersion ?? "", os: updateUi.minOS ?? "" });
     case "waiting":
       return t("update.waiting", { version: updateUi.latestVersion ?? "" });
     case "up-to-date":

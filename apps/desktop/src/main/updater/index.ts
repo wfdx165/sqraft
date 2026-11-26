@@ -20,6 +20,7 @@ import { patchUpdatePreferences, updatePreferences } from "../recent-state";
 import { isCheckBlocked, nextPollDelay, planForLatest, POLL_INTERVAL_MS, reminderDelay, shouldCheck } from "./decisions";
 import { downloadVerified } from "./download";
 import { installPathsOf, resolveInstallSupport, signingTeamOf, spawnInstallerSync, type InstallSupport } from "./install";
+import { releasePageUrl } from "./links";
 import { t } from "../i18n";
 import { reconcileOnStart } from "./reconcile";
 import { isTrustedUpdateUrl, parseLatest, UpdateManifestError } from "./protocol";
@@ -30,8 +31,6 @@ import type { UpdateAsset } from "./protocol";
 export const UPDATE_REPO = updateConfig.repo;
 
 const LATEST_URL = `https://github.com/${UPDATE_REPO}/releases/latest/download/latest.json`;
-/** Windows 没有自替换：只把用户送到发布页手动下载 */
-const DOWNLOAD_PAGE_URL = `https://github.com/${UPDATE_REPO}/releases/latest`;
 /** 启动后延迟检查：不和窗口首帧、MCP 启动抢资源 */
 const CHECK_DELAY_MS = 5_000;
 /** 系统唤醒后补查的延迟：等网络栈与代理恢复，别在刚醒来的瞬间就超时 */
@@ -48,6 +47,7 @@ let state: UpdateState = {
   latestVersion: null,
   notes: null,
   publishedAt: null,
+  minOS: null,
   progress: 0,
   message: null,
   readyAt: null,
@@ -193,6 +193,8 @@ async function runCheck(manual: boolean, cause: CheckCause): Promise<UpdateState
       installable: support.mode === "install",
       autoDownload: state.autoDownload,
       arch: process.arch,
+      // 只用于 minOS 判定；Windows 也读同一份清单，但 minOS 不参与那边的“只提示”
+      systemVersion: process.getSystemVersion(),
     });
 
     if (plan.kind === "up-to-date") {
@@ -207,12 +209,30 @@ async function runCheck(manual: boolean, cause: CheckCause): Promise<UpdateState
         latestVersion: plan.version,
         notes: plan.notes,
         publishedAt: plan.publishedAt,
+        minOS: null,
       });
     }
 
     if (plan.kind === "skipped-failed") {
       logApp("warn", "update: skipped previously failed version", { version: plan.version, cause });
-      return publish({ phase: "idle", message: null });
+      return publish({ phase: "idle", message: null, minOS: null });
+    }
+
+    // 新版本要求更高的 macOS：不下载，提示用户停在可用版本（ADR-0049）
+    if (plan.kind === "incompatible") {
+      logApp("info", "update: requires newer macOS", {
+        version: plan.version,
+        minOS: plan.minOS,
+        systemVersion: process.getSystemVersion(),
+        cause,
+      });
+      return publish({
+        phase: "incompatible",
+        latestVersion: plan.version,
+        notes: plan.notes,
+        publishedAt: plan.publishedAt,
+        minOS: plan.minOS,
+      });
     }
 
     if (plan.kind === "available") {
@@ -222,6 +242,7 @@ async function runCheck(manual: boolean, cause: CheckCause): Promise<UpdateState
         latestVersion: plan.version,
         notes: plan.notes,
         publishedAt: plan.publishedAt,
+        minOS: plan.minOS,
       });
     }
 
@@ -230,7 +251,7 @@ async function runCheck(manual: boolean, cause: CheckCause): Promise<UpdateState
       latest: plan.version,
       cause,
     });
-    publish({ latestVersion: plan.version, notes: plan.notes, publishedAt: plan.publishedAt });
+    publish({ latestVersion: plan.version, notes: plan.notes, publishedAt: plan.publishedAt, minOS: plan.minOS });
     // 自动下载等窗口失焦再开始：别在用户正在操作时抢带宽（手动检查直接下）
     if (cause !== "manual") {
       await waitForIdle();
@@ -247,8 +268,8 @@ async function runCheck(manual: boolean, cause: CheckCause): Promise<UpdateState
     const message = messageOf(error);
     logApp(manual ? "warn" : "info", "update: check failed", { cause, error: message, ms: Date.now() - started });
     // 自动检查失败对用户不可见；手动检查必须给出原因
-    if (manual) return publish({ phase: "error", message });
-    return publish({ phase: "idle", message: null });
+    if (manual) return publish({ phase: "error", message, minOS: null });
+    return publish({ phase: "idle", message: null, minOS: null });
   }
 }
 
@@ -480,11 +501,21 @@ export function scheduleAutoCheck(): void {
   watchResume();
 }
 
-/** Windows：把用户送到发布页；不做下载与安装。打不开系统浏览器时返回 false，由界面提示。 */
+/**
+ * 把用户送到发布页；不做下载与安装。打不开系统浏览器时返回 false，由界面提示。
+ *
+ * - Windows / 关闭自动下载：打开 `/releases/latest`；
+ * - `incompatible`：打开 Releases 列表，因为 latest 正是当前系统装不上的版本。
+ */
 export async function openDownloadPage(): Promise<boolean> {
-  logApp("info", "update: open download page", { version: state.latestVersion ?? undefined });
+  const url = releasePageUrl(UPDATE_REPO, state.phase);
+  logApp("info", "update: open download page", {
+    version: state.latestVersion ?? undefined,
+    phase: state.phase,
+    url,
+  });
   try {
-    await shell.openExternal(DOWNLOAD_PAGE_URL);
+    await shell.openExternal(url);
     return true;
   } catch (error) {
     logApp("warn", "update: open download page failed", { error: messageOf(error) });

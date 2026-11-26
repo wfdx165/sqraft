@@ -357,8 +357,11 @@ export const enUS: Record<keyof typeof zhCN, string> = {
   "update.downloading": "Downloading {percent}%",
   "update.ready": "Version {version} is ready. Restart to install.",
   "update.available": "Version {version} is available. Download it to update.",
+  "update.incompatible": "Version {version} requires macOS {os}. You can keep using the current version.",
   "update.waiting": "Version {version} found. Downloading once you step away.",
   "update.download": "Download",
+  "update.incompatibleChip": "Requires macOS {os}",
+  "update.viewReleases": "View releases",
   "update.openPageFailed": "Could not open your browser. Visit the GitHub Releases page manually.",
   "update.upToDate": "You're up to date",
   "update.failed": "Update check failed",
@@ -394,6 +397,7 @@ export const enUS: Record<keyof typeof zhCN, string> = {
   "update.manifestVersion": "Invalid version in latest.json: {value}",
   "update.manifestAssets": "latest.json is missing assets",
   "update.manifestAsset": "latest.json is missing an update asset for this Mac",
+  "update.manifestMinOS": "Invalid minOS in latest.json: {value}",
 
   // Toolbar
   "toolbar.select": "Select",

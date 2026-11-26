@@ -49,6 +49,51 @@ export function compareVersions(a, b) {
   return 0;
 }
 
+/**
+ * 上一版公开支持的 macOS 地板（ADR-0046 / ADR-0049）。
+ *
+ * 只有正式宣布停止支持 11.7 时才改它；不能用当前 build 的下限代替，
+ * 否则“抬了下限却没填 minOS”的检查会永远通过。
+ */
+export const MACOS_BASELINE = "11.0";
+
+const MIN_OS_PATTERN = /^\d+(?:\.\d+){0,2}$/;
+
+/**
+ * 校验 `update.config.json` 的 `minOS`：缺省/null = 不填；字符串必须是 x.y[.z]。
+ * 返回规范化后的字符串或 null；非法值直接抛错，让 release 在预检阶段中止。
+ */
+export function normalizeMinOS(value) {
+  if (value === undefined || value === null) return null;
+  if (typeof value !== "string" || !MIN_OS_PATTERN.test(value.trim())) {
+    throw new Error(`minOS 必须是 "12.0" 形式的 macOS 版本，收到 ${JSON.stringify(value)}`);
+  }
+  return value.trim();
+}
+
+/**
+ * `minOS` 与两个架构的 `LSMinimumSystemVersion` 交叉校验：
+ * - 两个架构的 floor 必须一致；
+ * - 抬了 floor 却没填 `minOS` → 老系统用户会下载到装不上的包；
+ * - `minOS` 低于 floor → 清单会放行装不上的系统。
+ * 返回问题列表；空数组 = 通过。
+ */
+export function minOSProblems({ minOS, floors }) {
+  const unique = [...new Set(floors)];
+  if (unique.length !== 1) {
+    return [`两个架构的 LSMinimumSystemVersion 不一致：${floors.join(" / ")}`];
+  }
+  const floor = unique[0];
+  if (!minOS) {
+    return compareVersions(floor, MACOS_BASELINE) > 0
+      ? [`app 下限已抬到 ${floor}，但 update.config.json 的 minOS 为空；老系统用户会下载到装不上的包`]
+      : [];
+  }
+  return compareVersions(minOS, floor) < 0
+    ? [`minOS ${minOS} 低于 app 的 LSMinimumSystemVersion ${floor}`]
+    : [];
+}
+
 /** macOS 产物命名：`Sqraft-<version>-<arch>.dmg` / `.zip`（见 electron-builder.yml 的 artifactName）。 */
 export function pickMacDmg(names, version, arch) {
   return names.find((name) => name.endsWith(`-${version}-${arch}.dmg`)) ?? null;

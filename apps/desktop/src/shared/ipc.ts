@@ -237,6 +237,7 @@ export interface CloseRequest {
 /**
  * 更新器阶段：`dev` / `unsupported` 都不发请求。
  * `available` = 只提示新版本、引导去下载页（Windows，或关闭了自动下载）。
+ * `incompatible` = 新版本要求更高的 macOS；当前系统停在可用版本，不下载。
  * `waiting` = 已发现新版本，等窗口失焦后再开始自动下载。
  */
 export type UpdatePhase =
@@ -246,6 +247,7 @@ export type UpdatePhase =
   | "checking"
   | "up-to-date"
   | "available"
+  | "incompatible"
   | "waiting"
   | "downloading"
   | "ready"
@@ -257,6 +259,8 @@ export interface UpdateState {
   latestVersion: string | null;
   notes: string | null;
   publishedAt: string | null;
+  /** 新版本要求的最低 macOS 版本（来自 latest.json 的 minOS）；没有限制为 null */
+  minOS: string | null;
   /** 下载进度 0–1；非下载阶段保留上一次值 */
   progress: number;
   /** 面向用户的状态说明（失败原因等）；没有额外信息时为 null */

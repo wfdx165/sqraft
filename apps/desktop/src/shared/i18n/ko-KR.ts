@@ -357,8 +357,11 @@ export const koKR: Record<keyof typeof zhCN, string> = {
   "update.downloading": "다운로드 중 {percent}%",
   "update.ready": "버전 {version}이(가) 준비되었습니다. 재시작하여 설치하세요.",
   "update.available": "버전 {version}이(가) 공개되었습니다. 다운로드하여 업데이트하세요.",
+  "update.incompatible": "새 버전 {version}에는 macOS {os}가 필요합니다. 현재 버전은 계속 사용할 수 있습니다",
   "update.waiting": "새 버전 {version}을 찾았습니다. 자리를 비우면 자동으로 다운로드합니다",
   "update.download": "다운로드",
+  "update.incompatibleChip": "macOS {os} 필요",
+  "update.viewReleases": "릴리스 보기",
   "update.openPageFailed": "브라우저를 열 수 없습니다. GitHub Releases 페이지를 직접 열어 주세요.",
   "update.upToDate": "최신 버전입니다",
   "update.failed": "업데이트 확인에 실패했습니다",
@@ -394,6 +397,7 @@ export const koKR: Record<keyof typeof zhCN, string> = {
   "update.manifestVersion": "latest.json의 버전이 잘못되었습니다: {value}",
   "update.manifestAssets": "latest.json에 assets가 없습니다",
   "update.manifestAsset": "latest.json에 이 Mac에서 사용할 수 있는 업데이트 자산이 없습니다",
+  "update.manifestMinOS": "latest.json의 minOS가 올바르지 않습니다: {value}",
 
   // 도구 모음
   "toolbar.select": "선택",

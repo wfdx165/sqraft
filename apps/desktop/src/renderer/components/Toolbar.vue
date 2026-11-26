@@ -6,7 +6,14 @@ import { openContextMenu, type ContextMenuItem } from "../context-menu";
 import { keyLabel, PANEL_BINDING, registerShortcuts, type ActionId } from "../shortcuts";
 import { settingsUi, toggleSettings } from "../settings";
 import { vTip } from "../tooltip";
-import { downloadUpdate, restartToUpdate, updateAvailable, updateReady, updateUi } from "../update";
+import {
+  downloadUpdate,
+  restartToUpdate,
+  updateAvailable,
+  updateIncompatible,
+  updateReady,
+  updateUi,
+} from "../update";
 import { t } from "../i18n";
 import { enterPresenter } from "../presenter";
 import type { MessageKey } from "../../shared/i18n";
@@ -207,6 +214,14 @@ onBeforeUnmount(() => {
       @click="downloadUpdate"
     >
       <Icon name="update" :size="12" /><span>{{ t("update.download") }}</span>
+    </button>
+    <button
+      v-else-if="updateIncompatible"
+      class="doc-chip update"
+      v-tip="{ label: t('update.incompatible', { version: updateUi.latestVersion ?? '', os: updateUi.minOS ?? '' }) }"
+      @click="downloadUpdate"
+    >
+      <Icon name="update" :size="12" /><span>{{ t("update.incompatibleChip", { os: updateUi.minOS ?? "" }) }}</span>
     </button>
 
     <span v-show="!hiddenGroups.has('doc')" class="divider" />

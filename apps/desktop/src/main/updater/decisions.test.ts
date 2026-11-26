@@ -16,7 +16,7 @@ import { parseLatest } from "./protocol";
 const now = 1_700_000_000_000;
 const sha = "b".repeat(64);
 
-function manifest(version: string, assets?: Record<string, unknown>) {
+function manifest(version: string, assets?: Record<string, unknown>, extra: Record<string, unknown> = {}) {
   return parseLatest({
     version,
     notes: "说明",
@@ -27,6 +27,7 @@ function manifest(version: string, assets?: Record<string, unknown>) {
         sha256: sha,
       },
     },
+    ...extra,
   });
 }
 
@@ -62,9 +63,16 @@ describe("检查更新的闸门", () => {
 
 describe("被阻断的阶段", () => {
   it("下载中 / 等空闲 / 已就绪阻断，其余阶段放行", () => {
-    const blocked = ["idle", "checking", "up-to-date", "available", "error", "dev", "unsupported"].filter(
-      (phase) => isCheckBlocked(phase as Parameters<typeof isCheckBlocked>[0]),
-    );
+    const blocked = [
+      "idle",
+      "checking",
+      "up-to-date",
+      "available",
+      "incompatible",
+      "error",
+      "dev",
+      "unsupported",
+    ].filter((phase) => isCheckBlocked(phase as Parameters<typeof isCheckBlocked>[0]));
     expect(blocked).toEqual([]);
     expect(isCheckBlocked("downloading")).toBe(true);
     expect(isCheckBlocked("waiting")).toBe(true);
@@ -125,6 +133,7 @@ describe("拿到 latest.json 之后", () => {
     installable: true,
     autoDownload: true,
     arch: "arm64",
+    systemVersion: "11.7.10",
   } as const;
 
   it("不高于当前版本 → 已是最新，不下载", () => {
@@ -190,5 +199,47 @@ describe("拿到 latest.json 之后", () => {
   it("失败版本之后出现更高版本时自动检查恢复", () => {
     const plan = planForLatest({ ...base, manifest: manifest("0.2.1"), failedVersion: "0.2.0" });
     expect(plan.kind).toBe("update");
+  });
+
+  it("当前系统低于 minOS → 停在可用版本，不下载", () => {
+    const plan = planForLatest({ ...base, manifest: manifest("0.2.0", undefined, { minOS: "12.0" }) });
+    expect(plan.kind).toBe("incompatible");
+    if (plan.kind !== "incompatible") throw new Error("unreachable");
+    expect(plan.minOS).toBe("12.0");
+  });
+
+  it("系统等于或高于 minOS → 正常下载", () => {
+    expect(
+      planForLatest({ ...base, systemVersion: "12.0", manifest: manifest("0.2.0", undefined, { minOS: "12.0" }) })
+        .kind,
+    ).toBe("update");
+    expect(
+      planForLatest({ ...base, systemVersion: "12.6", manifest: manifest("0.2.0", undefined, { minOS: "12.0" }) })
+        .kind,
+    ).toBe("update");
+  });
+
+  it("清单没有 minOS → 不限制系统", () => {
+    expect(planForLatest({ ...base, manifest: manifest("0.2.0") }).kind).toBe("update");
+  });
+
+  it("只能手动安装的平台（Windows）忽略 minOS", () => {
+    const plan = planForLatest({
+      ...base,
+      installable: false,
+      manifest: manifest("0.2.0", undefined, { minOS: "12.0" }),
+    });
+    expect(plan.kind).toBe("available");
+  });
+
+  it("系统版本读不到时不自动下载（保守）", () => {
+    for (const systemVersion of [null, ""]) {
+      const plan = planForLatest({
+        ...base,
+        systemVersion,
+        manifest: manifest("0.2.0", undefined, { minOS: "12.0" }),
+      });
+      expect(plan.kind).toBe("incompatible");
+    }
   });
 });
