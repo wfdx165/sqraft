@@ -203,7 +203,7 @@ export function pathFromD(name: string, d: string, options: PathOptions = {}): D
   const subpaths = parsePathData(d);
   if (!subpaths || subpaths.length !== 1) throw new Error(`示例路径 "${name}" 必须是单轮廓`);
   const first = subpaths[0]!;
-  const { vector, bounds } = normalizeVector(first.anchors, first.closed);
+  const { vector, bounds } = normalizeVector([{ closed: first.closed, anchors: first.anchors }]);
   return createNode("path", {
     name,
     x: bounds.x,

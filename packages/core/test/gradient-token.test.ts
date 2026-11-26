@@ -193,13 +193,13 @@ describe("渐变 Token：诊断", () => {
 });
 
 describe("渐变 Token：格式版本", () => {
-  it("10 → 11 不需要改数据", () => {
+  it("10 → 11 不需要改数据（当前 12，仍保留这条旧覆盖）", () => {
     const state: DocState = createDocWithPage();
     state.formatVersion = 10;
     state.tokens["color/a"] = { type: "color", value: "#000000" };
     const migrated = migrateDoc(state, 10);
     expect(migrated.formatVersion).toBe(CURRENT_FORMAT_VERSION);
-    expect(CURRENT_FORMAT_VERSION).toBe(11);
+    expect(CURRENT_FORMAT_VERSION).toBe(12);
     expect(migrated.tokens["color/a"]).toEqual({ type: "color", value: "#000000" });
   });
 });

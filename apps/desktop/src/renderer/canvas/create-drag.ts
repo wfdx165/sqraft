@@ -2,7 +2,7 @@
  * 绘图工具落笔：把拖拽出的包围盒转成真实节点。
  * 返回待提交的节点与父容器；命令、选区与编辑态由 CanvasView 负责。
  */
-import { createNode, defaultLayoutFor, worldRect, type DocNode, type NodeId } from "@sqraft/core";
+import { createNode, defaultLayoutFor, pathFromAnchors, worldRect, type DocNode, type NodeId } from "@sqraft/core";
 import { docStore } from "../store";
 import { t } from "../i18n";
 import { DEFAULT_TEXT_FONT_SIZE, textSizeOf } from "../text-metrics";
@@ -51,20 +51,17 @@ export function buildCreatedNode(input: CreateDragInput): CreatedNode {
           width: 1,
           height: 1,
           // 用两点路径记住起止方向：单纯用包围盒会把左上→右下的方向强行归一化
-          vector: {
-            closed: false,
-            anchors: [
-              { x: preview.x - parentRect.x, y: preview.y - parentRect.y, inX: 0, inY: 0, outX: 0, outY: 0 },
-              {
-                x: preview.x + preview.w - parentRect.x,
-                y: preview.y + preview.h - parentRect.y,
-                inX: 0,
-                inY: 0,
-                outX: 0,
-                outY: 0,
-              },
-            ],
-          },
+          vector: pathFromAnchors([
+            { x: preview.x - parentRect.x, y: preview.y - parentRect.y, inX: 0, inY: 0, outX: 0, outY: 0 },
+            {
+              x: preview.x + preview.w - parentRect.x,
+              y: preview.y + preview.h - parentRect.y,
+              inX: 0,
+              inY: 0,
+              outX: 0,
+              outY: 0,
+            },
+          ]),
           style: { stroke: { value: "#1a1a1a" }, strokeWidth: 2 },
         }
       : {

@@ -12,6 +12,7 @@ import {
   createNode,
   isGradientPaint,
   makeAnchor,
+  pathFromAnchors,
   vectorBounds,
   type DocNode,
   type GradientStop,
@@ -373,20 +374,23 @@ function unsupported(element: Element, styles: Map<string, string>): string | nu
 
 function matrixPath(path: VectorPath, matrix: Mat): VectorPath {
   return {
-    closed: path.closed,
-    anchors: path.anchors.map((anchor) => {
-      const point = applyPoint(matrix, anchor.x, anchor.y);
-      const out = applyPoint(matrix, anchor.x + anchor.outX, anchor.y + anchor.outY);
-      const into = applyPoint(matrix, anchor.x + anchor.inX, anchor.y + anchor.inY);
-      return {
-        x: point.x,
-        y: point.y,
-        outX: out.x - point.x,
-        outY: out.y - point.y,
-        inX: into.x - point.x,
-        inY: into.y - point.y,
-      };
-    }),
+    contours: path.contours.map((contour) => ({
+      closed: contour.closed,
+      anchors: contour.anchors.map((anchor) => {
+        const point = applyPoint(matrix, anchor.x, anchor.y);
+        const out = applyPoint(matrix, anchor.x + anchor.outX, anchor.y + anchor.outY);
+        const into = applyPoint(matrix, anchor.x + anchor.inX, anchor.y + anchor.inY);
+        return {
+          x: point.x,
+          y: point.y,
+          outX: out.x - point.x,
+          outY: out.y - point.y,
+          inX: into.x - point.x,
+          inY: into.y - point.y,
+        };
+      }),
+    })),
+    fillRule: path.fillRule,
   };
 }
 
@@ -401,10 +405,13 @@ function pushPathNode(
 ): void {
   const transformed = matrixPath(vector, matrix);
   const bounds = vectorBounds(transformed);
-  const anchors = transformed.anchors.map((anchor) => ({
-    ...anchor,
-    x: anchor.x - bounds.x,
-    y: anchor.y - bounds.y,
+  const contours = transformed.contours.map((contour) => ({
+    closed: contour.closed,
+    anchors: contour.anchors.map((anchor) => ({
+      ...anchor,
+      x: anchor.x - bounds.x,
+      y: anchor.y - bounds.y,
+    })),
   }));
   const style = baseStyle(inherited);
   ctx.nodes.push(
@@ -415,7 +422,7 @@ function pushPathNode(
       width: Math.max(1, bounds.width),
       height: Math.max(1, bounds.height),
       opacity: opacityOf(attr(element, styles, "opacity")),
-      vector: { closed: vector.closed, anchors },
+      vector: { contours, fillRule: transformed.fillRule },
       style,
     }),
   );
@@ -426,10 +433,10 @@ function rectVector(element: Element): VectorPath {
   const y = Number(element.getAttribute("y") ?? 0);
   const w = Number(element.getAttribute("width") ?? 0);
   const h = Number(element.getAttribute("height") ?? 0);
-  return {
-    closed: true,
-    anchors: [makeAnchor(x, y), makeAnchor(x + w, y), makeAnchor(x + w, y + h), makeAnchor(x, y + h)],
-  };
+  return pathFromAnchors(
+    [makeAnchor(x, y), makeAnchor(x + w, y), makeAnchor(x + w, y + h), makeAnchor(x, y + h)],
+    true,
+  );
 }
 
 function ellipseVector(element: Element, circle: boolean): VectorPath {
@@ -444,7 +451,7 @@ function ellipseVector(element: Element, circle: boolean): VectorPath {
     makeAnchor(cx + rx, cy, { outX: 0, outY: k * ry, inX: 0, inY: -k * ry }),
     makeAnchor(cx, cy + ry, { outX: -k * rx, outY: 0, inX: k * rx, inY: 0 }),
   ];
-  return { closed: true, anchors };
+  return pathFromAnchors(anchors, true);
 }
 
 function pointsVector(element: Element, closed: boolean): VectorPath | null {
@@ -454,7 +461,7 @@ function pointsVector(element: Element, closed: boolean): VectorPath | null {
   for (let i = 0; i + 1 < numbers.length; i += 2) {
     anchors.push(makeAnchor(numbers[i]!, numbers[i + 1]!));
   }
-  return { closed, anchors };
+  return pathFromAnchors(anchors, closed);
 }
 
 function textOf(
@@ -779,7 +786,7 @@ async function parseNode(
         element,
         styles,
         matrix,
-        { closed: false, anchors: [makeAnchor(x1, y1), makeAnchor(x2, y2)] },
+        pathFromAnchors([makeAnchor(x1, y1), makeAnchor(x2, y2)]),
         "line",
         merged,
       );
@@ -795,11 +802,19 @@ async function parseNode(
     case "path": {
       const subpaths = parsePathData(element.getAttribute("d") ?? "");
       if (!subpaths) return false;
-      // 单轮廓模型表达不了"多子路径 + 填充"里的洞：整元素栅格化
-      if (subpaths.length > 1 && baseStyle(merged).fill) return false;
-      subpaths.forEach((subpath, index) => {
-        pushPathNode(ctx, element, styles, matrix, subpath, subpaths.length > 1 ? `path-${index + 1}` : "path", merged);
-      });
+      // 多子路径不再拆成多个节点或整元素栅格化：一个 path 装下所有轮廓（05）
+      pushPathNode(
+        ctx,
+        element,
+        styles,
+        matrix,
+        {
+          contours: subpaths.map((subpath) => ({ closed: subpath.closed, anchors: subpath.anchors })),
+          fillRule: attr(element, styles, "fill-rule") === "evenodd" ? "evenodd" : "nonzero",
+        },
+        "path",
+        merged,
+      );
       return true;
     }
     case "text":

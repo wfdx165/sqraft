@@ -8,6 +8,8 @@ export * from "./text";
 export * from "./diagnostics";
 export { migrateDoc, CURRENT_FORMAT_VERSION } from "./migrate";
 export * from "./vector";
+export * from "./boolean";
+export * from "./path-ops";
 export * from "./polygon";
 export * from "./interaction";
 export * from "./component";

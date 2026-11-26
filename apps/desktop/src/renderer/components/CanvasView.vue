@@ -7,6 +7,7 @@ import {
   firstPageId,
   imageCropOf,
   makeAnchor,
+  replaceContour,
   resolvePaint,
   scaleVector,
   unionRects,
@@ -51,6 +52,7 @@ import { dispatch, docStore, hooks, select, switchMode, ui } from "../store";
 import { closeContextMenu } from "../context-menu";
 import { openNodeMenu, openPageMenu } from "../object-menu";
 import { hitTest, isLocked, pageAt, slotUnder } from "../canvas/hit";
+import { booleanSelection, convertSelectionToPath } from "../canvas/boolean-actions";
 import { containerAt, layoutParentOf, reorderGuide, reorderIndexAt } from "../canvas/layout-drag";
 import { dropAllowed, dropTargetAt, type DropTarget } from "../canvas/drop-target";
 import { paintDropTarget } from "../canvas/drop-overlay";
@@ -972,16 +974,29 @@ function onDoubleClick(e: MouseEvent) {
     if (anchorHit && !anchorHit.side) {
       const node = docStore.doc.nodes[pen.pathEdit.id];
       if (node?.vector) {
-        const anchors = node.vector.anchors.map((a, i) =>
+        const contour = node.vector.contours[Math.max(0, Math.min(pen.pathEdit.contour, node.vector.contours.length - 1))];
+        if (!contour) return;
+        const anchors = contour.anchors.map((a, i) =>
           i === anchorHit.index ? { ...a, inX: 0, inY: 0, outX: 0, outY: 0 } : { ...a },
         );
         dispatch(
           {
             type: "node.update",
-            params: { nodeId: pen.pathEdit.id, patch: { vector: { closed: node.vector.closed, anchors } } },
+            params: {
+              nodeId: pen.pathEdit.id,
+              patch: {
+                vector: replaceContour(
+                  node.vector,
+                  Math.max(0, Math.min(pen.pathEdit.contour, node.vector.contours.length - 1)),
+                  { closed: contour.closed, anchors },
+                ),
+              },
+            },
           },
           "path-corner",
         );
+        pen.pathEdit.contour = anchorHit.contour;
+        pen.pathEdit.active = anchorHit.index;
         pen.pathEdit.active = anchorHit.index;
         markDirty();
         return;
@@ -1043,7 +1058,7 @@ function onDoubleClick(e: MouseEvent) {
   if (node.type === "path" && node.vector) {
     // 双击路径进入锚点编辑：显示锚点、隐藏 8 个缩放手柄
     select([node.id]);
-    pen.pathEdit = { id: node.id, active: 0 };
+    pen.pathEdit = { id: node.id, contour: 0, active: 0 };
     ui.expandedPageId = hit.pageId;
     markDirty();
     return;
@@ -1069,6 +1084,7 @@ function paintPathEditing(g: CanvasRenderingContext2D): void {
   drawPathEditing(g, vp, {
     node,
     origin,
+    contour: pen.pathEdit.contour,
     active: pen.pathEdit.active,
     preview: pen.vectorDrag?.preview ?? null,
     move: moving,
@@ -1355,13 +1371,20 @@ function onPointerDown(e: PointerEvent) {
       const node = docStore.doc.nodes[pen.pathEdit.id];
       const origin = worldRect(docStore.doc, pen.pathEdit.id);
       if (node?.vector && origin) {
+        const contour = Math.max(0, Math.min(anchorHit.contour, node.vector.contours.length - 1));
+        pen.pathEdit.contour = contour;
         pen.pathEdit.active = anchorHit.index;
         pen.vectorDrag = {
           pointerId: e.pointerId,
           kind: anchorHit.side ? "handle" : "anchor",
+          contour,
           index: anchorHit.index,
           side: anchorHit.side,
-          startAnchors: node.vector.anchors.map((a) => ({ ...a, x: a.x + origin.x, y: a.y + origin.y })),
+          startAnchors: (node.vector.contours[contour]?.anchors ?? []).map((a) => ({
+            ...a,
+            x: a.x + origin.x,
+            y: a.y + origin.y,
+          })),
           startWX: w.x,
           startWY: w.y,
           moved: false,
@@ -1453,7 +1476,10 @@ function onPointerDown(e: PointerEvent) {
         startRect,
         guide: guideContextFor([node.id]),
         startVector: node.vector
-          ? { closed: node.vector.closed, anchors: node.vector.anchors.map((a) => ({ ...a })) }
+          ? {
+              contours: node.vector.contours.map((c) => ({ closed: c.closed, anchors: c.anchors.map((a) => ({ ...a })) })),
+              fillRule: node.vector.fillRule,
+            }
           : undefined,
       };
       dragging.value = true;
@@ -1734,16 +1760,16 @@ function onPointerMove(e: PointerEvent) {
     }
     const node = pen.pathEdit ? docStore.doc.nodes[pen.pathEdit.id] : null;
     if (!node?.vector) return;
-    const vec: VectorPath = {
-      closed: node.vector.closed,
-      anchors: pen.vectorDrag.startAnchors.map((a) => ({ ...a })),
-    };
-    const index = Math.max(0, Math.min(pen.vectorDrag.index, vec.anchors.length - 1));
+    const contourIndex = Math.max(0, Math.min(pen.vectorDrag.contour, node.vector.contours.length - 1));
+    const contour = node.vector.contours[contourIndex];
+    if (!contour) return;
+    const anchors = pen.vectorDrag.startAnchors.map((a) => ({ ...a }));
+    const index = Math.max(0, Math.min(pen.vectorDrag.index, anchors.length - 1));
     if (pen.vectorDrag.kind === "anchor") {
-      vec.anchors[index].x += w.x - pen.vectorDrag.startWX;
-      vec.anchors[index].y += w.y - pen.vectorDrag.startWY;
+      anchors[index].x += w.x - pen.vectorDrag.startWX;
+      anchors[index].y += w.y - pen.vectorDrag.startWY;
     } else {
-      const a = vec.anchors[index];
+      const a = anchors[index];
       const ox = w.x - a.x;
       const oy = w.y - a.y;
       const side = pen.vectorDrag.side ?? "out";
@@ -1769,7 +1795,10 @@ function onPointerMove(e: PointerEvent) {
         }
       }
     }
-    pen.vectorDrag.preview = vec;
+    pen.vectorDrag.preview = {
+      contours: node.vector.contours.map((c, i) => (i === contourIndex ? { closed: contour.closed, anchors } : c)),
+      fillRule: node.vector.fillRule,
+    };
   } else if (drag.mode === "crop") {
     const world = screenToWorld(vp, sx, sy);
     if (applyCropDrag(drag, world)) drag.moved = true;
@@ -2107,18 +2136,29 @@ function onPointerUp(e: PointerEvent) {
     const node = edit ? docStore.doc.nodes[edit.id] : null;
     const origin = edit ? worldRect(docStore.doc, edit.id) : null;
     if (pen.vectorDrag?.moved && pen.vectorDrag.preview && edit && node?.vector && origin) {
-      const local = pen.vectorDrag.preview.anchors.map((a) => ({
+      const contourIndex = Math.max(0, Math.min(pen.vectorDrag.contour, pen.vectorDrag.preview.contours.length - 1));
+      const contour = pen.vectorDrag.preview.contours[contourIndex];
+      const local = (contour?.anchors ?? []).map((a) => ({
         ...a,
         x: a.x - origin.x,
         y: a.y - origin.y,
       }));
-      dispatch(
-        {
-          type: "node.update",
-          params: { nodeId: edit.id, patch: { vector: { closed: pen.vectorDrag.preview.closed, anchors: local } } },
-        },
-        "path-edit",
-      );
+      if (contour) {
+        dispatch(
+          {
+            type: "node.update",
+            params: {
+              nodeId: edit.id,
+              patch: {
+                vector: pen.vectorDrag.preview.contours.map((c, i) =>
+                  i === contourIndex ? { closed: c.closed, anchors: local } : c,
+                ),
+              },
+            },
+          },
+          "path-edit",
+        );
+      }
     }
     pen.vectorDrag = null;
     drag = null;
@@ -2563,6 +2603,11 @@ onMounted(() => {
     "edit.moveBackward": () => reorderSelection("backward"),
     "edit.moveToFront": () => reorderSelection("front"),
     "edit.moveToBack": () => reorderSelection("back"),
+    "boolean.union": () => booleanSelection("union"),
+    "boolean.subtract": () => booleanSelection("subtract"),
+    "boolean.intersect": () => booleanSelection("intersect"),
+    "boolean.exclude": () => booleanSelection("exclude"),
+    "path.convert": convertSelectionToPath,
     "component.create": createComponentFromSelection,
     "component.detach": detachSelection,
     "view.zoomIn": () => zoomStep(1.2),

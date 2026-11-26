@@ -175,6 +175,12 @@ pnpm dist     # 按宿主平台出包：macOS 出 arm64 dmg 与 zip，Windows �
 - 中日韩文字使用各系统自带字体，同一文档在 macOS 与 Windows 上换行位置可能不同
 - 没有多人协作、没有账户体系、没有云端同步
 
+## 交流
+
+- 中文用户：QQ 群 **1128819566**。只聊这个工具和 agent 改稿，装不上、用得别扭都直接说，带截图最快
+- 英文问答：[GitHub Discussions](https://github.com/wfdx165/sqraft/discussions)
+- 报错之前先翻一眼 [Issues](https://github.com/wfdx165/sqraft/issues)，可能已经有人提过
+
 ## 授权与反馈
 
 Sqraft 以 [Apache License 2.0](LICENSE) 开源；「Sqraft」名称与应用图标不在授权范围内，fork 请改名换标。

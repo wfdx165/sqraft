@@ -2,8 +2,9 @@
  * 画布与左栏共用的右键菜单内容：页面一套、元素一套（规格见 ai-native-polish 票 17）。
  * 只读文档状态 + 调已有动作，不自己写文档。
  */
-import { newId, type DocNode, type NodeId } from "@sqraft/core";
+import { inspectBooleanSelection, newId, type DocNode, type NodeId } from "@sqraft/core";
 import { openContextMenu, type ContextMenuItem } from "./context-menu";
+import { booleanSelection, convertSelectionToPath } from "./canvas/boolean-actions";
 import { copySelectionAction } from "./canvas/node-clipboard";
 import { canDeletePage, deletePage } from "./canvas/page-actions";
 import { enterPresenter } from "./presenter";
@@ -85,9 +86,31 @@ export function openNodeMenu(nodeId: NodeId, position: { x: number; y: number })
   if (!ui.selection.includes(nodeId)) select([nodeId]);
   const ids = ui.selection.filter((id) => docStore.doc.nodes[id]);
   const onlyOne = ids.length === 1;
+  // 选区是否具备布尔条件：类型、同一父级、未锁定；命令层仍会再校验一次
+  let booleanReady = false;
+  if (ids.length >= 2) {
+    try {
+      inspectBooleanSelection(docStore.doc, ids, "union");
+      booleanReady = true;
+    } catch {
+      booleanReady = false;
+    }
+  }
+  const convertible = ids.some((id) => {
+    const type = docStore.doc.nodes[id]?.type;
+    return type === "rect" || type === "ellipse" || type === "polygon" || type === "line";
+  });
+  const booleanItems: ContextMenuItem[] = [
+    { label: t("boolean.union"), hint: keyOf("boolean.union"), disabled: !booleanReady, run: () => booleanSelection("union") },
+    { label: t("boolean.subtract"), hint: keyOf("boolean.subtract"), disabled: !booleanReady, run: () => booleanSelection("subtract") },
+    { label: t("boolean.intersect"), hint: keyOf("boolean.intersect"), disabled: !booleanReady, run: () => booleanSelection("intersect") },
+    { label: t("boolean.exclude"), hint: keyOf("boolean.exclude"), disabled: !booleanReady, run: () => booleanSelection("exclude") },
+  ];
   const items: ContextMenuItem[] = [
     { label: t("common.copy"), hint: keyOf("edit.copy"), run: () => void copySelectionAction() },
     { label: t("objectMenu.copyAs"), hint: keyOf("edit.copyImage"), children: copyAsItems() },
+    { label: t("objectMenu.boolean"), separator: true, disabled: !booleanReady, children: booleanItems },
+    { label: t("path.convert"), disabled: !convertible, run: () => convertSelectionToPath() },
     {
       label: t("common.rename"),
       hint: keyOf("edit.rename"),

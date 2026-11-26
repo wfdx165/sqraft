@@ -15,12 +15,12 @@ describe("AI 工具：路径", () => {
     });
     const node = store.doc.nodes[res.nodeId as string];
     expect(node.type).toBe("path");
-    expect(node.vector?.closed).toBe(false);
+    expect(node.vector?.contours[0].closed).toBe(false);
     expect(node.x).toBe(30);
     expect(node.y).toBe(40);
     expect(node.width).toBe(100);
     expect(node.height).toBe(50);
-    expect(node.vector?.anchors[0]).toMatchObject({ x: 0, y: 0 });
+    expect(node.vector?.contours[0].anchors[0]).toMatchObject({ x: 0, y: 0 });
     // 未给颜色时开放路径默认描边
     expect(node.style.stroke).toEqual({ value: "#1a1a1a" });
     expect(node.style.strokeWidth).toBe(2);
@@ -76,10 +76,10 @@ describe("AI 工具：路径", () => {
       ],
       closed: false,
     });
-    expect(store.doc.nodes[id].vector?.anchors[1]).toMatchObject({ x: 0, y: 160 });
+    expect(store.doc.nodes[id].vector?.contours[0].anchors[1]).toMatchObject({ x: 0, y: 160 });
     store.undo();
     expect(store.doc.nodes[id].width).toBe(100);
-    expect(store.doc.nodes[id].vector?.anchors[1]).toMatchObject({ x: 100, y: 0 });
+    expect(store.doc.nodes[id].vector?.contours[0].anchors[1]).toMatchObject({ x: 100, y: 0 });
   });
 
   it("points / closed 只适用于 path", async () => {
@@ -101,8 +101,8 @@ describe("AI 工具：路径", () => {
       ],
     });
     const doc = await call(run, "read_document");
-    const flat = doc.nodes as Array<{ id: string; vector?: { anchors: unknown[] } }>;
-    expect(flat.find((n) => n.id === created.nodeId)?.vector?.anchors).toHaveLength(2);
+    const flat = doc.nodes as Array<{ id: string; vector?: { contours: Array<{ anchors: unknown[] }> } }>;
+    expect(flat.find((n) => n.id === created.nodeId)?.vector?.contours[0]?.anchors).toHaveLength(2);
   });
 });
 
@@ -681,7 +681,6 @@ describe("图片工具", () => {
   function host(calls: string[]) {
     return {
       newDocument: async () => true,
-      openDocument: async () => true,
       addImage: async (data: string) => {
         calls.push(data);
         return { assetId: "asset-1", width: 640, height: 480 };
@@ -911,7 +910,6 @@ describe("AI 工具：页面", () => {
     const activated: string[] = [];
     const run = makeExecutor(store, async () => "", () => null, undefined, {
       newDocument: async () => true,
-      openDocument: async () => true,
       activatePage: (pageId) => activated.push(pageId),
     });
     const res = await call(run, "create_page", { name: "详情" });

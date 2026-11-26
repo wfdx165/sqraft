@@ -2,12 +2,13 @@
  * AI 工具入口：装配执行器，按工具名分派到 `handlers/`。
  *
  * 纪律：颜色优先引用 Token，也可以直接用字面量（ADR-0024）。
- * 一次工具调用 = 一个撤销步；写工具提交后把诊断并进同一响应。
+ * 一次工具调用 = 一个撤销步；写工具提交后把诊断与布局建议并进同一响应。
  */
 
 import type { DocNode, DocStore, NodeId, NodeStyle } from "@sqraft/core";
 import { handlers, MUTATING_TOOLS } from "./handlers";
 import { attachDiagnostics } from "./diagnostics";
+import { attachLayoutHints } from "./layout-hints";
 import { tools, type ToolDefinition } from "./tools";
 import type { DocumentHost, ExecutorOptions, ScreenshotRegion, ToolContext, ToolExecutor } from "./types";
 
@@ -62,7 +63,8 @@ export function makeExecutor(
     });
     try {
       const raw = await store.transact(`MCP：${name}`, () => handler(ctx, args));
-      return attachDiagnostics(store, raw, changed, options.measureLine);
+      const withDiagnostics = attachDiagnostics(store, raw, changed, options.measureLine);
+      return attachLayoutHints(store, withDiagnostics, changed, name);
     } finally {
       unsubscribe();
     }

@@ -43,6 +43,10 @@ describe("MCP 协议处理", () => {
     expect(instructions).toMatch(/search_nodes/);
     expect(instructions).toMatch(/diagnostics/);
     expect(instructions).toMatch(/format:"text"/);
+    expect(instructions).toMatch(/auto layout/i);
+    expect(instructions).toMatch(/layoutHints/);
+    expect(instructions).toMatch(/boolean_op/);
+    expect(instructions).toMatch(/contours/);
   });
 
   it("不支持的协议版本回落到最新受支持版本，而不是报错", async () => {

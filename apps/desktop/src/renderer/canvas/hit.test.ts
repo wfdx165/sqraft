@@ -119,3 +119,48 @@ describe("画布命中：实例不能抢走同父元素的点击", () => {
     ui.instanceContext = [];
   });
 });
+
+describe("画布命中：多轮廓路径的洞穿透", () => {
+  beforeEach(() => {
+    ui.selection = [];
+  });
+
+  it("洞内命中下层节点，环上命中路径本身", () => {
+    const { pageId } = setup();
+    const rect = createNode("rect", { x: 50, y: 50, width: 100, height: 100, style: { fill: { value: "#ffffff" } } });
+    docStore.apply({ type: "node.create", params: { nodes: [rect], parentId: pageId } });
+    const ring = createNode("path", {
+      x: 0,
+      y: 0,
+      vector: {
+        contours: [
+          {
+            closed: true,
+            anchors: [
+              { x: 0, y: 0, inX: 0, inY: 0, outX: 0, outY: 0 },
+              { x: 200, y: 0, inX: 0, inY: 0, outX: 0, outY: 0 },
+              { x: 200, y: 200, inX: 0, inY: 0, outX: 0, outY: 0 },
+              { x: 0, y: 200, inX: 0, inY: 0, outX: 0, outY: 0 },
+            ],
+          },
+          {
+            closed: true,
+            anchors: [
+              { x: 50, y: 50, inX: 0, inY: 0, outX: 0, outY: 0 },
+              { x: 150, y: 50, inX: 0, inY: 0, outX: 0, outY: 0 },
+              { x: 150, y: 150, inX: 0, inY: 0, outX: 0, outY: 0 },
+              { x: 50, y: 150, inX: 0, inY: 0, outX: 0, outY: 0 },
+            ],
+          },
+        ],
+        fillRule: "evenodd",
+      },
+      style: { fill: { value: "#3366ff" } },
+    });
+    docStore.apply({ type: "node.create", params: { nodes: [ring], parentId: pageId } });
+
+    expect(hitTest(vp, 100, 100)?.id).toBe(rect.id);
+    expect(hitTest(vp, 20, 20)?.id).toBe(ring.id);
+    expect(hitTest(vp, 175, 100)?.id).toBe(ring.id);
+  });
+});

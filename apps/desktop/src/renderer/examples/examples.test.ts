@@ -65,8 +65,8 @@ describe("日食示例（UMBRA）", () => {
     expect(ridges).toHaveLength(2);
     for (const ridge of ridges) {
       expect(ridge.type).toBe("path");
-      expect(ridge.vector?.anchors.length).toBeGreaterThan(5);
-      expect(ridge.vector?.closed).toBe(true);
+      expect(ridge.vector?.contours[0]?.anchors.length).toBeGreaterThan(5);
+      expect(ridge.vector?.contours[0]?.closed).toBe(true);
       expect(ridge.style.fill).toMatchObject({ type: "linear" });
     }
   });

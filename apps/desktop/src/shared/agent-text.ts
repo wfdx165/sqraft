@@ -20,4 +20,9 @@ export const AGENT_INSTRUCTIONS = [
   "Every write result may carry diagnostics. Fix warnings before moving on.",
   'If your client cannot read images, call screenshot({format:"text"}).',
   "One tool call is one undo step, so a single undo reverts the whole call.",
+  "Frames and components default to auto layout (vertical, gap 10, padding 10). For a container with 2+ children, build it with layout + layoutSizingW/H (hug/fill) instead of positioning each child by hand.",
+  "Inside a layout container x/y are owned by the layout; set layoutAbsolute:true on a child that must keep a free position.",
+  "A write result may carry layoutHints when hand-placed siblings already form an evenly spaced row or column; apply suggested when it matches the design.",
+  "boolean_op bakes its result into a plain path; operands survive only in the undo stack, so keep their ids if you may need to revert.",
+  "Read and write path anchors as contours + fillRule (parent-container coordinates, whole-array replacement); points/closed only work on single-contour paths.",
 ].join("\n");
