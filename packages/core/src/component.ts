@@ -6,6 +6,7 @@
 
 import { createNode, type DocNode, type DocState, type NodeOverride, type NodeStyle, type NodeId } from "./model";
 import { AppError } from "./errors";
+import { cloneVector } from "./vector";
 
 /** 主组件默认名：「组件 N」，全文档不重复；界面可传本地化前缀。 */
 export function nextComponentName(state: DocState, prefix = "组件"): string {
@@ -43,9 +44,7 @@ function cloneNodeData(node: DocNode): DocNode {
     ...node,
     children: [],
     style: cloneStyle(node.style),
-    vector: node.vector
-      ? { closed: node.vector.closed, anchors: node.vector.anchors.map((a) => ({ ...a })) }
-      : undefined,
+    vector: node.vector ? cloneVector(node.vector) : undefined,
     layout: node.layout ? { ...node.layout } : undefined,
     propValues: node.propValues ? { ...node.propValues } : undefined,
     overrides: node.overrides ? structuredClone(node.overrides) : undefined,

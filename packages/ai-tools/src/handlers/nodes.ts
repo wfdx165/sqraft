@@ -1,6 +1,6 @@
 // 工具名直接分派；每个分支保持原实现，ctx 提供 store 与宿主能力。
 import type { AlignEdge, Command, DistributeAxis, DocNode, NodeId, NodeStyle, ReorderAction, TextAutoResize } from "../shared";
-import { CREATABLE_KINDS, applyNodeArgs, applyStyleArgs, assertEffectTokens, assertGradientTokens, assertImageUrl, assertNoLiteralColors, assertNumericTokenArgs, assertToken, clampSides, createNode, defaultLayoutFor, effectsFrom, ensurePage, firstPageId, newId, nextComponentName, nextComponentPosition, planDuplicate, readPoints, resolveNumericStyle, validateVector, walkSubtree, worldRect, type CreatableKind } from "../shared";
+import { AppError, CREATABLE_KINDS, applyNodeArgs, applyStyleArgs, assertEffectTokens, assertGradientTokens, assertImageUrl, assertNoLiteralColors, assertNumericTokenArgs, assertToken, clampSides, createNode, defaultLayoutFor, effectsFrom, ensurePage, firstPageId, newId, nextComponentName, nextComponentPosition, pathFromAnchors, planDuplicate, readContours, readPoints, replaceContour, resolveNumericStyle, validateVector, walkSubtree, worldRect, type CreatableKind } from "../shared";
 import type { Handler, ToolContext } from "../types";
 
 /** 单次 `create_nodes` 的节点总数上限（含子孙）：既撑爆事务，也给 agent 一个"分批"的理由。 */
@@ -74,7 +74,7 @@ function resolveSlotName(ctx: ToolContext, name: string | undefined, parentId: N
 }
 
 /** path 的锚点、polygon 的边数、layout 的适用范围。错误顺序与 GUI 侧一致。 */
-function readShapeArgs(kind: string, args: Record<string, unknown>): {
+function readShapeArgs(kind: string, args: Record<string, unknown>, hasContours = false): {
   points: ReturnType<typeof readPoints>;
   closed: boolean;
 } {
@@ -82,11 +82,14 @@ function readShapeArgs(kind: string, args: Record<string, unknown>): {
   const points = readPoints(args.points);
   const closed = Boolean(args.closed);
   if (args.sides !== undefined && kind !== "polygon") throw new Error("sides 仅适用于 kind=polygon");
-  if (isPath) {
-    if (!points) throw new Error("kind=path 必须提供 points");
+  if (isPath && !hasContours) {
+    if (!points) throw new Error("kind=path 必须提供 points 或 contours");
     if (points.length < 2) throw new Error("路径至少需要 2 个锚点");
     if (closed && points.length < 3) throw new Error("闭合路径至少需要 3 个锚点");
-    validateVector({ closed, anchors: points });
+    validateVector(pathFromAnchors(points, closed));
+  }
+  if (isPath && hasContours && args.closed !== undefined) {
+    throw new Error("contours 与 closed 不能同时给；闭合写在每条轮廓的 closed 上");
   }
   if (args.layout !== undefined && kind !== "frame" && kind !== "component") {
     throw new Error("layout 仅适用于 frame / component");
@@ -163,7 +166,12 @@ async function buildNodeInner(
   // 省略坐标时：主组件排到组件区末尾，其余落在父容器左上角
   const defaultPosition = isComponent ? nextComponentPosition(ctx.store.doc) : { x: 0, y: 0 };
 
-  const { points, closed } = readShapeArgs(kind, args);
+  const { points, closed } = readShapeArgs(kind, args, args.contours !== undefined);
+  const contoursArg = readContours(args.contours);
+  if (contoursArg) {
+    if (kind !== "path") throw new Error("contours 仅适用于 kind=path");
+    if (args.points !== undefined) throw new Error("contours 与 points 不能同时给");
+  }
   assertNumericTokenArgs(ctx.store, args);
   assertNoLiteralColors(ctx.store, args);
   const style = buildStyleFor(kind, args, closed);
@@ -177,7 +185,11 @@ async function buildNodeInner(
     width: isPath ? 1 : ((args.width as number) ?? (imageRef?.naturalWidth || 100)),
     height: isPath ? 1 : ((args.height as number) ?? (imageRef?.naturalHeight || 100)),
     text: args.text as string | undefined,
-    vector: isPath ? { closed, anchors: points! } : undefined,
+    vector: isPath
+      ? contoursArg
+        ? { contours: contoursArg, fillRule: args.fillRule === "evenodd" ? "evenodd" : "nonzero" }
+        : pathFromAnchors(points!, closed)
+      : undefined,
     sides: isPolygon ? clampSides(args.sides as number) : undefined,
     image: imageRef,
     style,
@@ -407,19 +419,39 @@ export const handleUpdateNode: Handler = async (ctx, args) => {
     }
 
     const points = readPoints(args.points);
+    const contoursArg = readContours(args.contours);
+    const fillRuleArg =
+      args.fillRule === "evenodd" ? "evenodd" : args.fillRule === "nonzero" ? "nonzero" : undefined;
     const closedArg = args.closed !== undefined ? Boolean(args.closed) : undefined;
     if (args.sides !== undefined) {
       if (node.type !== "polygon") throw new Error("sides 仅适用于 polygon 节点");
       patch.sides = clampSides(Number(args.sides));
     }
-    if (points) {
+    if (contoursArg) {
+      if (node.type !== "path") throw new Error("contours 仅适用于 path 节点");
+      if (points) throw new Error("contours 与 points 不能同时给");
+      if (closedArg !== undefined) throw new Error("contours 与 closed 不能同时给；闭合写在每条轮廓的 closed 上");
+      patch.vector = { contours: contoursArg, fillRule: fillRuleArg ?? node.vector?.fillRule ?? "nonzero" };
+    } else if (fillRuleArg) {
+      if (!node.vector) throw new Error("fillRule 仅适用于 path 节点");
+      patch.vector = { contours: node.vector.contours, fillRule: fillRuleArg };
+    } else if (points) {
       if (node.type !== "path") throw new Error("points 仅适用于 path 节点");
+      if (!node.vector) throw new Error("path 节点缺少轮廓数据");
+      // 多轮廓路径上写 points 会静默丢掉别的轮廓（洞），必须显式拒绝
+      if (node.vector.contours.length > 1) throw new AppError("core.path.multiContour");
       if (points.length < 2) throw new Error("路径至少需要 2 个锚点");
       const anchors = points.map((p) => ({ ...p, x: p.x - node.x, y: p.y - node.y }));
-      patch.vector = { closed: closedArg ?? node.vector?.closed ?? false, anchors };
+      patch.vector = replaceContour(node.vector, 0, {
+        closed: closedArg ?? node.vector.contours[0]?.closed ?? false,
+        anchors,
+      });
     } else if (closedArg !== undefined) {
       if (!node.vector) throw new Error("closed 仅适用于 path 节点");
-      patch.vector = { ...node.vector, closed: closedArg };
+      patch.vector = replaceContour(node.vector, 0, {
+        closed: closedArg,
+        anchors: node.vector.contours[0]?.anchors ?? [],
+      });
     }
 
     // 文本自动尺寸：文本或排版变化后重算

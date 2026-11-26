@@ -737,9 +737,23 @@ const {
           <label>{{ t("inspector.clip") }}</label>
           <input type="checkbox" class="checkbox" :checked="node.clip" :disabled="readonly" @change="toggleClip" />
         </div>
+        <div v-if="!multi && node.type === 'path' && contourCount > 1" class="row">
+          <label>{{ t("inspector.contour") }}</label>
+          <div class="contour-nav">
+            <button class="mini" :disabled="readonly" @click="stepContour(-1)">‹</button>
+            <span class="mono">{{ activeContourIndex + 1 }} / {{ contourCount }}</span>
+            <button class="mini" :disabled="readonly" @click="stepContour(1)">›</button>
+          </div>
+        </div>
         <div v-if="!multi && node.type === 'path'" class="row">
           <label>{{ t("inspector.closed") }}</label>
-          <input type="checkbox" class="checkbox" :checked="Boolean(node.vector?.closed)" :disabled="readonly || !canClosePath(node)" @change="setClosed" />
+          <input
+            type="checkbox"
+            class="checkbox"
+            :checked="Boolean(activeContour?.closed)"
+            :disabled="readonly || !canClosePath()"
+            @change="setClosed"
+          />
         </div>
         <div v-if="!multi && node.type === 'polygon'" class="row">
           <label>{{ t("inspector.sidesCount") }}</label>
@@ -1221,6 +1235,18 @@ header {
   font-size: 11px;
   color: var(--text-faint);
   min-width: 30px;
+}
+
+.contour-nav {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.contour-nav .mono {
+  min-width: 40px;
+  text-align: center;
+  font-size: 11px;
 }
 
 .inline-label {

@@ -12,7 +12,7 @@ describe("AI 工具：组件集合与变体", () => {
     const names = tools.map((tool) => tool.name);
     expect(names).toContain("create_component_set");
     expect(names).toContain("add_variant");
-    expect(names).toHaveLength(35);
+    expect(names).toHaveLength(36);
   });
 
   it("create_component_set 解析属性并可 add_variant / 切换实例", async () => {

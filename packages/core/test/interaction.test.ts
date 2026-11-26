@@ -254,7 +254,7 @@ describe("文件格式", () => {
     migrateDoc(doc, 7);
     expect(doc.formatVersion).toBe(CURRENT_FORMAT_VERSION);
     // 每次升 formatVersion 都要在这里加一票：迁移必须真的跑过，不是只改常量
-    expect(CURRENT_FORMAT_VERSION).toBe(11);
+    expect(CURRENT_FORMAT_VERSION).toBe(12);
     expect(doc.strictTokens).toBe(false);
   });
 });

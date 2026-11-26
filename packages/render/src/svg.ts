@@ -138,27 +138,30 @@ export function roundedRectPath(x: number, y: number, w: number, h: number, radi
   return parts.join(" ");
 }
 
-/** 向量路径转 d（三次贝塞尔，与 canvas 的 drawPath 同源）。 */
+/** 向量路径转 d（三次贝塞尔、多轮廓，与 canvas 的 traceVectorPath 同源）。 */
 export function vectorPathData(node: DocNode, vector: VectorPath): string {
-  const anchors = vector.anchors;
-  if (anchors.length < 2) return "";
   const ox = node.x;
   const oy = node.y;
-  const parts: string[] = [`M${num(ox + anchors[0].x)} ${num(oy + anchors[0].y)}`];
-  const segments = vector.closed ? anchors.length : anchors.length - 1;
-  for (let i = 0; i < segments; i += 1) {
-    const a = anchors[i];
-    const b = anchors[(i + 1) % anchors.length];
-    const curved = a.outX !== 0 || a.outY !== 0 || b.inX !== 0 || b.inY !== 0;
-    if (curved) {
-      parts.push(
-        `C${num(ox + a.x + a.outX)} ${num(oy + a.y + a.outY)} ${num(ox + b.x + b.inX)} ${num(oy + b.y + b.inY)} ${num(ox + b.x)} ${num(oy + b.y)}`,
-      );
-    } else {
-      parts.push(`L${num(ox + b.x)} ${num(oy + b.y)}`);
+  const parts: string[] = [];
+  for (const contour of vector.contours) {
+    const anchors = contour.anchors;
+    if (anchors.length < 2) continue;
+    parts.push(`M${num(ox + anchors[0].x)} ${num(oy + anchors[0].y)}`);
+    const segments = contour.closed ? anchors.length : anchors.length - 1;
+    for (let i = 0; i < segments; i += 1) {
+      const a = anchors[i];
+      const b = anchors[(i + 1) % anchors.length];
+      const curved = a.outX !== 0 || a.outY !== 0 || b.inX !== 0 || b.inY !== 0;
+      if (curved) {
+        parts.push(
+          `C${num(ox + a.x + a.outX)} ${num(oy + a.y + a.outY)} ${num(ox + b.x + b.inX)} ${num(oy + b.y + b.inY)} ${num(ox + b.x)} ${num(oy + b.y)}`,
+        );
+      } else {
+        parts.push(`L${num(ox + b.x)} ${num(oy + b.y)}`);
+      }
     }
+    if (contour.closed) parts.push("Z");
   }
-  if (vector.closed) parts.push("Z");
   return parts.join(" ");
 }
 
@@ -460,7 +463,8 @@ export class SvgBackend implements RenderBackend {
     const d = vectorPathData(node, vector);
     if (!d) return;
     const dash = stroke ? `stroke-linecap="round" stroke-linejoin="round"` : "";
-    this.leaf(node, `<path d="${d}" ${this.paintAttrs(node, fill, stroke, strokeWidth)} ${dash}/>`);
+    const rule = fill && vector.contours.length > 1 ? ` fill-rule="${vector.fillRule}"` : "";
+    this.leaf(node, `<path d="${d}" ${this.paintAttrs(node, fill, stroke, strokeWidth)}${rule} ${dash}/>`);
   }
 
   drawPolygon(

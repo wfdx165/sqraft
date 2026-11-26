@@ -4,7 +4,7 @@
  */
 import { describe, expect, it } from "vitest";
 import { createDocWithPage, createNode, defaultLayoutSpec, firstPageId, newId, type DocNode, type NodeId } from "../src/model";
-import { makeAnchor } from "../src/vector";
+import { makeAnchor, pathFromAnchors } from "../src/vector";
 import { DocStore } from "../src/store";
 import { diagnose, type DiagnosticCode } from "../src/diagnostics";
 
@@ -42,7 +42,7 @@ describe("诊断：ZERO_SIZE", () => {
         name: "横线路径",
         width: 40,
         height: 0,
-        vector: { closed: false, anchors: [makeAnchor(0, 0), makeAnchor(40, 0)] },
+        vector: pathFromAnchors([makeAnchor(0, 0), makeAnchor(40, 0)]),
       }),
       pageId,
     );

@@ -58,8 +58,22 @@ describe("右键菜单内容", () => {
   it("元素菜单同样收进子菜单", () => {
     const { rectId } = setup();
     openNodeMenu(rectId, { x: 0, y: 0 });
-    expect(labels()).toEqual(["复制", "复制为", "重命名", "删除"]);
+    expect(labels()).toEqual(["复制", "复制为", "布尔运算", "转为路径", "重命名", "删除"]);
     expect(copyAsLabels()).toEqual(["PNG 1×", "PNG 2×", "PNG 4×", "SVG"]);
+    // 单选时布尔不可用，转路径可用
+    expect(contextMenu.items.find((item) => item.label === "布尔运算")!.disabled).toBe(true);
+    expect(contextMenu.items.find((item) => item.label === "转为路径")!.disabled).toBe(false);
+  });
+
+  it("两个同级形状选中时布尔子菜单可用，四项都在", () => {
+    const { pageId, rectId } = setup();
+    const another = createNode("rect", { name: "另一个", x: 100, y: 10, width: 50, height: 50 });
+    docStore.apply({ type: "node.create", params: { nodes: [another], parentId: pageId } });
+    ui.selection = [rectId, another.id];
+    openNodeMenu(rectId, { x: 0, y: 0 });
+    const boolean = contextMenu.items.find((item) => item.label === "布尔运算")!;
+    expect(boolean.disabled).toBe(false);
+    expect((boolean.children ?? []).map((item) => item.label)).toEqual(["并集", "差集", "交集", "排除"]);
   });
 
   it("页面右键的复制子项走 copySelectionAs，并保持页面选中", () => {

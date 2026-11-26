@@ -687,8 +687,31 @@ export class Canvas2DBackend implements RenderBackend {
     }
     this.traceShape(g, node);
     g.fillStyle = "#000";
-    g.fill();
+    g.fill(node.vector?.fillRule === "evenodd" ? "evenodd" : "nonzero");
     return layer;
+  }
+
+  /** 把整条路径（多轮廓）铺到当前路径里；调用方负责 beginPath 之后的 fill/stroke。 */
+  private traceVectorPath(g: CanvasRenderingContext2D, ox: number, oy: number, vector: VectorPath): void {
+    g.beginPath();
+    for (const contour of vector.contours) {
+      const anchors = contour.anchors;
+      if (anchors.length < 2) continue;
+      const a0 = anchors[0];
+      g.moveTo(ox + a0.x, oy + a0.y);
+      const segments = contour.closed ? anchors.length : anchors.length - 1;
+      for (let i = 0; i < segments; i++) {
+        const a = anchors[i];
+        const b = anchors[(i + 1) % anchors.length];
+        const curved = a.outX !== 0 || a.outY !== 0 || b.inX !== 0 || b.inY !== 0;
+        if (curved) {
+          g.bezierCurveTo(ox + a.x + a.outX, oy + a.y + a.outY, ox + b.x + b.inX, oy + b.y + b.inY, ox + b.x, oy + b.y);
+        } else {
+          g.lineTo(ox + b.x, oy + b.y);
+        }
+      }
+      if (contour.closed) g.closePath();
+    }
   }
 
   private newLayer(w: number, h: number): HTMLCanvasElement {
@@ -730,29 +753,11 @@ export class Canvas2DBackend implements RenderBackend {
       }
       case "path": {
         const vector = node.vector;
-        g.beginPath();
-        if (!vector || vector.anchors.length < 2) return;
-        const a0 = vector.anchors[0];
-        g.moveTo(node.x + a0.x, node.y + a0.y);
-        const segments = vector.closed ? vector.anchors.length : vector.anchors.length - 1;
-        for (let i = 0; i < segments; i++) {
-          const a = vector.anchors[i];
-          const b = vector.anchors[(i + 1) % vector.anchors.length];
-          const curved = a.outX !== 0 || a.outY !== 0 || b.inX !== 0 || b.inY !== 0;
-          if (curved) {
-            g.bezierCurveTo(
-              node.x + a.x + a.outX,
-              node.y + a.y + a.outY,
-              node.x + b.x + b.inX,
-              node.y + b.y + b.inY,
-              node.x + b.x,
-              node.y + b.y,
-            );
-          } else {
-            g.lineTo(node.x + b.x, node.y + b.y);
-          }
+        if (!vector) {
+          g.beginPath();
+          return;
         }
-        if (vector.closed) g.closePath();
+        this.traceVectorPath(g, node.x, node.y, vector);
         return;
       }
       default:
@@ -949,33 +954,16 @@ export class Canvas2DBackend implements RenderBackend {
   }
 
   drawPath(node: DocNode, vector: VectorPath, fill?: ResolvedPaint, stroke?: ResolvedPaint, strokeWidth = 1): void {
-    const anchors = vector.anchors;
-    if (anchors.length < 2) return;
+    if (vector.contours.every((c) => c.anchors.length < 2)) return;
     const ctx = this.ctx;
-    const a0 = anchors[0];
-    const ox = node.x;
-    const oy = node.y;
     ctx.save();
     this.applyRotation(node);
-    ctx.beginPath();
-    ctx.moveTo(ox + a0.x, oy + a0.y);
-    const segments = vector.closed ? anchors.length : anchors.length - 1;
-    for (let i = 0; i < segments; i++) {
-      const a = anchors[i];
-      const b = anchors[(i + 1) % anchors.length];
-      const curved = a.outX !== 0 || a.outY !== 0 || b.inX !== 0 || b.inY !== 0;
-      if (curved) {
-        ctx.bezierCurveTo(ox + a.x + a.outX, oy + a.y + a.outY, ox + b.x + b.inX, oy + b.y + b.inY, ox + b.x, oy + b.y);
-      } else {
-        ctx.lineTo(ox + b.x, oy + b.y);
-      }
-    }
-    if (vector.closed) ctx.closePath();
+    this.traceVectorPath(ctx, node.x, node.y, vector);
     if (fill) {
       const style = this.paintStyle(fill, node);
       if (style) {
         ctx.fillStyle = style;
-        ctx.fill();
+        ctx.fill(vector.fillRule === "evenodd" ? "evenodd" : "nonzero");
       }
     }
     if (stroke) {

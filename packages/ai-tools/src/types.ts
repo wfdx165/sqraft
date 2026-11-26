@@ -27,8 +27,6 @@ export interface DocumentHost {
    * 只收数据、不收路径——工具层不允许读任意文件。
    */
   addImage?(data: string, mimeType: string): Promise<{ assetId: string; width: number; height: number }>;
-  /** 返回是否真的打开了文件；用户取消返回 false。 */
-  openDocument(): Promise<boolean>;
   /** 切到某个页面：create_page 后让「省略 parentId」的后续操作落到新页 */
   activatePage?(pageId: NodeId): void;
   /**

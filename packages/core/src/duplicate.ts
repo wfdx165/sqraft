@@ -8,6 +8,7 @@
 import type { Effect } from "./effects";
 import { walkSubtree, type DocNode, type DocState, type Interaction, type NodeId, type NodeStyle } from "./model";
 import type { Command } from "./store";
+import { cloneVector } from "./vector";
 
 export interface DuplicateParams {
   /** 要复制的根节点（祖先与后代同时出现时由 `planDuplicate` 收成最外层） */
@@ -207,7 +208,7 @@ export function remapNode(
     clone.interactions = kept.length ? kept : undefined;
   }
   if (src.vector) {
-    clone.vector = { closed: src.vector.closed, anchors: src.vector.anchors.map((a) => ({ ...a })) };
+    clone.vector = cloneVector(src.vector);
   }
   if (src.layout) {
     clone.layout = { ...src.layout, padding: { ...src.layout.padding } };

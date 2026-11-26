@@ -10,7 +10,7 @@ import { effectPadding } from "./effects";
 export type NodeId = string;
 
 /** 当前文件格式版本：新增字段时 +1，并在 migrate 里补一段迁移。 */
-export const CURRENT_FORMAT_VERSION = 11;
+export const CURRENT_FORMAT_VERSION = 12;
 
 /** 节点类型的运行时真源（类型与搜索白名单都从这里取，避免两处手抄）。 */
 export const NODE_TYPES = [

@@ -55,6 +55,11 @@ export const COMMAND_IDS = [
   "edit.moveBackward",
   "edit.moveToFront",
   "edit.moveToBack",
+  "boolean.union",
+  "boolean.subtract",
+  "boolean.intersect",
+  "boolean.exclude",
+  "path.convert",
   "edit.paste",
   "component.create",
   "component.detach",
@@ -134,6 +139,13 @@ export const COMMANDS: readonly AppCommand[] = [
   { id: "edit.moveBackward", labelKey: "shortcut.moveBackward", group: "edit", owner: "renderer", default: "⌘[", requires: "selection" },
   { id: "edit.moveToFront", labelKey: "shortcut.moveToFront", group: "edit", owner: "renderer", default: "⌘⌥]", requires: "selection" },
   { id: "edit.moveToBack", labelKey: "shortcut.moveToBack", group: "edit", owner: "renderer", default: "⌘⌥[", requires: "selection" },
+
+  // 布尔运算（ADR-0040）：结果烘焙成普通 path，键位沿用 Figma
+  { id: "boolean.union", labelKey: "boolean.union", group: "edit", owner: "renderer", default: "⇧⌥U", requires: "selection" },
+  { id: "boolean.subtract", labelKey: "boolean.subtract", group: "edit", owner: "renderer", default: "⇧⌥S", requires: "selection" },
+  { id: "boolean.intersect", labelKey: "boolean.intersect", group: "edit", owner: "renderer", default: "⇧⌥I", requires: "selection" },
+  { id: "boolean.exclude", labelKey: "boolean.exclude", group: "edit", owner: "renderer", default: "⇧⌥E", requires: "selection" },
+  { id: "path.convert", labelKey: "path.convert", group: "edit", owner: "renderer", requires: "selection" },
 
   // 视图
   { id: "view.zoomIn", labelKey: "menu.zoomIn", group: "view", owner: "renderer", default: "⌘+", requires: "doc", menu: true },

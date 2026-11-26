@@ -1,6 +1,6 @@
 /** 工具参数 → 命令参数的解析与校验（与 schema 分离：schema 只给客户端看，校验在这里真的执行）。 */
 
-import type { CornerRadius, DocNode, DocState, DocStore, Effect, GradientPaint, GradientStop, LayoutSpec, NodeId, NodeStyle, Padding, VectorAnchor } from "@sqraft/core";
+import type { CornerRadius, DocNode, DocState, DocStore, Effect, GradientPaint, GradientStop, LayoutSpec, NodeId, NodeStyle, Padding, VectorAnchor, VectorContour } from "@sqraft/core";
 import { CORNER_RADIUS_KEYS, DEFAULT_PAGE_HEIGHT, DEFAULT_PAGE_WIDTH, NUMERIC_TOKEN_FIELDS, NUMERIC_TOKEN_OF_LITERAL, PADDING_SIDE_KEYS, colorDistance, createLayoutSpec, createNode, firstPageId, isGradientPaint, makeAnchor, nextPageName, walkSubtree } from "@sqraft/core";
 
 export function readPoints(value: unknown): VectorAnchor[] | null {
@@ -23,7 +23,20 @@ export function readPoints(value: unknown): VectorAnchor[] | null {
   });
 }
 
-/** 渐变入参 → 模型渐变：坐标 0–1，stop 颜色是 {token} 或 {value} / 纯字符串。 */
+/** 多轮廓入参：父容器坐标（与 `points` 相同），整体替换整条路径。 */
+export function readContours(value: unknown): VectorContour[] | null {
+  if (value === undefined) return null;
+  if (!Array.isArray(value) || value.length === 0) throw new Error("contours 必须是非空数组");
+  return value.map((raw, i) => {
+    if (!raw || typeof raw !== "object") throw new Error(`contours[${i}] 必须是对象`);
+    const contour = raw as Record<string, unknown>;
+    const anchors = readPoints(contour.anchors);
+    if (!anchors || anchors.length < 2) throw new Error(`contours[${i}].anchors 至少需要 2 个锚点`);
+    return { closed: Boolean(contour.closed), anchors };
+  });
+}
+
+/** 渐变入参 → 模型渐变：坐标 0–1，stop 颜色是 `{token}` 或 `{value}` / 纯字符串。 */
 export function readGradient(value: unknown, field: string): GradientPaint {
   if (!value || typeof value !== "object") throw new Error(`${field} 必须是对象`);
   const raw = value as Record<string, unknown>;

@@ -9,14 +9,6 @@ export const handleDocumentNew: Handler = async (ctx, args) => {
     return JSON.stringify(created ? { ok: true } : { ok: false, canceled: true });
 };
 
-/** `document.open` */
-export const handleDocumentOpen: Handler = async (ctx, args) => {
-    if (!ctx.host) throw new Error("当前宿主不支持打开文档");
-    if ("path" in args) throw new Error("document.open 只接受系统对话框选择文件，不接受路径参数");
-    const opened = await ctx.host.openDocument();
-    return JSON.stringify(opened ? { ok: true } : { ok: false, canceled: true });
-};
-
 /** `app_info` */
 export const handleAppInfo: Handler = async (ctx, args) => {
     if (!ctx.host?.appInfo) throw new Error("当前宿主不支持 app_info");
