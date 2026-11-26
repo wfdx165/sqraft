@@ -175,6 +175,11 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for the project layout and the review pro
 - CJK text uses each system's own fonts, so line breaks can shift between macOS and Windows
 - No real-time collaboration, no accounts, no cloud sync
 
+## Community
+
+- Questions and ideas: [GitHub Discussions](https://github.com/wfdx165/sqraft/discussions)
+- Bugs and feature requests: [issues](https://github.com/wfdx165/sqraft/issues)
+
 ## License and feedback
 
 Sqraft is open source under the [Apache License 2.0](LICENSE). The "Sqraft" name and the application icon are not covered by the license — forks must use a different name and icon.

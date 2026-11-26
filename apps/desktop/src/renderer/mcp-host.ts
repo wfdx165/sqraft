@@ -25,7 +25,7 @@ import {
   parseAgentDiagnostics,
   setAgentReport,
 } from "./agent-report";
-import { newDocument, openDocument } from "./file-session";
+import { newDocument } from "./file-session";
 import { appInfo } from "./app-meta";
 import { measureText, textSizeOf } from "./text-metrics";
 import { putAsset } from "./assets";
@@ -248,7 +248,6 @@ export function installMcpHost(): void {
     (node, style, text) => textSizeOf(node, style, text, docStore.doc),
     {
       newDocument: () => newDocument(),
-      openDocument: () => openDocument(),
       appInfo: async () => {
         const info = await appInfo();
         return { name: info.name, version: info.version, platform: window.sqraft.platform };

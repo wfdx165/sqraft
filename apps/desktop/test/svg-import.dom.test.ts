@@ -120,6 +120,34 @@ describe("SVG 导入编排：use / symbol / 嵌套 svg", () => {
   });
 });
 
+describe("SVG 导入编排：多轮廓", () => {
+  it("多子路径 + 填充落成一个多轮廓 path，fill-rule 保留", async () => {
+    const result = await parseOk(
+      svg('<path fill="#123456" fill-rule="evenodd" d="M10 10 H90 V90 H10 Z M35 35 H65 V65 H35 Z"/>'),
+    );
+    expect(result.nodes).toHaveLength(1);
+    const shape = result.nodes[0];
+    expect(shape.type).toBe("path");
+    expect(shape.vector?.contours).toHaveLength(2);
+    expect(shape.vector?.fillRule).toBe("evenodd");
+    expect(shape.vector?.contours.every((contour) => contour.closed)).toBe(true);
+  });
+
+  it("没有 fill-rule 的多子路径按 nonzero 落库", async () => {
+    const result = await parseOk(svg('<path fill="#123456" d="M0 0 H20 V20 H0 Z M5 5 H15 V15 H5 Z"/>'));
+    const shape = result.nodes[0];
+    expect(shape.vector?.contours).toHaveLength(2);
+    expect(shape.vector?.fillRule).toBe("nonzero");
+  });
+
+  it("多子路径的描边也只产生一个节点", async () => {
+    const result = await parseOk(svg('<path fill="none" stroke="#111111" d="M0 0 L10 0 M20 20 L30 20"/>'));
+    expect(result.nodes).toHaveLength(1);
+    expect(result.nodes[0].vector?.contours).toHaveLength(2);
+    expect(result.nodes[0].vector?.contours.every((contour) => !contour.closed)).toBe(true);
+  });
+});
+
 describe("SVG 导入编排：上限", () => {
   it("超过 3000 节点整份失败，并给出上限", async () => {
     const outcome = await parseSvg(svg(rects(3001), 'width="1000" height="100"'));

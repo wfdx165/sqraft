@@ -175,6 +175,11 @@ pnpm dist     # 호스트 플랫폼용 빌드(macOS는 arm64 dmg와 zip, Windows
 - 중국어·일본어·한국어는 각 OS의 글꼴을 사용하므로 같은 문서라도 macOS와 Windows에서 줄바꿈 위치가 달라질 수 있습니다
 - 실시간 협업, 계정 시스템, 클라우드 동기화는 없습니다
 
+## 커뮤니티
+
+- 질문과 아이디어: [GitHub Discussions](https://github.com/wfdx165/sqraft/discussions)
+- 버그와 기능 요청: [Issues](https://github.com/wfdx165/sqraft/issues)
+
 ## 라이선스와 피드백
 
 Sqraft는 [Apache License 2.0](LICENSE)으로 공개되어 있습니다. "Sqraft" 이름과 앱 아이콘은 라이선스 대상이 아니며, 포크는 다른 이름과 아이콘을 사용해야 합니다.

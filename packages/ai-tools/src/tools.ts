@@ -209,6 +209,43 @@ export type CreatableKind = (typeof CREATABLE_KINDS)[number];
  * （`create_node` 用工具级 `parentId`，`create_nodes` 用嵌套 `children`）。
  * 两处必须同源——批量工具的入参一旦与单建分叉，agent 就得记两套规则。
  */
+/** 路径锚点的 schema（points / contours 共用）。 */
+const ANCHOR_SCHEMA: Record<string, unknown> = {
+  type: "object",
+  properties: {
+    x: { type: "number" },
+    y: { type: "number" },
+    inX: { type: "number" },
+    inY: { type: "number" },
+    outX: { type: "number" },
+    outY: { type: "number" },
+  },
+  required: ["x", "y"],
+  additionalProperties: false,
+};
+
+/** 多轮廓路径：读侧始终返回 contours；写入时整体替换，坐标与 points 相同（父容器）。 */
+const CONTOURS_SCHEMA: Record<string, unknown> = {
+  type: "array",
+  minItems: 1,
+  description: "整条路径的多条轮廓（父容器坐标，与 points 相同）；带洞形状由多条轮廓 + fillRule 表达",
+  items: {
+    type: "object",
+    properties: {
+      closed: { type: "boolean", description: "这条轮廓是否闭合，默认 false" },
+      anchors: { type: "array", minItems: 2, items: ANCHOR_SCHEMA },
+    },
+    required: ["anchors"],
+    additionalProperties: false,
+  },
+};
+
+const FILL_RULE_SCHEMA: Record<string, unknown> = {
+  type: "string",
+  enum: ["nonzero", "evenodd"],
+  description: "多轮廓的填充规则：nonzero（默认，按环绕方向）或 evenodd（奇偶，布尔结果使用）",
+};
+
 const NODE_ARGS: Record<string, unknown> = {
   kind: { type: "string", enum: [...CREATABLE_KINDS] },
   name: { type: "string", description: "slot 必填且组件内唯一" },
@@ -225,25 +262,15 @@ const NODE_ARGS: Record<string, unknown> = {
     },
     additionalProperties: false,
   },
-  closed: { type: "boolean", description: "kind=path 时是否闭合，默认 false" },
+  closed: { type: "boolean", description: "单轮廓 path 的闭合（与 points 搭配）；用 contours 时不可给，闭合写在每条轮廓上" },
   points: {
     type: "array",
     minItems: 2,
     description: "kind=path 的锚点，父容器坐标；x/y 必填，inX/inY/outX/outY 为相对锚点的手柄偏移",
-    items: {
-      type: "object",
-      properties: {
-        x: { type: "number" },
-        y: { type: "number" },
-        inX: { type: "number" },
-        inY: { type: "number" },
-        outX: { type: "number" },
-        outY: { type: "number" },
-      },
-      required: ["x", "y"],
-      additionalProperties: false,
-    },
+    items: ANCHOR_SCHEMA,
   },
+  contours: CONTOURS_SCHEMA,
+  fillRule: FILL_RULE_SCHEMA,
   ...NODE_SCHEMA,
   ...STYLE_SCHEMA,
 };
@@ -442,7 +469,7 @@ export const tools: ToolDefinition[] = [
   {
     name: "create_node",
     description:
-      "在父节点下创建一个节点。kind 支持 frame/rect/ellipse/polygon/line/path/text/image/component/slot。component 是文档根节点（不接受 parentId；x/y 省略时自动排到画布上的组件区）；slot 必须位于主组件内并提供唯一名字。polygon 是参数化多边形，用 sides 指定边数（3–12，默认 3，3 即三角形），顶点由 width/height 包围盒推导。path 用 points 描述锚点（父容器坐标，手柄为相对锚点的偏移），闭合路径至少 3 个锚点、开放路径至少 2 个。image 用 image.data 传 base64（上限 5MB），不接受文件路径。颜色可引用 fillToken / strokeToken，也可直接给 fill / stroke 字面量（Token 优先）。数值属性可引用 fontSizeToken / lineHeightToken / letterSpacingToken / paragraphSpacingToken / strokeWidthToken / cornerRadiusTokens / layout.gapToken / layout.crossGapToken / layout.paddingTokens（与字面量同时存在时 Token 优先）。",
+      "在父节点下创建一个节点。kind 支持 frame/rect/ellipse/polygon/line/path/text/image/component/slot。component 是文档根节点（不接受 parentId；x/y 省略时自动排到画布上的组件区）；slot 必须位于主组件内并提供唯一名字。polygon 是参数化多边形，用 sides 指定边数（3–12，默认 3，3 即三角形），顶点由 width/height 包围盒推导。path 用 points 描述锚点（父容器坐标，手柄为相对锚点的偏移），闭合路径至少 3 个锚点、开放路径至少 2 个。image 用 image.data 传 base64（上限 5MB），不接受文件路径。颜色可引用 fillToken / strokeToken，也可直接给 fill / stroke 字面量（Token 优先）。数值属性可引用 fontSizeToken / lineHeightToken / letterSpacingToken / paragraphSpacingToken / strokeWidthToken / cornerRadiusTokens / layout.gapToken / layout.crossGapToken / layout.paddingTokens（与字面量同时存在时 Token 优先）。frame/component 默认开启自动布局（纵向、gap 10、padding 10）：容器要装 2 个以上子项时优先用 layout 表达结构，而不是逐个摆 x/y。",
     input_schema: {
       type: "object",
       properties: {
@@ -456,7 +483,7 @@ export const tools: ToolDefinition[] = [
   {
     name: "create_nodes",
     description:
-      "一次建一整棵子树（嵌套节点树）：适合生成卡片列表、表单、导航这类重复结构，比连续调 create_node 少几十次往返。nodes 每一项的字段与 create_node 完全一致，只多两处——id 必须由调用方生成且全文档唯一，children 表达层级（父子关系由嵌套位置决定，不要再给 parentId）。整棵树是一个事务：任一节点非法则全部回滚、不会留下半截；单次含子孙总数上限 500，超了就分批。children 里不能放 component / slot（主组件是文档根节点、插槽必须在主组件内，这两种仍用 create_node），组件实例仍用 create_instance。顶层可以放 component（等价于 create_node 不给 parentId）。撤销一次即可整树回退。",
+      "一次建一整棵子树（嵌套节点树）：适合生成卡片列表、表单、导航这类重复结构，比连续调 create_node 少几十次往返。nodes 每一项的字段与 create_node 完全一致，只多两处——id 必须由调用方生成且全文档唯一，children 表达层级（父子关系由嵌套位置决定，不要再给 parentId）。整棵树是一个事务：任一节点非法则全部回滚、不会留下半截；单次含子孙总数上限 500，超了就分批。children 里不能放 component / slot（主组件是文档根节点、插槽必须在主组件内，这两种仍用 create_node），组件实例仍用 create_instance。顶层可以放 component（等价于 create_node 不给 parentId）。容器优先给 layout（新建 frame/component 默认纵向、gap 10、padding 10），子项的 x/y 会被布局接管。撤销一次即可整树回退。",
     input_schema: {
       type: "object",
       // 递归结构必须自引用：定义放 $defs，引用写 #/$defs/Node。
@@ -610,7 +637,7 @@ export const tools: ToolDefinition[] = [
   {
     name: "update_node",
     description:
-      "更新节点属性（含改名）。颜色可引用 fillToken / strokeToken，也可给 fill / stroke 字面量（Token 优先）。数值属性可引用 fontSizeToken / lineHeightToken / letterSpacingToken / paragraphSpacingToken / strokeWidthToken / cornerRadiusTokens / layout.gapToken / layout.crossGapToken / layout.paddingTokens；cornerRadiusTokens / paddingTokens 传 null 可解绑单个角/边。只传字面量（如 fontSize / gap / padding）会自动解绑对应 Token。polygon 可用 sides 改边数（3–12）。path 可用 points（父容器坐标）整体替换锚点、用 closed 切换闭合；只改 width/height 时锚点会按比例缩放。图片节点可用 crop 改可见区域（原图像素坐标）、用 mask 标记为蒙版（遮罩同父级上方相邻兄弟）。",
+      "更新节点属性（含改名）。颜色可引用 fillToken / strokeToken，也可给 fill / stroke 字面量（Token 优先）。数值属性可引用 fontSizeToken / lineHeightToken / letterSpacingToken / paragraphSpacingToken / strokeWidthToken / cornerRadiusTokens / layout.gapToken / layout.crossGapToken / layout.paddingTokens；cornerRadiusTokens / paddingTokens 传 null 可解绑单个角/边。只传字面量（如 fontSize / gap / padding）会自动解绑对应 Token。polygon 可用 sides 改边数（3–12）。path 的锚点读写统一用 contours + fillRule（整体替换；坐标与 points 相同，都是父容器坐标）；points / closed 只对单轮廓路径生效，多轮廓路径上会拒绝。只改 width/height 时锚点会按比例缩放。图片节点可用 crop 改可见区域（原图像素坐标）、用 mask 标记为蒙版（遮罩同父级上方相邻兄弟）。给 frame/component 传 layout 可开启或调整自动布局；布局容器里子项的 x/y 由布局决定，需要自由位置时给该子项 layoutAbsolute:true。",
     input_schema: {
       type: "object",
       properties: {
@@ -619,6 +646,8 @@ export const tools: ToolDefinition[] = [
         text: { type: "string" },
         sides: { type: "number", description: "polygon 的边数，3–12" },
         closed: { type: "boolean" },
+        contours: CONTOURS_SCHEMA,
+        fillRule: FILL_RULE_SCHEMA,
         scrollDirection: {
           type: "string",
           enum: ["none", "vertical", "horizontal"],
@@ -761,6 +790,33 @@ export const tools: ToolDefinition[] = [
     },
   },
   {
+    name: "boolean_op",
+    description:
+      "对 2 个及以上同一父级的形状做布尔运算（union 并集 / subtract 差集 / intersect 交集 / exclude 排除），结果烘焙成一个普通 path（fillRule: evenodd），操作数只留在撤销栈里。支持 path / rect / ellipse / polygon / line，内部自动转轮廓，不需要先 convert_to_path。差集永远用最底层的图层作被减数；其余三种用最上层作样式、名字与图层位置的来源。组件实例内部的图层不支持（会在母版同步时丢失），跨父级、锁定、开放路径、空交集与超复杂度都会带错误码拒绝。返回 nodeId、styleFrom、anchorCount；操作数的填充 / 描边不一致时带 mergedStyles:true（结果只保留基准层的一种颜色）。",
+    input_schema: {
+      type: "object",
+      properties: {
+        op: { type: "string", enum: ["union", "subtract", "intersect", "exclude"] },
+        nodeIds: { type: "array", items: { type: "string" }, minItems: 2 },
+      },
+      required: ["op", "nodeIds"],
+      additionalProperties: false,
+    },
+  },
+  {
+    name: "convert_to_path",
+    description:
+      "把形状原地转成可编辑的路径（rect 含圆角 / ellipse / polygon / line），节点 id、样式、父级与图层位置都不变；path 节点原样跳过。转完用 update_node 的 contours 改锚点。组件实例内部的图层不支持（会被母版同步覆盖）。",
+    input_schema: {
+      type: "object",
+      properties: {
+        nodeIds: { type: "array", items: { type: "string" }, minItems: 1 },
+      },
+      required: ["nodeIds"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "import_font",
     description:
       "导入一份字体文件（字节内联，不收路径）：支持 ttf/otf/woff/woff2，单文件 ≤5MB。返回字族、字重与风格，之后用 fontFamily 引用。",
@@ -851,11 +907,6 @@ export const tools: ToolDefinition[] = [
   {
     name: "document.new",
     description: "新建一份未命名空稿并切换过去。",
-    input_schema: { type: "object", properties: {}, additionalProperties: false },
-  },
-  {
-    name: "document.open",
-    description: "让用户通过系统文件对话框选择一个 .sqraft 并打开。不接受路径参数——文件必须由用户亲自选择。",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
 ];

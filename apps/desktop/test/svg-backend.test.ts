@@ -47,6 +47,43 @@ describe("SvgBackend：形状与结构", () => {
     expect(svg).toContain("rotate(30 50 20)");
   });
 
+  it("多轮廓路径写出多个子路径与 fill-rule", () => {
+    const { store, pageId } = withPage();
+    const path = createNode("path", {
+      parentId: pageId,
+      width: 100,
+      height: 100,
+      vector: {
+        contours: [
+          {
+            closed: true,
+            anchors: [
+              { x: 0, y: 0, inX: 0, inY: 0, outX: 0, outY: 0 },
+              { x: 100, y: 0, inX: 0, inY: 0, outX: 0, outY: 0 },
+              { x: 100, y: 100, inX: 0, inY: 0, outX: 0, outY: 0 },
+              { x: 0, y: 100, inX: 0, inY: 0, outX: 0, outY: 0 },
+            ],
+          },
+          {
+            closed: true,
+            anchors: [
+              { x: 30, y: 30, inX: 0, inY: 0, outX: 0, outY: 0 },
+              { x: 70, y: 30, inX: 0, inY: 0, outX: 0, outY: 0 },
+              { x: 70, y: 70, inX: 0, inY: 0, outX: 0, outY: 0 },
+              { x: 30, y: 70, inX: 0, inY: 0, outX: 0, outY: 0 },
+            ],
+          },
+        ],
+        fillRule: "evenodd",
+      },
+      style: { fill: { value: "#123456" } },
+    });
+    store.apply({ type: "node.create", params: { nodes: [path], parentId: pageId } });
+    const svg = render(store.doc);
+    expect(svg).toContain('fill-rule="evenodd"');
+    expect(svg.match(/M/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
   it("子节点在父容器的 translate 组里", () => {
     const { store, pageId } = withPage();
     const frame = createNode("frame", { parentId: pageId, x: 100, y: 50, width: 200, height: 100 });

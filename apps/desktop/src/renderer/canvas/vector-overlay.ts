@@ -4,7 +4,7 @@
  * 屏幕空间绘制：调用方保证 ctx 已处于未变换状态（这些函数自己 setTransform）。
  */
 
-import { polygonPoints, vectorBounds, type DocNode, type VectorAnchor, type VectorPath } from "@sqraft/core";
+import { pathFromAnchors, polygonPoints, vectorBounds, type DocNode, type VectorAnchor, type VectorPath } from "@sqraft/core";
 import { worldToScreen, type Viewport } from "@sqraft/render";
 
 export interface PenDraftView {
@@ -20,32 +20,34 @@ export interface ShapePreview {
   valid: boolean;
 }
 
-/** 在屏幕空间描出一条路径（不含填充样式；调用方设置 stroke/fill）。 */
+/** 在屏幕空间描出一条路径（多轮廓；不含填充样式；调用方设置 stroke/fill）。 */
 export function traceVectorScreen(
   g: CanvasRenderingContext2D,
   vector: VectorPath,
   toScreen: (x: number, y: number) => { x: number; y: number },
 ): void {
-  const anchors = vector.anchors;
-  if (anchors.length < 2) return;
-  const p0 = toScreen(anchors[0].x, anchors[0].y);
   g.beginPath();
-  g.moveTo(p0.x, p0.y);
-  const segments = vector.closed ? anchors.length : anchors.length - 1;
-  for (let i = 0; i < segments; i++) {
-    const a = anchors[i];
-    const b = anchors[(i + 1) % anchors.length];
-    const curved = a.outX !== 0 || a.outY !== 0 || b.inX !== 0 || b.inY !== 0;
-    const p = toScreen(b.x, b.y);
-    if (curved) {
-      const c1 = toScreen(a.x + a.outX, a.y + a.outY);
-      const c2 = toScreen(b.x + b.inX, b.y + b.inY);
-      g.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, p.x, p.y);
-    } else {
-      g.lineTo(p.x, p.y);
+  for (const contour of vector.contours) {
+    const anchors = contour.anchors;
+    if (anchors.length < 2) continue;
+    const p0 = toScreen(anchors[0].x, anchors[0].y);
+    g.moveTo(p0.x, p0.y);
+    const segments = contour.closed ? anchors.length : anchors.length - 1;
+    for (let i = 0; i < segments; i++) {
+      const a = anchors[i];
+      const b = anchors[(i + 1) % anchors.length];
+      const curved = a.outX !== 0 || a.outY !== 0 || b.inX !== 0 || b.inY !== 0;
+      const p = toScreen(b.x, b.y);
+      if (curved) {
+        const c1 = toScreen(a.x + a.outX, a.y + a.outY);
+        const c2 = toScreen(b.x + b.inX, b.y + b.inY);
+        g.bezierCurveTo(c1.x, c1.y, c2.x, c2.y, p.x, p.y);
+      } else {
+        g.lineTo(p.x, p.y);
+      }
     }
+    if (contour.closed) g.closePath();
   }
-  if (vector.closed) g.closePath();
 }
 
 function drawAnchorDot(g: CanvasRenderingContext2D, x: number, y: number, active: boolean): void {
@@ -69,7 +71,7 @@ export function drawDraftPath(
   g.save();
   g.setTransform(vp.dpr, 0, 0, vp.dpr, 0, 0);
   const toScreen = (x: number, y: number) => worldToScreen(vp, x, y);
-  const vector: VectorPath = { closed: false, anchors: draft.anchors };
+  const vector: VectorPath = pathFromAnchors(draft.anchors);
 
   g.strokeStyle = "#4f46e5";
   g.lineWidth = 1.5;
@@ -152,7 +154,9 @@ export interface PathEditingView {
   node: DocNode;
   /** 节点在世界坐标中的左上角 */
   origin: { x: number; y: number };
-  /** 当前锚点下标 */
+  /** 当前轮廓下标（多轮廓逐条编辑） */
+  contour: number;
+  /** 当前锚点在所选轮廓里的下标 */
   active: number;
   /** 拖动中的几何预览（世界坐标）；为空时用文档几何 */
   preview: VectorPath | null;
@@ -165,13 +169,18 @@ export function drawPathEditing(g: CanvasRenderingContext2D, vp: Viewport, view:
   const { node, origin } = view;
   if (!node.vector) return;
   const vector: VectorPath = view.preview ?? {
-    closed: node.vector.closed,
-    anchors: node.vector.anchors.map((a) => ({
-      ...a,
-      x: a.x + origin.x + view.move.dx,
-      y: a.y + origin.y + view.move.dy,
+    contours: node.vector.contours.map((contour) => ({
+      closed: contour.closed,
+      anchors: contour.anchors.map((a) => ({
+        ...a,
+        x: a.x + origin.x + view.move.dx,
+        y: a.y + origin.y + view.move.dy,
+      })),
     })),
+    fillRule: node.vector.fillRule,
   };
+  const anchors = vector.contours[Math.max(0, Math.min(view.contour, vector.contours.length - 1))]?.anchors ?? [];
+  const activeContour = Math.max(0, Math.min(view.contour, vector.contours.length - 1));
   const toScreen = (x: number, y: number) => worldToScreen(vp, x, y);
 
   g.save();
@@ -196,8 +205,8 @@ export function drawPathEditing(g: CanvasRenderingContext2D, vp: Viewport, view:
   traceVectorScreen(g, vector, toScreen);
   g.stroke();
 
-  const active = Math.max(0, Math.min(view.active, vector.anchors.length - 1));
-  const selected = vector.anchors[active];
+  const active = Math.max(0, Math.min(view.active, anchors.length - 1));
+  const selected = anchors[active];
   if (selected) {
     const ap = toScreen(selected.x, selected.y);
     g.strokeStyle = "rgba(79, 70, 229, 0.55)";
@@ -222,10 +231,13 @@ export function drawPathEditing(g: CanvasRenderingContext2D, vp: Viewport, view:
     }
   }
 
-  for (let i = 0; i < vector.anchors.length; i++) {
-    const anchor = vector.anchors[i];
-    const p = toScreen(anchor.x, anchor.y);
-    drawAnchorDot(g, p.x, p.y, i === active);
+  for (let contour = 0; contour < vector.contours.length; contour++) {
+    const list = vector.contours[contour]?.anchors ?? [];
+    for (let i = 0; i < list.length; i++) {
+      const anchor = list[i];
+      const p = toScreen(anchor.x, anchor.y);
+      drawAnchorDot(g, p.x, p.y, contour === activeContour && i === active);
+    }
   }
   g.restore();
 }

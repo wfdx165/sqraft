@@ -14,6 +14,7 @@ import {
   type NodeStyle,
   type Padding,
 } from "./model";
+import type { VectorContour } from "./vector";
 
 export { CURRENT_FORMAT_VERSION };
 
@@ -130,6 +131,38 @@ export function migrateDoc(state: DocState, fromVersion = state.formatVersion ??
   // 11：Token 新增可选的渐变类型（ADR-0039）。旧文件的 color / number Token 结构不变，
   //     不需要改数据；旧版本读到渐变 Token 会把值当颜色画，所以必须靠版本号拒开。
   if (version < 11) version = 11;
+  // 12：VectorPath 从 `{ closed, anchors }` 升级为多轮廓 `{ contours, fillRule }`（ADR-0040）。
+  //     旧路径包成单条轮廓；旧版本读到新结构会把带洞形状画成实心，因此必须靠版本号拒开。
+  if (version < 12) {
+    migrateV11to12(state);
+    version = 12;
+  }
   state.formatVersion = CURRENT_FORMAT_VERSION;
   return state;
+}
+
+/** 11 → 12：单轮廓路径包成 `contours`，填充规则缺省 `nonzero`。 */
+function migrateV11to12(state: DocState): void {
+  for (const node of Object.values(state.nodes)) {
+    if (!node.vector) continue;
+    const legacy = node.vector as unknown as {
+      closed?: unknown;
+      anchors?: unknown;
+      contours?: unknown;
+      fillRule?: unknown;
+    };
+    if (Array.isArray(legacy.contours)) {
+      // 兜底：结构已经是新形状，只补 fillRule
+      node.vector = {
+        contours: legacy.contours as VectorContour[],
+        fillRule: legacy.fillRule === "evenodd" ? "evenodd" : "nonzero",
+      };
+      continue;
+    }
+    const anchors = Array.isArray(legacy.anchors) ? legacy.anchors : [];
+    node.vector = {
+      contours: [{ closed: legacy.closed === true, anchors }],
+      fillRule: "nonzero",
+    } as DocNode["vector"];
+  }
 }

@@ -4,7 +4,7 @@
  */
 
 import type { DocStore, NodeId, VectorAnchor, VectorPath } from "@sqraft/core";
-import { createNode, makeAnchor, worldRect } from "@sqraft/core";
+import { createNode, makeAnchor, pathFromAnchors, worldRect } from "@sqraft/core";
 import { worldToScreen, type Viewport } from "@sqraft/render";
 import type { Command } from "@sqraft/core";
 import { t } from "../i18n";
@@ -16,12 +16,17 @@ export interface PenDraft {
 
 export interface PathEdit {
   id: NodeId;
+  /** 当前编辑的轮廓下标（多轮廓路径逐条编辑，不新增/删除轮廓） */
+  contour: number;
+  /** 当前锚点在该轮廓里的下标 */
   active: number;
 }
 
 export interface VectorDrag {
   pointerId: number;
   kind: "anchor" | "handle";
+  /** 被拖锚点所在的轮廓与下标 */
+  contour: number;
   index: number;
   side?: "in" | "out";
   /** 拖动开始时的锚点（世界坐标），提交时换算回本地坐标 */
@@ -111,10 +116,10 @@ export function finishDraft(pen: PenState, deps: PenDeps, closed: boolean): void
     y: 0,
     width: 1,
     height: 1,
-    vector: {
-      closed: close,
-      anchors: anchors.map((a) => ({ ...a, x: a.x - page.x, y: a.y - page.y })),
-    },
+    vector: pathFromAnchors(
+      anchors.map((a) => ({ ...a, x: a.x - page.x, y: a.y - page.y })),
+      close,
+    ),
     style: close
       ? { fill: { value: "#3366ff" } }
       : { stroke: { value: "#1a1a1a" }, strokeWidth: 2 },
@@ -143,12 +148,14 @@ export function pathAnchorAt(
   vp: Viewport,
   sx: number,
   sy: number,
-): { index: number; side?: "in" | "out" } | null {
+): { contour: number; index: number; side?: "in" | "out" } | null {
   if (!pen.pathEdit) return null;
   const node = deps.docStore.doc.nodes[pen.pathEdit.id];
   const origin = worldRect(deps.docStore.doc, pen.pathEdit.id);
   if (!node?.vector || !origin) return null;
-  const anchors = node.vector.anchors;
+  const contours = node.vector.contours;
+  const activeContour = Math.max(0, Math.min(pen.pathEdit.contour, contours.length - 1));
+  const anchors = contours[activeContour]?.anchors ?? [];
   const active = Math.max(0, Math.min(pen.pathEdit.active, anchors.length - 1));
   const a = anchors[active];
   if (a) {
@@ -157,12 +164,17 @@ export function pathAnchorAt(
       const hy = side === "in" ? a.inY : a.outY;
       if (!hx && !hy) continue;
       const p = worldToScreen(vp, origin.x + a.x + hx, origin.y + a.y + hy);
-      if (Math.hypot(p.x - sx, p.y - sy) <= 6) return { index: active, side };
+      if (Math.hypot(p.x - sx, p.y - sy) <= 6) return { contour: activeContour, index: active, side };
     }
   }
-  for (let i = 0; i < anchors.length; i++) {
-    const p = worldToScreen(vp, origin.x + anchors[i].x, origin.y + anchors[i].y);
-    if (Math.hypot(p.x - sx, p.y - sy) <= 6) return { index: i };
+  // 先命中当前轮廓，再轮到其它轮廓：多轮廓时重叠点优先跟手
+  const order = [activeContour, ...contours.map((_, index) => index).filter((index) => index !== activeContour)];
+  for (const contour of order) {
+    const list = contours[contour]?.anchors ?? [];
+    for (let i = 0; i < list.length; i++) {
+      const p = worldToScreen(vp, origin.x + list[i].x, origin.y + list[i].y);
+      if (Math.hypot(p.x - sx, p.y - sy) <= 6) return { contour, index: i };
+    }
   }
   return null;
 }

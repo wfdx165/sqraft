@@ -40,6 +40,7 @@ import {
 } from "./variant";
 import { expandScale, type ScaleParams } from "./scale";
 import { expandRotate, type RotateParams } from "./rotate";
+import { booleanOpOf, expandBoolean, expandConvertToPath, type BooleanCommandParams } from "./path-ops";
 import { allowsLinksAt, assertNodeCreateLinks, assertNodeUpdateLinks, linkCleanupForPage, linkStripTargets, normalizeInteractions } from "./interaction";
 
 export type Command =
@@ -64,6 +65,10 @@ export type Command =
   | { type: "node.scale"; params: ScaleParams }
   /** 旋转：绕世界坐标中心转，单选中心=自身中心 */
   | { type: "node.rotate"; params: RotateParams }
+  /** 布尔运算：结果烘焙成普通 path，展开成 node.create + node.delete（ADR-0040） */
+  | { type: "boolean.union" | "boolean.subtract" | "boolean.intersect" | "boolean.exclude"; params: BooleanCommandParams }
+  /** 形状原地转成路径；id / 样式 / 父级 / 层级不变 */
+  | { type: "node.convertToPath"; params: { nodeIds: NodeId[] } }
   /** 把选区转为主组件：单容器原地转换/提升，多选自动包一层 */
   | { type: "component.create"; params: { nodeIds: NodeId[]; componentId?: NodeId; name?: string } }
   /**
@@ -664,6 +669,15 @@ export class DocStore {
       else if (cmd.type === "node.ungroup") out.push(...expandUngroup(this.state, cmd.params));
       else if (cmd.type === "node.scale") out.push(...expandScale(this.state, cmd.params));
       else if (cmd.type === "node.rotate") out.push(...expandRotate(this.state, cmd.params));
+      else if (
+        cmd.type === "boolean.union" ||
+        cmd.type === "boolean.subtract" ||
+        cmd.type === "boolean.intersect" ||
+        cmd.type === "boolean.exclude"
+      ) {
+        out.push(...expandBoolean(this.state, booleanOpOf(cmd.type), cmd.params));
+      }
+      else if (cmd.type === "node.convertToPath") out.push(...expandConvertToPath(this.state, cmd.params));
       else if (cmd.type === "instance.resetOverride") {
         const plan = planOverrideReset(
           this.state,
@@ -1455,7 +1469,7 @@ export class DocStore {
           if (stored.vector) {
             // 路径的锚点允许以父容器坐标传入：平移归一化后由包围盒推导节点框
             validateVector(stored.vector);
-            const norm = normalizeVector(stored.vector.anchors, stored.vector.closed);
+            const norm = normalizeVector(stored.vector.contours, stored.vector.fillRule);
             stored.vector = norm.vector;
             stored.x += norm.bounds.x;
             stored.y += norm.bounds.y;
@@ -1516,13 +1530,13 @@ export class DocStore {
         const next: Partial<DocNode> = { ...cmd.params.patch };
         if (next.vector) {
           validateVector(next.vector as VectorPath);
-          const norm = normalizeVector(next.vector.anchors, next.vector.closed);
+          const norm = normalizeVector(next.vector.contours, next.vector.fillRule);
           next.vector = norm.vector;
           next.x = (next.x ?? node.x) + norm.bounds.x;
           next.y = (next.y ?? node.y) + norm.bounds.y;
           next.width = Math.max(1, norm.bounds.width);
           next.height = Math.max(1, norm.bounds.height);
-        } else if (node.vector && (next.width !== undefined || next.height !== undefined)) {
+        } else if (node.vector && !("vector" in next) && (next.width !== undefined || next.height !== undefined)) {
           const sx = next.width !== undefined ? (next.width as number) / Math.max(1, node.width) : 1;
           const sy = next.height !== undefined ? (next.height as number) / Math.max(1, node.height) : 1;
           const scaled = scaleVector(node.vector, sx, sy);
@@ -1569,6 +1583,13 @@ export class DocStore {
       case "node.scale":
       case "node.rotate":
         throw new Error("排列/分组/缩放命令必须先展开");
+      case "boolean.union":
+      case "boolean.subtract":
+      case "boolean.intersect":
+      case "boolean.exclude":
+        throw new Error("布尔命令必须先展开");
+      case "node.convertToPath":
+        throw new Error("转路径命令必须先展开");
       case "instance.resetOverride":
         throw new Error("instance.resetOverride 必须先展开");
       case "slot.create":

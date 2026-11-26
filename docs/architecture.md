@@ -80,7 +80,7 @@ packages/ai-tools/src/
 
 **参数化多边形**：`polygon` 节点持有可选的 `sides`（3–12，默认 3），顶点由包围盒推导——包围盒就是形状的外接矩形，改宽高或改边数时顶点重算。三角形只是 `sides: 3` 的实例，不存在独立的 `triangle` 类型。命令层在任何入口夹紧边数，GUI 与 AI 共用同一规则。详见 ADR-0013。
 
-**矢量路径**：`path` 节点持有可选的 `vector` 字段（`{ closed, anchors }`）。锚点是节点本地坐标，`in/out` 是相对锚点的柄偏移（全 0 = 尖角）；节点框由锚点 + 手柄的包围盒推导。命令层收到 `vector` 时会把路径归一化到最小坐标 0，并把平移量计入节点 `x / y`，因此 GUI 与 AI 都可以直接给父容器坐标。详见 ADR-0012。
+**矢量路径**：`path` 节点持有可选的 `vector` 字段（`{ contours, fillRule }`）。每条轮廓有自己的 `closed` 与锚点，锚点是节点本地坐标，`in/out` 是相对锚点的柄偏移（全 0 = 尖角）；节点框是**曲线的紧包围盒**（按贝塞尔极值算，控制柄不参与，形状与选中框贴合），`fillRule` 为 `nonzero` / `evenodd`。命令层收到 `vector` 时会把整条路径归一化到最小坐标 0，并把平移量计入节点 `x / y`，因此 GUI 与 AI 都可以直接给父容器坐标。布尔运算的结果统一是 `evenodd` 多轮廓 `path`（ADR-0040）。详见 ADR-0012。
 
 **组件、实例与插槽**：`component` 是文档根节点上的主组件（不属于任何页面，见 ADR-0025），持有 `propertyDefs`（文本、布尔、实例替换三种组件属性）；`componentSet` 也是根节点，只装 `component` 子节点，持有 `variantProperties`（枚举属性）与 `variantMap`（组合键 → 变体组件 id），子节点用 wrap 自动布局排布（ADR-0038）；`instance` 是物化子树，持有 `componentId / mainId / propValues / overrides`，子孙节点都是真实节点并带 `mainId` 指回母版；`slot` 是具名内容区域，实例侧用 `slotFilled` 标记默认内容是否已被替换。实例子孙 id 由「实例 id + 母版节点身份键」确定性派生，保证同步、撤销与 AI 读写一致。详见 ADR-0014 与 §7。
 
@@ -123,7 +123,7 @@ interface RenderBackend {
 ```
 
 - 绘制序 = 文档树深度优先（子在父上层），与图层面板顺序一致；
-- 矢量路径由 `drawPath` 绘制：无手柄的段退化为直线，有手柄的段用三次贝塞尔；描边端点/拐角取圆角，填充用非零规则；
+- 矢量路径由 `drawPath` 绘制：无手柄的段退化为直线，有手柄的段用三次贝塞尔；描边端点/拐角取圆角，多轮廓按节点 `fillRule` 填充（`nonzero` / `evenodd`）；
 - 参数化多边形由 `drawPolygon` 绘制：顶点由 `polygonPoints(sides, width, height)` 在每帧推导（顶点朝上、撑满包围盒），同样支持旋转与填充/描边；
 - 画板与矩形/组件共用同一套样式规则：有填充才画底色，无填充就是透明容器；画板不再强制白底、默认边框或投影。画板工具新建画板时默认填 `color/surface`，保持既有视觉；
 - 插槽与画板/矩形共用样式绘制；空插槽占位与拖入高亮是 UI 叠加层，不进入文档渲染、导出或 AI 截图；
@@ -317,6 +317,7 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 | `update_node` | 写 | 改属性与名字（页面 / 图层 / 组件；颜色规则同上）；图片可用 `crop` 改可见区域、`imageUrl` 换远程链接 |
 | `delete_node` | 写 | 删除节点 |
 | `duplicate_node` / `group_nodes` / `arrange_nodes` | 写 | 复制、分组/解组、对齐/分布 |
+| `boolean_op` / `convert_to_path` | 写 | 并/差/交/排除烘焙成一个 `path`（`evenodd`，一次撤销），或把形状原地转成路径且保持 id；`boolean_op` 返回 `styleFrom` / `mergedStyles` / `anchorCount` |
 | `move_node` | 写 | 换父级（等价画布拖动，世界坐标不变；自动布局容器默认进流） |
 | `create_instance` / `swap_instance` / `detach_instance` | 写 | 组件实例的建立、替换与解绑 |
 | `define_property` / `set_instance_prop` / `fill_slot` | 写 | 组件属性定义、实例属性覆盖、插槽填充；`set_instance_prop` 的 `propertyId` 命中变体属性时等价于切换变体 |
@@ -327,17 +328,18 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 | `import_svg` | 写 | SVG 源码（≤5MB）导入成可编辑节点，包在一个 frame 里、一个撤销步；支持形状/路径/文本/本地 use/纯色与线性径向渐变；不支持的特性按元素栅格化并以图片节点落回原位，清单进 `rasterized` |
 | `screenshot` | 读 | 离屏重绘文档为 PNG（不含编辑器叠加层）；可选 `region` 只截文档坐标下的某块。`format="text"` 给纯文本替代视图：区域内节点的世界坐标、解析后的填充/描边颜色、文字与诊断（最多 200 个） |
 | `document.new` | 写 | 新建未命名空稿并切换过去 |
-| `document.open` | 写 | 只能触发系统文件对话框；不接受路径参数（agent 不能读任意磁盘文件） |
 
 **画布反馈**：写工具执行期间，画布在 UI 叠加层给这次调用的改动画青色虚线框——只取最外层节点（建一棵子树只描根框），页面本身不描（整页虚线没有信息量），`delete_node` 改描父容器（父容器是页面时同样跳过）；调用结束 480ms 淡出。顶部胶囊同时显示「客户端 · 工具名」，跨页或改动在视口外时多一个跳转按钮（切页 + 飞行定位到改动包围盒；跨页切页按 `activatePage` 既有规则清空选区，不额外选中改动节点；一次调用跨多页时只指向第一处改动），调用结束后残留 5 秒再回落到连接数。只读工具与失败的写调用都不碰画布，后者不留下"刚改了…"的字样。状态住在非响应式的 `renderer/canvas/agent-activity.ts`，因此不进 `RenderBackend`、不进导出，也不进 `screenshot`。
 
 **撤销粒度**：一次工具调用里的多条命令通过 `DocStore.transact` 合并成单条撤销记录；事务失败时回滚，文档不会停在半成品状态。
 
-**写入诊断**：事务提交后对这次 `changed` 里的节点（`shallow`：只查节点自身；`changed` 已含每个被动到的节点，新建子树与布局回写都会逐个加进去）跑 `@sqraft/core` 的纯函数 `diagnose()`（`ZERO_SIZE` / `TEXT_NO_FILL` / `TEXT_OVERFLOW` / `TOKEN_MISSING` / `OUTSIDE_PARENT`），非空时并进同一响应（每调用最多扫 2000 节点、报 20 条）。只警告、不回滚、不新建撤销步；文本度量由渲染层注入。`initialize` 的 `instructions` 承载跨工具的工作规则（先搜索再读取、处理诊断、无视觉用文本视图）。
+**写入诊断**：事务提交后对这次 `changed` 里的节点（`shallow`：只查节点自身；`changed` 已含每个被动到的节点，新建子树与布局回写都会逐个加进去）跑 `@sqraft/core` 的纯函数 `diagnose()`（`ZERO_SIZE` / `TEXT_NO_FILL` / `TEXT_OVERFLOW` / `TOKEN_MISSING` / `OUTSIDE_PARENT`），非空时并进同一响应（每调用最多扫 2000 节点、报 20 条）。只警告、不回滚、不新建撤销步；文本度量由渲染层注入。`initialize` 的 `instructions` 承载跨工具的工作规则（先搜索再读取、处理诊断、无视觉用文本视图、优先用自动布局表达结构）。
+
+**布局建议**：写工具的返回体还可能在诊断之外带 `layoutHints`——不是诊断，不阻塞、不改文档。判断条件是某个**没有自动布局**的 frame/component，其全部子项（≥3、都可见、非矢量插画、非 fill）沿一条轴线等距排开、交叉轴对齐且都在容器内；此时给出可直接传给 `update_node` 的 `suggested`（direction / gap / padding / crossAlign），按它加上布局后求解结果与当前摆放一致。只在父容器本身也被这次调用改动（新建子项、换父级、`arrange_nodes` 对齐/分布）时出现，单独改子项内容不会重复提醒；`import_svg` 的产物是插画，不提示。
 
 **截图自检闭环**：agent 生成 → `screenshot` → 模型看图 → 修正命令。这是"AI 全流程"质量的下限保障。
 
-**矢量路径**：`create_node` 的 `kind` 支持 `path`，用 `points`（父容器坐标）与 `closed` 描述锚点；`update_node` 可整体替换 `points` 或切换 `closed`；`read_document` 回传 `vector`。颜色可引用 `fillToken` / `strokeToken`，也可给 `fill` / `stroke` 字面量；未给颜色时按 GUI 默认（开放描边、闭合填充）。
+**矢量路径**：`create_node` 的 `kind` 支持 `path`；多轮廓用 `contours` + `fillRule`（父容器坐标，整体替换），旧的 `points` / `closed` 只对单轮廓生效、多轮廓上会拒绝。`read_document` 回传 `vector: { contours, fillRule }`（节点本地坐标，回写要加节点 `x/y`）。`boolean_op` 把并/差/交/排除烘焙成普通 `path`（`evenodd`），`convert_to_path` 原地把形状换成路径且保持 id。颜色可引用 `fillToken` / `strokeToken`，也可给 `fill` / `stroke` 字面量；未给颜色时按 GUI 默认（开放描边、闭合填充）。
 
 **参数化多边形**：`create_node` 的 `kind` 支持 `polygon`，用 `sides`（3–12，默认 3）指定边数、`width/height` 指定包围盒；`update_node` 可改 `sides`；`read_document` 回传 `sides`。默认填充 `#3366ff`，颜色规则与其它节点一致。
 
@@ -351,7 +353,7 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 
 - **布局求解 golden 测试**：手工构造布局用例集（含 wrap、min/max 边界），快照对比位置输出——求解器是纯函数，这是最便宜的高价值测试；
 - **命令确定性测试**：随机命令序列重放两次，文档状态逐字节相等；文件"快照+重放"等价性测试；
-- **矢量几何测试**：包围盒归一化（含手柄）、宽高缩放、闭合约束、贝塞尔采样与命中，全部在 core 的纯函数层做（Node 下运行，不需 DOM）；
+- **矢量几何测试**：包围盒归一化（曲线紧包围盒，控制柄不参与）、宽高缩放、闭合约束、贝塞尔采样与命中，全部在 core 的纯函数层做（Node 下运行，不需 DOM）；
 - **视觉回归**：示例文档渲染截图对比（pixelmatch 容差）；
 - **工具层测试**：AI 工具 schema 校验（拒绝字面量色值等纪律）。
 

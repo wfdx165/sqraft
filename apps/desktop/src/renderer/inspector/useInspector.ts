@@ -37,6 +37,7 @@ import {
   isGradientPaint,
   cloneGradientValue,
   tokenPathOf,
+  replaceContour,
   scaleFactorsTo,
   type Rect,
 } from "@sqraft/core";
@@ -71,6 +72,25 @@ const nodes = computed<DocNode[]>(() => {
 
 const node = computed<DocNode | null>(() => nodes.value[0] ?? null);
 const multi = computed(() => nodes.value.length > 1);
+
+/** 多轮廓路径：检查器当前编辑的轮廓（切选区时复位）。 */
+const pathContour = ref(0);
+watch(
+  () => node.value?.id,
+  () => {
+    pathContour.value = 0;
+  },
+);
+const contourCount = computed(() => node.value?.vector?.contours.length ?? 0);
+const activeContourIndex = computed(() =>
+  Math.min(pathContour.value, Math.max(0, contourCount.value - 1)),
+);
+const activeContour = computed(() => node.value?.vector?.contours[activeContourIndex.value] ?? null);
+function stepContour(delta: number): void {
+  const count = contourCount.value;
+  if (count <= 1) return;
+  pathContour.value = (activeContourIndex.value + delta + count) % count;
+}
 const allText = computed(() => nodes.value.length > 0 && nodes.value.every((n) => n.type === "text"));
 const hasType = (...types: string[]) => nodes.value.length > 0 && nodes.value.every((n) => types.includes(n.type));
 // 页面也接受填充：那是"页面背景色"（缺省白）
@@ -954,16 +974,28 @@ const FONT_STACKS = computed<{ labelKey: MessageKey; value: string }[]>(() => [
 
 /* ---------- 路径 / 插槽 ---------- */
 
-function canClosePath(n: DocNode): boolean {
-  return Boolean(n.vector?.closed) || (n.vector?.anchors.length ?? 0) >= 3;
+function canClosePath(): boolean {
+  const contour = activeContour.value;
+  if (!contour) return false;
+  return contour.closed || contour.anchors.length >= 3;
 }
 
 function setClosed(e: Event): void {
   const n = node.value;
-  if (!n?.vector) return;
+  const contour = activeContour.value;
+  if (!n?.vector || !contour) return;
   const closed = boolOf(e);
-  if (closed && n.vector.anchors.length < 3) return;
-  dispatch({ type: "node.update", params: { nodeId: n.id, patch: { vector: { ...n.vector, closed } } } }, "inspect");
+  if (closed && contour.anchors.length < 3) return;
+  dispatch(
+    {
+      type: "node.update",
+      params: {
+        nodeId: n.id,
+        patch: { vector: replaceContour(n.vector, activeContourIndex.value, { closed, anchors: contour.anchors }) },
+      },
+    },
+    "inspect",
+  );
 }
 
 const copied = ref(false);
@@ -1507,6 +1539,11 @@ const prototype = usePrototype({ node, multi, lockedChain });
     setTruncate,
     canClosePath,
     setClosed,
+    pathContour,
+    contourCount,
+    activeContourIndex,
+    activeContour,
+    stepContour,
     copyId,
     componentAncestorId,
     hasSlotAncestor,

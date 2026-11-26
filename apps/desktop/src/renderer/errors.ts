@@ -23,6 +23,22 @@ const CODE_KEYS: Record<string, MessageKey> = {
   "core.slot.onlyInstance": "core.slot.onlyInstance",
   "core.component.missing": "core.component.missing",
   "core.variant.inUse": "core.variant.inUse",
+  "core.boolean.single": "core.boolean.single",
+  "core.boolean.crossParent": "core.boolean.crossParent",
+  "core.boolean.openContour": "core.boolean.openContour",
+  "core.boolean.unsupportedType": "core.boolean.unsupportedType",
+  "core.boolean.tooComplex": "core.boolean.tooComplex",
+  "core.boolean.noOverlap": "core.boolean.noOverlap",
+  "core.boolean.invalidGeometry": "core.boolean.invalidGeometry",
+  "core.boolean.emptyResult": "core.boolean.emptyResult",
+  "core.boolean.instanceInterior": "core.boolean.instanceInterior",
+  "core.boolean.locked": "core.boolean.locked",
+  "core.convert.unsupportedType": "core.convert.unsupportedType",
+  "core.convert.instanceInterior": "core.convert.instanceInterior",
+  "core.convert.locked": "core.convert.locked",
+  "core.path.multiContour": "core.path.multiContour",
+  "core.path.tooManyContours": "core.path.tooManyContours",
+  "core.path.tooManyAnchors": "core.path.tooManyAnchors",
 };
 
 /**

@@ -15,7 +15,6 @@ describe("AI 工具：文档级操作与截图区域", () => {
         calls.push("new");
         return true;
       },
-      openDocument: async () => true,
     });
     expect(await call(run, "document.new")).toEqual({ ok: true });
     expect(calls).toEqual(["new"]);
@@ -25,32 +24,8 @@ describe("AI 工具：文档级操作与截图区域", () => {
     const store = new DocStore(createDocWithPage());
     const run = makeExecutor(store, async () => "", undefined, undefined, {
       newDocument: async () => false,
-      openDocument: async () => true,
     });
     expect(await call(run, "document.new")).toEqual({ ok: false, canceled: true });
-  });
-
-  it("document.open 把用户取消如实回报", async () => {
-    const store = new DocStore(createDocWithPage());
-    let opened = 0;
-    const run = makeExecutor(store, async () => "", undefined, undefined, {
-      newDocument: async () => true,
-      openDocument: async () => {
-        opened += 1;
-        return false;
-      },
-    });
-    expect(await call(run, "document.open")).toEqual({ ok: false, canceled: true });
-    expect(opened).toBe(1);
-  });
-
-  it("document.open 拒绝路径参数（文件必须由用户选择）", async () => {
-    const store = new DocStore(createDocWithPage());
-    const run = makeExecutor(store, async () => "", undefined, undefined, {
-      newDocument: async () => true,
-      openDocument: async () => true,
-    });
-    await expect(run("document.open", { path: "/etc/passwd" })).rejects.toThrow(/不接受路径参数/);
   });
 
   it("没有宿主时文档类工具给出可读错误", async () => {
@@ -63,7 +38,6 @@ describe("AI 工具：文档级操作与截图区域", () => {
     const store = new DocStore(createDocWithPage());
     const run = makeExecutor(store, async () => "", undefined, undefined, {
       newDocument: async () => true,
-      openDocument: async () => true,
       appInfo: async () => ({ name: "Sqraft", version: "0.1.0", platform: "darwin" }),
     });
     const info = await call(run, "app_info");
@@ -75,7 +49,6 @@ describe("AI 工具：文档级操作与截图区域", () => {
     const store = new DocStore(createDocWithPage());
     const run = makeExecutor(store, async () => "", undefined, undefined, {
       newDocument: async () => true,
-      openDocument: async () => true,
     });
     await expect(run("app_info", {})).rejects.toThrow(/不支持 app_info/);
   });
@@ -101,7 +74,6 @@ describe("AI 工具：导出与布局检查", () => {
     const pageId = firstPageId(store.doc)!;
     const run = makeExecutor(store, async () => "", () => pageId, undefined, {
       newDocument: async () => true,
-      openDocument: async () => true,
       exportImage: async (request) =>
         request.format === "svg"
           ? {
@@ -131,7 +103,6 @@ describe("AI 工具：导出与布局检查", () => {
     const pageId = firstPageId(store.doc)!;
     const run = makeExecutor(store, async () => "", () => pageId, undefined, {
       newDocument: async () => true,
-      openDocument: async () => true,
       importSvg: async () => ({
         ok: true,
         frameId: "frame-1",
@@ -166,7 +137,6 @@ describe("AI 工具：导出与布局检查", () => {
     for (const { failure, expected } of cases) {
       const run = makeExecutor(store, async () => "", () => pageId, undefined, {
         newDocument: async () => true,
-        openDocument: async () => true,
         importSvg: async () => failure,
       });
       await expect(run("import_svg", { svg: "<svg/>" })).rejects.toThrow(expected);
@@ -178,7 +148,6 @@ describe("AI 工具：导出与布局检查", () => {
     const pageId = firstPageId(store.doc)!;
     const run = makeExecutor(store, async () => "", () => pageId, undefined, {
       newDocument: async () => true,
-      openDocument: async () => true,
       importSvg: async () => ({
         ok: false,
         reason: "empty-content",
@@ -198,7 +167,6 @@ describe("AI 工具：导出与布局检查", () => {
     const pageId = firstPageId(store.doc)!;
     const run = makeExecutor(store, async () => "", () => pageId, undefined, {
       newDocument: async () => true,
-      openDocument: async () => true,
       importSvg: async () => ({
         ok: true,
         frameId: "frame-1",

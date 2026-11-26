@@ -2,6 +2,7 @@
 import * as components from "./components";
 import * as document from "./document";
 import * as nodes from "./nodes";
+import * as booleanOps from "./boolean";
 import * as pages from "./pages";
 import * as read from "./read";
 import * as tokens from "./tokens";
@@ -27,6 +28,8 @@ export const MUTATING_TOOLS: ReadonlySet<string> = new Set([
   "group_nodes",
   "arrange_nodes",
   "duplicate_node",
+  "boolean_op",
+  "convert_to_path",
   "set_interaction",
   "remove_interaction",
   "import_svg",
@@ -34,7 +37,6 @@ export const MUTATING_TOOLS: ReadonlySet<string> = new Set([
 
 export const handlers: Record<string, Handler> = {
   "document.new": document.handleDocumentNew,
-  "document.open": document.handleDocumentOpen,
   "app_info": document.handleAppInfo,
   "read_document": read.handleReadDocument,
   "search_nodes": read.handleSearchNodes,
@@ -63,6 +65,8 @@ export const handlers: Record<string, Handler> = {
   "group_nodes": nodes.handleGroupNodes,
   "arrange_nodes": nodes.handleArrangeNodes,
   "duplicate_node": nodes.handleDuplicateNode,
+  "boolean_op": booleanOps.handleBooleanOp,
+  "convert_to_path": booleanOps.handleConvertToPath,
   "import_font": document.handleImportFont,
   "inspect_layout": read.handleInspectLayout,
   "export_as": view.handleExportAs,

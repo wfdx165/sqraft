@@ -46,8 +46,12 @@ import {
   hitVector,
   makeAnchor,
   normalizeVector,
+  pathFromAnchors,
   pointInVector,
+  validateVector,
   vectorBounds,
+  VECTOR_MAX_CONTOURS,
+  VECTOR_MAX_TOTAL_ANCHORS,
   type VectorPath,
 } from "../src/vector";
 import type { DocState } from "../src/model";
@@ -358,22 +362,44 @@ describe("页面与世界坐标", () => {
 });
 
 describe("矢量路径", () => {
-  const line = (): VectorPath => ({
-    closed: false,
-    anchors: [makeAnchor(0, 0), makeAnchor(100, 0)],
+  const line = (): VectorPath => pathFromAnchors([makeAnchor(0, 0), makeAnchor(100, 0)]);
+
+  it("包围盒按曲线范围（不含控制柄），归一化后最小坐标为 0", () => {
+    // 控制柄拉到 (60,20)，但曲线本身最高只到 y≈25.56：节点框不跟着手柄膨胀
+    const vector = pathFromAnchors([makeAnchor(20, 30, { outX: 40, outY: -10 }), makeAnchor(120, 30)]);
+    const bounds = vectorBounds(vector);
+    expect(bounds.x).toBe(20);
+    expect(bounds.y).toBeCloseTo(25.5556, 3);
+    expect(bounds.width).toBe(100);
+    expect(bounds.height).toBeCloseTo(4.4444, 3);
+    const { vector: n, bounds: normalized } = normalizeVector(vector.contours);
+    expect(normalized.y).toBeCloseTo(25.5556, 3);
+    expect(n.contours[0].anchors[0].x).toBe(0);
+    expect(n.contours[0].anchors[0].y).toBeCloseTo(4.4444, 3);
+    expect(n.contours[0].anchors[0].outX).toBe(40);
   });
 
-  it("包围盒包含手柄端点，归一化后最小坐标为 0", () => {
-    const vector: VectorPath = {
+  it("轮廓数与锚点总数超限时抛 AppError（挡住 agent 传超大 contours）", () => {
+    const contour = (): { closed: boolean; anchors: ReturnType<typeof makeAnchor>[] } => ({
       closed: false,
-      anchors: [makeAnchor(20, 30, { outX: 40, outY: -10 }), makeAnchor(120, 30)],
+      anchors: [makeAnchor(0, 0), makeAnchor(1, 1)],
+    });
+    const tooManyContours: VectorPath = {
+      contours: Array.from({ length: VECTOR_MAX_CONTOURS + 1 }, contour),
+      fillRule: "nonzero",
     };
-    expect(vectorBounds(vector)).toEqual({ x: 20, y: 20, width: 100, height: 10 });
-    const { vector: n, bounds } = normalizeVector(vector.anchors, vector.closed);
-    expect(bounds).toEqual({ x: 20, y: 20, width: 100, height: 10 });
-    expect(n.anchors[0].x).toBe(0);
-    expect(n.anchors[0].y).toBe(10);
-    expect(n.anchors[0].outX).toBe(40);
+    expect(() => validateVector(tooManyContours)).toThrow(/core\.path\.tooManyContours/);
+
+    const tooManyAnchors: VectorPath = {
+      contours: [
+        {
+          closed: false,
+          anchors: Array.from({ length: VECTOR_MAX_TOTAL_ANCHORS + 1 }, (_, i) => makeAnchor(i, i)),
+        },
+      ],
+      fillRule: "nonzero",
+    };
+    expect(() => validateVector(tooManyAnchors)).toThrow(/core\.path\.tooManyAnchors/);
   });
 
   it("创建路径时以父容器坐标归一化并推导节点框", () => {
@@ -383,7 +409,7 @@ describe("矢量路径", () => {
       name: "P",
       x: 0,
       y: 0,
-      vector: { closed: false, anchors: [makeAnchor(30, 40), makeAnchor(130, 90)] },
+      vector: pathFromAnchors([makeAnchor(30, 40), makeAnchor(130, 90)]),
     });
     store.apply({ type: "node.create", params: { nodes: [path], parentId: pageId } });
     const saved = store.doc.nodes[path.id];
@@ -391,14 +417,14 @@ describe("矢量路径", () => {
     expect(saved.y).toBe(40);
     expect(saved.width).toBe(100);
     expect(saved.height).toBe(50);
-    expect(saved.vector?.anchors[0]).toMatchObject({ x: 0, y: 0 });
+    expect(saved.vector?.contours[0].anchors[0]).toMatchObject({ x: 0, y: 0 });
   });
 
   it("改 vector 时重新推导节点框，撤销恢复上一版几何", () => {
     const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const path = createNode("path", {
-      vector: { closed: false, anchors: [makeAnchor(0, 0), makeAnchor(100, 0)] },
+      vector: pathFromAnchors([makeAnchor(0, 0), makeAnchor(100, 0)]),
     });
     store.apply({ type: "node.create", params: { nodes: [path], parentId: pageId } });
 
@@ -406,7 +432,7 @@ describe("矢量路径", () => {
       type: "node.update",
       params: {
         nodeId: path.id,
-        patch: { vector: { closed: false, anchors: [makeAnchor(10, 10), makeAnchor(10, 60)] } },
+        patch: { vector: pathFromAnchors([makeAnchor(10, 10), makeAnchor(10, 60)]) },
       },
     });
     expect(store.doc.nodes[path.id].x).toBe(10);
@@ -423,30 +449,27 @@ describe("矢量路径", () => {
     const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const path = createNode("path", {
-      vector: {
-        closed: false,
-        anchors: [makeAnchor(0, 0, { outX: 10 }), makeAnchor(100, 50)],
-      },
+      vector: pathFromAnchors([makeAnchor(0, 0, { outX: 10 }), makeAnchor(100, 50)]),
     });
     store.apply({ type: "node.create", params: { nodes: [path], parentId: pageId } });
     store.apply({ type: "node.update", params: { nodeId: path.id, patch: { width: 200, height: 100 } } });
     const saved = store.doc.nodes[path.id];
     expect(saved.width).toBe(200);
-    expect(saved.vector?.anchors[1]).toMatchObject({ x: 200, y: 100 });
-    expect(saved.vector?.anchors[0].outX).toBe(20);
+    expect(saved.vector?.contours[0].anchors[1]).toMatchObject({ x: 200, y: 100 });
+    expect(saved.vector?.contours[0].anchors[0].outX).toBe(20);
   });
 
   it("扁平路径垂直缩放后仍保持包围盒与几何一致", () => {
     const store = new DocStore(createDocWithPage());
     const pageId = store.doc.rootIds[0];
     const path = createNode("path", {
-      vector: { closed: false, anchors: [makeAnchor(0, 0), makeAnchor(100, 0)] },
+      vector: pathFromAnchors([makeAnchor(0, 0), makeAnchor(100, 0)]),
     });
     store.apply({ type: "node.create", params: { nodes: [path], parentId: pageId } });
     store.apply({ type: "node.update", params: { nodeId: path.id, patch: { height: 80 } } });
     const saved = store.doc.nodes[path.id];
     expect(saved.height).toBe(1);
-    expect(saved.vector?.anchors.every((a) => a.y === 0)).toBe(true);
+    expect(saved.vector?.contours[0].anchors.every((a) => a.y === 0)).toBe(true);
   });
 
   it("闭合少于 3 个锚点时抛错且不占撤销记录", () => {
@@ -457,25 +480,47 @@ describe("矢量路径", () => {
     expect(() =>
       store.apply({
         type: "node.update",
-        params: { nodeId: path.id, patch: { vector: { closed: true, anchors: line().anchors } } },
+        params: {
+          nodeId: path.id,
+          patch: {
+            vector: pathFromAnchors(line().contours[0].anchors, true),
+          },
+        },
       }),
     ).toThrow();
-    expect(store.doc.nodes[path.id].vector?.closed).toBe(false);
+    expect(store.doc.nodes[path.id].vector?.contours[0].closed).toBe(false);
     store.undo();
     expect(store.doc.nodes[path.id]).toBeUndefined();
   });
 
   it("采样、描边距离与填充内部命中", () => {
-    const square: VectorPath = {
-      closed: true,
-      anchors: [makeAnchor(0, 0), makeAnchor(100, 0), makeAnchor(100, 100), makeAnchor(0, 100)],
-    };
-    expect(flattenVector(square)).toHaveLength(5);
+    const square = pathFromAnchors(
+      [makeAnchor(0, 0), makeAnchor(100, 0), makeAnchor(100, 100), makeAnchor(0, 100)],
+      true,
+    );
+    expect(flattenVector(square)[0]).toHaveLength(5);
     expect(hitVector(square, 50, 50, 1, true)).toBe(true);
     expect(hitVector(square, 50, 50, 1, false)).toBe(false);
     expect(hitVector(square, 101, 50, 2, true)).toBe(true);
     expect(hitVector(square, 150, 150, 2, true)).toBe(false);
     expect(pointInVector(square, 50, 50)).toBe(true);
+  });
+
+  it("开放轮廓按填充语义隐式闭合（与 canvas / SVG 的 fill 一致）", () => {
+    const open = pathFromAnchors([makeAnchor(0, 0), makeAnchor(100, 0), makeAnchor(0, 100)]);
+    expect(pointInVector(open, 20, 20)).toBe(true);
+    expect(pointInVector(open, 80, 80)).toBe(false);
+  });
+
+  it("多轮廓 + evenodd：洞内不算填充，nonzero 同向轮廓仍算内部", () => {
+    const outer = [makeAnchor(0, 0), makeAnchor(100, 0), makeAnchor(100, 100), makeAnchor(0, 100)];
+    const inner = [makeAnchor(25, 25), makeAnchor(75, 25), makeAnchor(75, 75), makeAnchor(25, 75)];
+    const hole: VectorPath = { contours: [{ closed: true, anchors: outer }, { closed: true, anchors: inner }], fillRule: "evenodd" };
+    const solid: VectorPath = { ...hole, fillRule: "nonzero" };
+    expect(pointInVector(hole, 50, 50)).toBe(false);
+    expect(pointInVector(hole, 10, 50)).toBe(true);
+    expect(pointInVector(solid, 50, 50)).toBe(true);
+    expect(hitVector(hole, 50, 50, 1, true)).toBe(false);
   });
 });
 
@@ -547,7 +592,7 @@ describe("命令原子性与参数不可变", () => {
     const before = JSON.stringify(store.doc);
     const rect = createNode("rect", { name: "R" });
     const bad = createNode("path", {
-      vector: { closed: true, anchors: [makeAnchor(0, 0), makeAnchor(10, 10)] },
+      vector: pathFromAnchors([makeAnchor(0, 0), makeAnchor(10, 10)], true),
     });
     expect(() =>
       store.apply([
@@ -581,7 +626,7 @@ describe("命令原子性与参数不可变", () => {
     const path = createNode("path", {
       x: 5,
       y: 6,
-      vector: { closed: false, anchors: [makeAnchor(30, 40), makeAnchor(130, 90)] },
+      vector: pathFromAnchors([makeAnchor(30, 40), makeAnchor(130, 90)]),
     });
     const snapshot = JSON.stringify(path);
     store.apply({ type: "node.create", params: { nodes: [path], parentId: pageId } });
@@ -2093,6 +2138,28 @@ describe("迁移：formatVersion 1 → 2", () => {
     expect(t.style.lineHeight).toBeUndefined();
     const snapshot = JSON.stringify(state);
     migrateDoc(state as never, 2);
+    expect(JSON.stringify(state)).toBe(snapshot);
+  });
+
+  it("11 → 12：单轮廓路径包成 contours，填充规则 nonzero，迁移幂等", () => {
+    const page = createNode("page", { width: 800, height: 600 });
+    const path = createNode("path");
+    const anchors = [makeAnchor(0, 0), makeAnchor(10, 0), makeAnchor(10, 10)];
+    (path as unknown as { vector: unknown }).vector = { closed: true, anchors };
+    const state: DocState = {
+      version: 1,
+      rootIds: [page.id],
+      nodes: { [page.id]: { ...page, children: [path.id] }, [path.id]: path },
+      tokens: {},
+    };
+    migrateDoc(state as never, 11);
+    expect(state.formatVersion).toBe(12);
+    expect(state.nodes[path.id].vector).toEqual({
+      contours: [{ closed: true, anchors }],
+      fillRule: "nonzero",
+    });
+    const snapshot = JSON.stringify(state);
+    migrateDoc(state as never, 12);
     expect(JSON.stringify(state)).toBe(snapshot);
   });
 });
