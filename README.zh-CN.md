@@ -152,7 +152,7 @@ url = "http://127.0.0.1:7331/mcp"
 
 ## 从源码构建
 
-需要 macOS 11.7 及以上（Sqraft 0.1.2 起，Apple Silicon 或 Intel）或 Windows（x64）、Node.js 22.12（见 `.nvmrc`）与 pnpm 10.33.4。
+需要 macOS 11.7 及以上（Sqraft 0.1.2 起，Apple Silicon 或 Intel）或 Windows（x64）、Node.js 22.12（见 `.nvmrc`）与 pnpm 12.23.0。
 
 ```bash
 pnpm install

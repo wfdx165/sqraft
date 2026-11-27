@@ -152,7 +152,7 @@ url = "http://127.0.0.1:7331/mcp"
 
 ## 소스에서 빌드
 
-macOS 11.7 이상(Sqraft 0.1.2부터, Apple Silicon 또는 Intel) 또는 Windows(x64), Node.js 22.12(`.nvmrc` 참고), pnpm 10.33.4가 필요합니다.
+macOS 11.7 이상(Sqraft 0.1.2부터, Apple Silicon 또는 Intel) 또는 Windows(x64), Node.js 22.12(`.nvmrc` 참고), pnpm 12.23.0이 필요합니다.
 
 ```bash
 pnpm install

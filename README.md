@@ -152,7 +152,7 @@ The endpoint only listens on `127.0.0.1` and rejects requests carrying an `Origi
 
 ## Build from source
 
-Requirements: macOS 11.7 or later, Sqraft 0.1.2+ (Apple Silicon or Intel) or Windows x64, Node.js 22.12 (see `.nvmrc`) and pnpm 10.33.4.
+Requirements: macOS 11.7 or later, Sqraft 0.1.2+ (Apple Silicon or Intel) or Windows x64, Node.js 22.12 (see `.nvmrc`) and pnpm 12.23.0.
 
 ```bash
 pnpm install

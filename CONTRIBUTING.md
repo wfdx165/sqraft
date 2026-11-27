@@ -20,7 +20,7 @@ change gets merged.
 | macOS | 11.7+ | Apple Silicon and Intel are both supported |
 | Windows | 10 22H2+ / 11, x64 | ARM64 Windows is not supported |
 | Node.js | 22.12.0 | see `.nvmrc` |
-| pnpm | 10.33.4 | `packageManager` in `package.json` |
+| pnpm | 12.23.0 | `packageManager` in `package.json` |
 
 The Electron binary is downloaded on the first `pnpm install` /
 `pnpm dev`, so the first run is slow.
