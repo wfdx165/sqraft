@@ -17,6 +17,7 @@ export type { ToolDefinition };
 export { MUTATING_TOOLS } from "./handlers";
 export { assertEffectTokens, assertNumberToken, assertToken } from "./args";
 export type {
+  AppState,
   DocumentHost,
   ExecutorOptions,
   ScreenshotRegion,

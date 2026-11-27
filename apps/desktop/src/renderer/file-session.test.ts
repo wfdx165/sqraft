@@ -11,6 +11,7 @@ const bridge = {
     openPath: vi.fn(),
     save: vi.fn(async () => ({ status: "ok", mtimeMs: 1 })),
     saveAs: vi.fn(),
+    stat: vi.fn(async () => []),
   },
   dialog: {
     unsaved: vi.fn(async (): Promise<UnsavedChoice> => "cancel"),
@@ -44,13 +45,30 @@ const bridge = {
 
 vi.stubGlobal("window", { sqraft: bridge });
 
-const { fileState, installFileSession, newDocument, saveDocument } = await import("./file-session");
-const { docStore, ui } = await import("./store");
+const { closeTabById, fileState, installFileSession, newDocument, saveDocument, saveDocumentAs } = await import("./file-session");
+const { activateTab, docStore } = await import("./store");
+const { MAX_DOC_TABS, createDocTab, docTabs, resetSessions, sessionState } = await import("./sessions");
 
-/** 造一份有未保存改动的文档，返回新加节点的 id。 */
+/** 清掉所有文档标签并回到 Home（先切走再清，门面才会重新挂到 Home 的 store 上）。 */
+function closeAllDocs(): void {
+  activateTab("home");
+  resetSessions();
+}
+
+/** 打开一个空文档标签并激活。 */
+function openDoc(): void {
+  const tab = createDocTab(createEmptyDoc());
+  activateTab(tab.id);
+}
+
+/** 造一份有未保存改动的文档（先开一个新标签），返回新加节点的 id。 */
 function makeDirtyDocument(): string {
-  docStore.replace(createEmptyDoc());
-  ui.docOpen = true;
+  openDoc();
+  return addDirtyNodes();
+}
+
+/** 往当前文档里加一页一个矩形，返回矩形 id。 */
+function addDirtyNodes(): string {
   // 空稿没有页面：先建一页（根节点只放页面与主组件）
   const page = createNode("page", { name: "页面 1", width: 200, height: 200 });
   docStore.apply({ type: "node.create", params: { nodes: [page], parentId: null } });
@@ -60,45 +78,31 @@ function makeDirtyDocument(): string {
   return rect.id;
 }
 
-describe("新建文档的未保存检查", () => {
+describe("新建文档开新标签", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    docStore.replace(createEmptyDoc());
-    ui.docOpen = false;
+    closeAllDocs();
   });
 
-  it("有改动时先问，取消则当前文档原样保留", async () => {
+  it("新建不会顶掉当前文档，而是多一个标签并切过去", async () => {
     const nodeId = makeDirtyDocument();
-    bridge.dialog.unsaved.mockResolvedValueOnce("cancel");
-
-    await expect(newDocument()).resolves.toBe(false);
-    expect(bridge.dialog.unsaved).toHaveBeenCalledTimes(1);
-    expect(docStore.doc.nodes[nodeId]).toBeDefined();
-    expect(ui.docOpen).toBe(true);
-  });
-
-  it("有改动时选不保存才替换成空稿", async () => {
-    const nodeId = makeDirtyDocument();
-    bridge.dialog.unsaved.mockResolvedValueOnce("discard");
+    const before = sessionState.activeId;
 
     await expect(newDocument()).resolves.toBe(true);
-    expect(docStore.doc.nodes[nodeId]).toBeUndefined();
-    expect(ui.docOpen).toBe(true);
-  });
-
-  it("有改动时选保存：保存失败（取消另存为）则放弃新建", async () => {
-    makeDirtyDocument();
-    bridge.dialog.unsaved.mockResolvedValueOnce("save");
-    bridge.file.saveAs.mockResolvedValueOnce({ status: "canceled" });
-
-    await expect(newDocument()).resolves.toBe(false);
-    expect(ui.docOpen).toBe(true);
-  });
-
-  it("没有改动时不打扰用户", async () => {
-    await expect(newDocument()).resolves.toBe(true);
+    expect(sessionState.activeId).not.toBe(before);
+    expect(docTabs()).toHaveLength(2);
     expect(bridge.dialog.unsaved).not.toHaveBeenCalled();
-    expect(ui.docOpen).toBe(true);
+    // 旧文档还在自己的标签里，节点没丢
+    const previous = docTabs().find((tab) => tab.id === before);
+    expect(previous?.store.doc.nodes[nodeId]).toBeDefined();
+  });
+
+  it("到上限时返回 false 且不新增标签", async () => {
+    for (let i = docTabs().length; i < MAX_DOC_TABS; i += 1) createDocTab(createEmptyDoc());
+    expect(docTabs()).toHaveLength(MAX_DOC_TABS);
+
+    await expect(newDocument()).resolves.toBe(false);
+    expect(docTabs()).toHaveLength(MAX_DOC_TABS);
   });
 });
 
@@ -110,23 +114,20 @@ describe("新建文档的未保存检查", () => {
 describe("未保存标记跟着保存点走", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    docStore.replace(createEmptyDoc());
-    ui.docOpen = false;
-    fileState.path = null;
-    fileState.dirty = false;
+    closeAllDocs();
     installFileSession();
   });
 
   it("编辑后变脏，保存成功后立刻变干净", async () => {
     makeDirtyDocument();
     expect(fileState.dirty).toBe(true);
-    expect(bridge.app.setDirty).toHaveBeenLastCalledWith(true, "未命名");
+    expect(bridge.app.setDirty).toHaveBeenLastCalledWith({ anyDirty: true, activeName: "未命名 1", activeDirty: true });
 
     fileState.path = "/tmp/测试.sqraft";
     fileState.mtimeMs = 0;
     await expect(saveDocument()).resolves.toBe(true);
     expect(fileState.dirty).toBe(false);
-    expect(bridge.app.setDirty).toHaveBeenLastCalledWith(false, "未命名");
+    expect(bridge.app.setDirty).toHaveBeenLastCalledWith({ anyDirty: false, activeName: "未命名 1", activeDirty: false });
   });
 
   it("保存后再改又变脏，撤销回保存点重新变干净", async () => {
@@ -143,10 +144,9 @@ describe("未保存标记跟着保存点走", () => {
     expect(fileState.dirty).toBe(false);
   });
 
-  it("新建文档后回到干净状态", async () => {
+  it("新建标签是干净状态", async () => {
     makeDirtyDocument();
     expect(fileState.dirty).toBe(true);
-    bridge.dialog.unsaved.mockResolvedValueOnce("discard");
     await expect(newDocument()).resolves.toBe(true);
     expect(fileState.dirty).toBe(false);
   });
@@ -181,11 +181,9 @@ describe("未保存标记跟着保存点走", () => {
 describe("保存互斥", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    docStore.replace(createEmptyDoc());
-    ui.docOpen = false;
-    fileState.path = "/tmp/并发.sqraft";
-    fileState.mtimeMs = 0;
+    closeAllDocs();
     installFileSession();
+    openDoc();
   });
 
   afterEach(() => {
@@ -194,7 +192,9 @@ describe("保存互斥", () => {
   });
 
   it("进行中再次触发：复用同一次保存，只落盘一次、不弹冲突框", async () => {
-    makeDirtyDocument();
+    addDirtyNodes();
+    fileState.path = "/tmp/并发.sqraft";
+    fileState.mtimeMs = 0;
     let release!: (result: { status: string; mtimeMs: number }) => void;
     bridge.file.save.mockImplementationOnce(
       () => new Promise<{ status: string; mtimeMs: number }>((resolve) => { release = resolve; }),
@@ -225,6 +225,109 @@ describe("保存互斥", () => {
 });
 
 /**
+ * 关闭语义（ADR-0041）：单标签问一次、保存落在被关的标签上；退出时多个脏标签只用一个聚合框。
+ */
+describe("关闭标签与退出", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    bridge.file.save.mockImplementation(async () => ({ status: "ok", mtimeMs: 1 }));
+    bridge.dialog.unsaved.mockReset();
+    bridge.dialog.unsaved.mockResolvedValue("cancel");
+    closeAllDocs();
+    installFileSession();
+  });
+
+  it("关闭非活动脏标签：对话框带它的名字，保存写的是它自己的文件", async () => {
+    const aNode = makeDirtyDocument();
+    const a = docTabs().at(-1)!;
+    a.file.path = "/tmp/a.sqraft";
+    a.file.name = "a.sqraft";
+    makeDirtyDocument(); // B 成为活动标签
+    const b = docTabs().at(-1)!;
+    b.file.path = "/tmp/b.sqraft";
+    b.file.name = "b.sqraft";
+
+    bridge.dialog.unsaved.mockResolvedValueOnce("save");
+    await expect(closeTabById(a.id)).resolves.toBe(true);
+
+    expect(bridge.dialog.unsaved).toHaveBeenCalledWith(["a.sqraft"]);
+    const write = bridge.file.save.mock.calls.at(-1) as unknown as [{ path: string }];
+    expect(write[0].path).toBe("/tmp/a.sqraft");
+    expect(docTabs().map((tab) => tab.id)).toEqual([b.id]);
+    expect(sessionState.activeId).toBe(b.id);
+    expect(b.store.doc.nodes[aNode]).toBeUndefined();
+  });
+
+  it("取消关闭：标签与内容都还在", async () => {
+    const nodeId = makeDirtyDocument();
+    const tab = docTabs().at(-1)!;
+    bridge.dialog.unsaved.mockResolvedValueOnce("cancel");
+
+    await expect(closeTabById(tab.id)).resolves.toBe(false);
+    expect(docTabs()).toHaveLength(1);
+    expect(docStore.doc.nodes[nodeId]).toBeDefined();
+  });
+
+  it("退出：多个脏标签只弹一个聚合框，保存全部按顺序落盘", async () => {
+    const first = makeDirtyDocument();
+    const a = docTabs().at(-1)!;
+    a.file.path = "/tmp/a.sqraft";
+    a.file.name = "a.sqraft";
+    const second = makeDirtyDocument();
+    const b = docTabs().at(-1)!;
+    b.file.path = "/tmp/b.sqraft";
+    b.file.name = "b.sqraft";
+
+    bridge.dialog.unsaved.mockResolvedValueOnce("save");
+    await closeHandler?.({ quit: true });
+
+    expect(bridge.dialog.unsaved).toHaveBeenCalledTimes(1);
+    expect(bridge.dialog.unsaved).toHaveBeenCalledWith(["a.sqraft", "b.sqraft"]);
+    const paths = bridge.file.save.mock.calls.map((call) => (call as unknown as [{ path: string }])[0].path);
+    expect(paths).toEqual(["/tmp/a.sqraft", "/tmp/b.sqraft"]);
+    expect(bridge.app.finishClose).toHaveBeenCalledWith(true);
+    expect(bridge.app.cancelClose).not.toHaveBeenCalled();
+    void first;
+    void second;
+  });
+
+  it("退出时选全部不保存：不写盘，直接放行", async () => {
+    makeDirtyDocument();
+    makeDirtyDocument();
+    bridge.dialog.unsaved.mockResolvedValueOnce("discard");
+
+    await closeHandler?.({ quit: true });
+
+    expect(bridge.file.save).not.toHaveBeenCalled();
+    expect(bridge.app.finishClose).toHaveBeenCalledWith(true);
+  });
+
+  it("退出时取消：不放行、解除挂起", async () => {
+    makeDirtyDocument();
+    bridge.dialog.unsaved.mockResolvedValueOnce("cancel");
+
+    await closeHandler?.({ quit: true });
+
+    expect(bridge.app.finishClose).not.toHaveBeenCalled();
+    expect(bridge.app.cancelClose).toHaveBeenCalledTimes(1);
+    expect(docTabs()).toHaveLength(1);
+  });
+
+  it("没有脏标签时不打扰用户", async () => {
+    makeDirtyDocument();
+    const tab = docTabs().at(-1)!;
+    tab.file.path = "/tmp/clean.sqraft";
+    await expect(saveDocument()).resolves.toBe(true);
+    bridge.dialog.unsaved.mockClear();
+
+    await closeHandler?.({ quit: true });
+
+    expect(bridge.dialog.unsaved).not.toHaveBeenCalled();
+    expect(bridge.app.finishClose).toHaveBeenCalledWith(true);
+  });
+});
+
+/**
  * 曾经的事故：文档里混进不可克隆的值（Vue 代理）→ `structuredClone` 抛错 →
  * 保存静默失败；关闭流程里 `saveDocument()` 抛错 → 既不 finishClose 也不 cancelClose →
  * 主进程的挂起永久不解除，之后所有关闭请求都被丢弃。
@@ -232,10 +335,7 @@ describe("保存互斥", () => {
 describe("保存失败必须可见", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    docStore.replace(createEmptyDoc());
-    ui.docOpen = false;
-    fileState.path = "/tmp/测试.sqraft";
-    fileState.mtimeMs = 0;
+    closeAllDocs();
     installFileSession();
   });
 
@@ -247,17 +347,32 @@ describe("保存失败必须可见", () => {
 
   it("序列化抛错时报错并返回 false，不会悄悄吞掉", async () => {
     poisonDocument();
+    fileState.path = "/tmp/测试.sqraft";
+    fileState.mtimeMs = 0;
     await expect(saveDocument()).resolves.toBe(false);
     expect(bridge.dialog.error).toHaveBeenCalledWith(expect.stringContaining("保存失败"));
   });
 
   it("关闭时保存失败也要解除主进程的挂起，否则窗口永远关不掉", async () => {
     poisonDocument();
+    fileState.path = "/tmp/测试.sqraft";
+    fileState.mtimeMs = 0;
     bridge.dialog.unsaved.mockResolvedValueOnce("save");
 
     await closeHandler?.({ quit: false });
 
     expect(bridge.app.finishClose).not.toHaveBeenCalled();
     expect(bridge.app.cancelClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("未命名文档另存为的默认文件名带创建时编号", async () => {
+    await newDocument();
+    bridge.file.saveAs.mockResolvedValueOnce({ status: "canceled" });
+
+    await saveDocumentAs("action");
+
+    expect(bridge.file.saveAs).toHaveBeenCalledWith(
+      expect.objectContaining({ suggestedName: "untitled-1.sqraft" }),
+    );
   });
 });

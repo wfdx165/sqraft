@@ -2,11 +2,10 @@
 import { CURRENT_FORMAT_VERSION } from "../shared";
 import type { Handler } from "../types";
 
-/** `document.new` */
-export const handleDocumentNew: Handler = async (ctx, args) => {
-    if (!ctx.host) throw new Error("当前宿主不支持新建文档");
-    const created = await ctx.host.newDocument();
-    return JSON.stringify(created ? { ok: true } : { ok: false, canceled: true });
+/** `app_state` */
+export const handleAppState: Handler = async (ctx) => {
+  if (!ctx.host?.appState) throw new Error("当前宿主不支持 app_state");
+  return JSON.stringify(await ctx.host.appState());
 };
 
 /** `app_info` */

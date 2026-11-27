@@ -13,15 +13,40 @@ export interface ScreenshotRegion {
   height: number;
 }
 
+/** 工作台状态（app_state）：只读摘要，不含文档内容。 */
+export interface AppStateTab {
+  tabId: string;
+  name: string;
+  path: string | null;
+  dirty: boolean;
+  externalChange?: boolean;
+  home?: boolean;
+  active?: boolean;
+}
+
+export interface AppState {
+  active: {
+    tabId: string;
+    name: string;
+    path: string | null;
+    dirty: boolean;
+    externalChange: boolean;
+    page: { id: NodeId; name: string } | null;
+    selection: { id: NodeId; name: string; type: string }[];
+  };
+  tabs: AppStateTab[];
+  limit: number;
+}
+
 /** 文档级操作由宿主提供：工具层不直接碰文件系统与窗口。 */
 export interface DocumentHost {
-  /** 返回是否真的新建了；用户在"保存 / 不保存 / 取消"里选取消时返回 false。 */
-  newDocument(): Promise<boolean>;
   /**
    * 应用元信息（只读）：版本来自主进程 `app.getVersion()`，平台由宿主注入。
    * 宿主不提供时 `app_info` 明确报错，而不是编一个版本号。
    */
   appInfo?(): { name: string; version: string; platform: string } | Promise<{ name: string; version: string; platform: string }>;
+  /** 工作台状态：活动标签 + 全部标签 + 上限（agent 只能作用于活动标签） */
+  appState?(): AppState | Promise<AppState>;
   /**
    * 把 base64 位图落进资源仓库，返回 assetId 与原图尺寸。
    * 只收数据、不收路径——工具层不允许读任意文件。

@@ -25,7 +25,8 @@ export interface GradientPoint {
 }
 
 export interface GradientGestureDeps {
-  store: DocStore;
+  /** 只需要读文档：门面与真实例都满足（多标签下转发到活动标签）。 */
+  store: Pick<DocStore, "doc">;
   /** 把渐变写回节点（整份 style 替换）。引用态会因此断链成本地渐变。 */
   apply: (nodeId: NodeId, kind: "fill" | "stroke", value: GradientValue, label: string) => void;
   markDirty: () => void;

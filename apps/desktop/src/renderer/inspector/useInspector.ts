@@ -1,4 +1,5 @@
 import { computed, ref, watch } from "vue";
+import { evaluateExpression } from "../expression";
 import {
   ZERO_CORNER_RADIUS,
   ZERO_PADDING,
@@ -60,6 +61,7 @@ import type { MessageKey } from "../../shared/i18n";
  * 放到独立文件是为了控制单文件体积（见 PR review P1-7）。
  */
 export function useInspector() {
+installInputMemory();
 const MIXED = Symbol("mixed");
 type Mixed = typeof MIXED;
 
@@ -254,8 +256,7 @@ const selectionBounds = computed<Rect | null>(() => {
 });
 
 function setBoundsNumber(key: "x" | "y" | "w" | "h", event: Event): void {
-  const input = event.target as HTMLInputElement;
-  const value = Number(input.value);
+  const value = num(event);
   const box = selectionBounds.value;
   if (!Number.isFinite(value) || !box) return;
   const ids = targets().map((n) => n.id);
@@ -332,8 +333,45 @@ function numValue(v: number | Mixed): string {
   return v === MIXED ? "" : fmt(v);
 }
 
+/**
+ * 输入框获得焦点时记住原值：算式求值失败要把显示还原成原值，而不是留着一串看不懂的文本。
+ * 监听装在 document 上（冒泡前），只认 number 输入，全窗口装一次。
+ *
+ * 标记放 `globalThis` 而不是模块级 `let`：HMR 会重新执行渲染层模块，模块级变量会复位
+ * 导致重复装监听；更糟的是模块求值未完成时 setup 就调到 `useInspector()` 会直接踩 TDZ
+ * （`Cannot access 'inputMemoryInstalled' before initialization`）。
+ */
+function rememberNumberInput(event: Event): void {
+  const el = event.target as HTMLInputElement | null;
+  if (el?.tagName === "INPUT" && el.type === "number") el.dataset.prev = el.value;
+}
+
+function installInputMemory(): void {
+  if (typeof document === "undefined") return;
+  const holder = globalThis as typeof globalThis & { __sqraftInputMemory?: boolean };
+  if (holder.__sqraftInputMemory) return;
+  holder.__sqraftInputMemory = true;
+  document.addEventListener("focusin", rememberNumberInput, true);
+}
+
+/**
+ * 读数值输入：先按算式求值（`1200/2`、`100+16`）；
+ * 失败时还原显示值、抖一下并返回 NaN——调用方用 `Number.isFinite` 拦掉。
+ */
 function num(e: Event): number {
-  return Number((e.target as HTMLInputElement).value);
+  const input = e.target as HTMLInputElement;
+  const parsed = evaluateExpression(input.value);
+  if (parsed !== null) return parsed;
+  if (input.dataset.prev !== undefined) input.value = input.dataset.prev;
+  input.classList.remove("shake");
+  void input.offsetWidth;
+  input.classList.add("shake");
+  return Number.NaN;
+}
+
+function numOrNull(e: Event): number | null {
+  const value = num(e);
+  return Number.isFinite(value) ? value : null;
 }
 
 function boolOf(e: Event): boolean {
@@ -397,11 +435,11 @@ function setName(e: Event): void {
   dispatch({ type: "node.update", params: { nodeId: n.id, patch: { name } } }, "rename-node");
 }
 
-function setNum(key: "x" | "y" | "width" | "height", e: Event): void {
+function applyNodeNumber(key: "x" | "y" | "width" | "height", value: number): void {
   const n = node.value;
   if (!n) return;
   const parent = n.parentId ? docStore.doc.nodes[n.parentId] : null;
-  const patch: Partial<DocNode> = { [key]: num(e) };
+  const patch: Partial<DocNode> = { [key]: value };
   // 在布局容器里改尺寸 = 先转 fixed（Q32）
   if (parent?.layout && !n.layoutAbsolute) {
     if (key === "width") patch.layoutSizingW = "fixed";
@@ -410,12 +448,63 @@ function setNum(key: "x" | "y" | "width" | "height", e: Event): void {
   dispatch({ type: "node.update", params: { nodeId: n.id, patch } }, "inspect");
 }
 
+function setNum(key: "x" | "y" | "width" | "height", e: Event): void {
+  const value = numOrNull(e);
+  if (value === null) return;
+  applyNodeNumber(key, value);
+}
+
+/**
+ * 在字段标签上左右拖动调值：一次拖动 = 一条撤销（用 transact 把过程中的 apply 合并）。
+ * `⇧` 十倍步长；求值失败不涉及这里（拖动给的是数值）。
+ */
+function beginScrub(event: PointerEvent, read: () => number | null, apply: (value: number) => void): void {
+  if (event.button !== 0) return;
+  const start = read();
+  if (start === null) return;
+  event.preventDefault();
+  let finish!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    finish = resolve;
+  });
+  void docStore.transact("scrub", () => closed);
+  const startX = event.clientX;
+  const move = (ev: PointerEvent) => {
+    const step = ev.shiftKey ? 10 : 1;
+    apply(Math.round((start + (ev.clientX - startX) * step) * 10) / 10);
+  };
+  const up = () => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointercancel", up);
+    window.removeEventListener("blur", up);
+    finish();
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", up, { once: true });
+  window.addEventListener("pointercancel", up);
+  window.addEventListener("blur", up);
+}
+
+function scrubNodeNumber(e: PointerEvent, key: "x" | "y" | "width" | "height"): void {
+  const n = node.value;
+  if (!n) return;
+  beginScrub(
+    e,
+    () => n[key],
+    (value) => applyNodeNumber(key, value),
+  );
+}
+
 function setRotation(e: Event): void {
-  applyNodes(() => ({ rotation: num(e) }));
+  const value = numOrNull(e);
+  if (value === null) return;
+  applyNodes(() => ({ rotation: value }));
 }
 
 function setOpacity(e: Event): void {
-  const v = Math.max(0, Math.min(1, num(e) / 100));
+  const value = numOrNull(e);
+  if (value === null) return;
+  const v = Math.max(0, Math.min(1, value / 100));
   applyNodes(() => ({ opacity: v }));
 }
 
@@ -607,7 +696,9 @@ function setCustomPaint(kind: "fill" | "stroke", e: Event): void {
 }
 
 function setStrokeWidth(e: Event): void {
-  applyStyle((style) => ({ ...style, strokeWidth: Math.max(0, num(e)), strokeWidthToken: undefined }));
+  const width = numOrNull(e);
+  if (width === null) return;
+  applyStyle((style) => ({ ...style, strokeWidth: Math.max(0, width), strokeWidthToken: undefined }));
 }
 
 /* ---------- 效果 ---------- */
@@ -710,19 +801,22 @@ function radiusUnified(): number | Mixed {
 }
 
 function setRadiusAll(e: Event): void {
-  const value = Math.max(0, num(e));
+  const value = numOrNull(e);
+  if (value === null) return;
+  const radius = Math.max(0, value);
   applyStyle((style) => ({
     ...style,
-    cornerRadius: { topLeft: value, topRight: value, bottomRight: value, bottomLeft: value },
+    cornerRadius: { topLeft: radius, topRight: radius, bottomRight: radius, bottomLeft: radius },
     // 手改统一值 = 解除四角的 Token 绑定
     cornerRadiusTokens: undefined,
   }));
 }
 
 function setRadiusCorner(key: keyof CornerRadius, e: Event): void {
-  const value = Math.max(0, num(e));
+  const value = numOrNull(e);
+  if (value === null) return;
   applyStyle((style) => {
-    const radius = { ...radiusOf({ style } as DocNode), [key]: value };
+    const radius = { ...radiusOf({ style } as DocNode), [key]: Math.max(0, value) };
     const tokens = style.cornerRadiusTokens ? { ...style.cornerRadiusTokens } : undefined;
     if (tokens) delete tokens[key];
     return {
@@ -780,14 +874,18 @@ function paddingUnified(): number | Mixed {
 }
 
 function setPaddingAll(e: Event): void {
-  const v = Math.max(0, num(e));
+  const raw = numOrNull(e);
+  if (raw === null) return;
+  const v = Math.max(0, raw);
   setLayout({ padding: { top: v, right: v, bottom: v, left: v }, paddingTokens: undefined });
 }
 
 function setPaddingSide(side: keyof Padding, e: Event): void {
   const n = node.value;
   if (!n) return;
-  const padding = { ...paddingOf(n), [side]: Math.max(0, num(e)) };
+  const raw = numOrNull(e);
+  if (raw === null) return;
+  const padding = { ...paddingOf(n), [side]: Math.max(0, raw) };
   const tokens = n.layout?.paddingTokens ? { ...n.layout.paddingTokens } : undefined;
   if (tokens) delete tokens[side];
   setLayout({ padding, paddingTokens: tokens && Object.keys(tokens).length > 0 ? tokens : undefined });
@@ -814,7 +912,9 @@ function setAlignContent(e: Event): void {
 }
 
 function setSides(e: Event): void {
-  const sides = Math.max(3, Math.min(12, Math.round(num(e))));
+  const raw = numOrNull(e);
+  if (raw === null) return;
+  const sides = Math.max(3, Math.min(12, Math.round(raw)));
   applyNodes(() => ({ sides }));
 }
 
@@ -822,8 +922,13 @@ function setLayoutNumber(key: "layoutMinW" | "layoutMinH" | "layoutMaxW" | "layo
   const n = node.value;
   if (!n) return;
   const raw = (e.target as HTMLInputElement).value;
-  const patch: Partial<DocNode> = { [key]: raw === "" ? undefined : Number(raw) };
-  dispatch({ type: "node.update", params: { nodeId: n.id, patch } }, "layout");
+  let value: number | undefined;
+  if (raw !== "") {
+    const parsed = numOrNull(e);
+    if (parsed === null) return;
+    value = parsed;
+  }
+  dispatch({ type: "node.update", params: { nodeId: n.id, patch: { [key]: value } } }, "layout");
 }
 
 function toggleAbsolute(e: Event): void {
@@ -1454,6 +1559,7 @@ const prototype = usePrototype({ node, multi, lockedChain });
     typeLabel,
     setName,
     setNum,
+    scrubNodeNumber,
     setRotation,
     setOpacity,
     toggleVisible,

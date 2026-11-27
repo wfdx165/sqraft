@@ -7,6 +7,7 @@
  * - 缺资源时返回 null，由渲染层画占位——绝不把 null 当"没有图片"静默跳过。
  */
 import type { ResolvedImage } from "@sqraft/render";
+import type { DocState } from "@sqraft/core";
 import { hooks } from "./store";
 import { t } from "./i18n";
 import { imageDimensions, type ImageDimensions } from "./image-size";
@@ -388,6 +389,22 @@ export function hasAsset(assetId: string): boolean {
 
 export function allAssets(): AssetRecord[] {
   return [...records.values()];
+}
+
+/**
+ * 保存时该写进文件的位图：只取**这份文档**引用到的资源。
+ *
+ * 资源池在多标签下是全局的（按内容哈希去重，切标签不重置），若照旧全量写入，
+ * 每个文件都会带上别的标签的图。这里只决定写什么，不删内存——撤销栈里的节点
+ * 还引用着它们（ADR-0022）。
+ */
+export function assetsForSave(doc: DocState): AssetRecord[] {
+  const used = new Set<string>();
+  for (const node of Object.values(doc.nodes)) {
+    if (node.image?.assetId) used.add(node.image.assetId);
+  }
+  if (used.size === 0) return [];
+  return allAssets().filter((asset) => used.has(asset.id));
 }
 
 /** 打开文件时把 zip 里的 assets/ 注册进来（不做解码，用到再说）。 */

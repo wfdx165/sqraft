@@ -111,6 +111,57 @@ const rows = computed<Row[]>(() => {
 
 const layerCount = (page: DocNode) => page.children.length;
 
+/**
+ * 搜索时的图层行：作用于当前展开页，忽略折叠状态，命中项连同祖先路径一起显示。
+ * 空查询时原样返回普通图层行（手风琴照旧）。
+ */
+const searchRows = computed<Row[]>(() => {
+  const q = query.value;
+  if (!q) return rows.value;
+  void ui.version;
+  const pageId = ui.expandedPageId;
+  const page = pageId ? docStore.doc.nodes[pageId] : null;
+  if (!page || page.type !== "page") return [];
+
+  const visible = new Set<NodeId>();
+  const mark = (id: NodeId): boolean => {
+    const node = docStore.doc.nodes[id];
+    if (!node) return false;
+    let hit = node.name.toLowerCase().includes(q) || (node.text ?? "").toLowerCase().includes(q);
+    for (const child of node.children) {
+      if (mark(child)) hit = true;
+    }
+    if (hit) visible.add(id);
+    return hit;
+  };
+  for (const child of page.children) mark(child);
+
+  const out: Row[] = [];
+  const build = (id: NodeId, depth: number): void => {
+    if (!visible.has(id)) return;
+    const node = docStore.doc.nodes[id];
+    if (!node) return;
+    out.push({ node, depth });
+    for (const child of [...node.children].reverse()) build(child, depth + 1);
+  };
+  for (const child of [...page.children].reverse()) build(child, 0);
+  return out;
+});
+
+/** 搜索框里回车：选中第一条命中的图层并把它带进视口。 */
+function selectFirstMatch(): void {
+  const row = searchRows.value[0];
+  if (!row) return;
+  select([row.node.id]);
+  hooks.focusNode(row.node.id);
+}
+
+/** 搜索框里 Esc：清空并交还焦点。 */
+function clearSearch(): void {
+  filter.value = "";
+  searchEl.value?.blur();
+}
+
 const iconOf: Record<string, string> = {
   frame: "frame",
   rect: "rect",
@@ -318,6 +369,8 @@ function onLayerDelete(id: NodeId) {
         :placeholder="t('pages.searchPlaceholder')"
         spellcheck="false"
         :title="t('pages.searchTitle')"
+        @keydown.enter="selectFirstMatch"
+        @keydown.esc="clearSearch"
       />
       <span class="count" :title="t('pages.countTitle')">{{ countLabel }}</span>
     </div>
@@ -365,11 +418,13 @@ function onLayerDelete(id: NodeId) {
           </button>
         </div>
 
-        <!-- 手风琴：仅活动页面展开图层 -->
+        <!-- 手风琴：仅活动页面展开图层；搜索时忽略折叠，命中项连同祖先一起列出 -->
         <div v-if="ui.expandedPageId === page.id" class="layers">
-          <div v-if="rows.length === 0" class="empty-layer">{{ t("pages.noLayers") }}</div>
+          <div v-if="searchRows.length === 0" class="empty-layer">
+            {{ query ? t("pages.noLayerMatch") : t("pages.noLayers") }}
+          </div>
           <div
-            v-for="row in rows"
+            v-for="row in searchRows"
             :key="row.node.id"
             class="row"
             :class="{

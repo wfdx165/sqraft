@@ -905,8 +905,9 @@ export const tools: ToolDefinition[] = [
     },
   },
   {
-    name: "document.new",
-    description: "新建一份未命名空稿并切换过去。",
+    name: "app_state",
+    description:
+      "当前工作台状态：活动标签（名称 / 绝对路径 / 脏标记 / 外部改动 / 活动页 / 选区摘要）、全部打开的标签与上限。agent 只能作用于活动标签，不能切换或关闭标签。活动标签是 Home 时，文档类工具会报错。",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
 ];

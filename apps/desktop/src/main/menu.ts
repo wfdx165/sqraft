@@ -98,7 +98,8 @@ function actionItem(action: CommandId, mac: boolean): MenuItemConstructorOptions
       target?.webContents.send(CHANNELS.menuCommand, action);
     },
   };
-  if (mac && accelerator) {
+  // 反斜杠不是有效的 Electron accelerator token：只在渲染层处理（菜单不注册、不显示）
+  if (mac && accelerator && !accelerator.includes("\\")) {
     item.accelerator = accelerator;
     item.registerAccelerator = false;
   }
@@ -284,6 +285,7 @@ export function buildTemplate(
       },
       { type: "separator" },
       actionItem("file.closeDoc", mac),
+      actionItem("file.reopenTab", mac),
       { type: "separator" },
       closeWindowItem(t("menu.closeWindow")),
       ...(mac ? [] : [{ role: "quit" as const, label: t("menu.quit") }]),
@@ -316,6 +318,8 @@ export function buildTemplate(
       actionItem("view.toggleGrid", mac),
       actionItem("view.toggleSnap", mac),
       actionItem("view.toggleGuides", mac),
+      { type: "separator" },
+      actionItem("view.panels", mac),
       { type: "separator" },
       actionItem("view.present", mac),
       { type: "separator" },

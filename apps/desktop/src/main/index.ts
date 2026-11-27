@@ -150,7 +150,9 @@ function createWindow(): void {
     // macOS 让红绿灯浮在左栏上；Windows / Linux 用系统标题栏并常显菜单栏——
     // 隐藏后只有 Alt 能唤起，"打开日志目录""清空图片缓存"这类排障入口等于找不到
     titleBarStyle: isMac ? "hiddenInset" : "default",
-    trafficLightPosition: isMac ? { x: 18, y: 18 } : undefined,
+    // 红绿灯是 12px 圆点，y 是这组点的上边缘：顶栏 34px（TopBar.vue），
+    // (34 - 12) / 2 = 11 才与 24px 标签的中线对齐。改顶栏高度时这里要跟着改。
+    trafficLightPosition: isMac ? { x: 18, y: 11 } : undefined,
     autoHideMenuBar: false,
     webPreferences: {
       preload: join(__dirname, "../preload/index.js"),

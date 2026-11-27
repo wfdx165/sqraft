@@ -176,7 +176,8 @@ onBeforeUnmount(() => {
 <style scoped>
 .conn-wrap {
   position: absolute;
-  top: 64px;
+  /* 顶部模块占掉 34px：保持胶囊在窗口顶部下 64px 的位置 */
+  top: 30px;
   left: 50%;
   translate: -50% 0;
   z-index: 9;

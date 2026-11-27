@@ -680,7 +680,6 @@ describe("图片工具", () => {
 
   function host(calls: string[]) {
     return {
-      newDocument: async () => true,
       addImage: async (data: string) => {
         calls.push(data);
         return { assetId: "asset-1", width: 640, height: 480 };
@@ -909,7 +908,6 @@ describe("AI 工具：页面", () => {
     const store = new DocStore(createEmptyDoc());
     const activated: string[] = [];
     const run = makeExecutor(store, async () => "", () => null, undefined, {
-      newDocument: async () => true,
       activatePage: (pageId) => activated.push(pageId),
     });
     const res = await call(run, "create_page", { name: "详情" });

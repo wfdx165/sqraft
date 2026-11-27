@@ -8,6 +8,7 @@ import {
   type ExportMatrixResult,
   type ExportSettings,
   type FetchImageResult,
+  type FileStat,
   type LanguageState,
   type McpCallRequest,
   type MenuState,
@@ -42,6 +43,7 @@ const api: SqraftApi = {
   file: {
     open: () => ipcRenderer.invoke(CHANNELS.fileOpen) as Promise<OpenFileResult>,
     openPath: (path: string) => ipcRenderer.invoke(CHANNELS.fileOpenPath, path) as Promise<OpenFileResult>,
+    stat: (paths: string[]) => ipcRenderer.invoke(CHANNELS.fileStat, paths) as Promise<FileStat[]>,
     save: (request: SaveFileRequest) => ipcRenderer.invoke(CHANNELS.fileSave, request) as Promise<SaveFileResult>,
     saveAs: (request: SaveAsRequest) => ipcRenderer.invoke(CHANNELS.fileSaveAs, request) as Promise<SaveAsResult>,
     exportFile: (request: { suggestedName: string; bytes: Uint8Array; format: "png" | "svg" }) =>
@@ -56,7 +58,7 @@ const api: SqraftApi = {
       ipcRenderer.invoke(CHANNELS.prefsSetGradientPresets, presets) as Promise<GradientValue[]>,
   },
   dialog: {
-    unsaved: () => ipcRenderer.invoke(CHANNELS.dialogUnsaved) as Promise<UnsavedChoice>,
+    unsaved: (names?: string[]) => ipcRenderer.invoke(CHANNELS.dialogUnsaved, names) as Promise<UnsavedChoice>,
     overwrite: () => ipcRenderer.invoke(CHANNELS.dialogOverwrite) as Promise<OverwriteChoice>,
     error: (message: string) => ipcRenderer.invoke(CHANNELS.dialogError, message) as Promise<void>,
   },
@@ -139,7 +141,8 @@ const api: SqraftApi = {
       ipcRenderer.on(CHANNELS.fileOpenRequest, listener);
       return () => ipcRenderer.removeListener(CHANNELS.fileOpenRequest, listener);
     },
-    setDirty: (dirty: boolean, name: string) => ipcRenderer.send(CHANNELS.appSetDirty, { dirty, name }),
+    setDirty: (state: { anyDirty: boolean; activeName: string; activeDirty: boolean }) =>
+      ipcRenderer.send(CHANNELS.appSetDirty, state),
     log: (level: AppLogLevel, event: string, fields?: Record<string, unknown>) =>
       ipcRenderer.send(CHANNELS.appLog, { level, event, fields }),
     onCloseRequest: (handler: (request: CloseRequest) => void) => {
@@ -149,6 +152,8 @@ const api: SqraftApi = {
     },
     finishClose: (quit: boolean) => ipcRenderer.send(CHANNELS.appFinishClose, { quit }),
     cancelClose: () => ipcRenderer.send(CHANNELS.appCancelClose),
+    closeWindow: () => ipcRenderer.send(CHANNELS.appCloseWindow),
+    revealPath: (path: string) => ipcRenderer.invoke(CHANNELS.appRevealPath, path) as Promise<void>,
   },
 };
 

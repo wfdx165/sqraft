@@ -71,6 +71,7 @@ export const COMMAND_IDS = [
   "view.toggleGrid",
   "view.toggleSnap",
   "view.toggleGuides",
+  "view.panels",
   "view.present",
   "focus.pageSearch",
   "file.new",
@@ -84,6 +85,7 @@ export const COMMAND_IDS = [
   "file.exportSvg",
   "file.exportMatrix",
   "file.closeDoc",
+  "file.reopenTab",
   "file.exampleLogin",
   "file.exampleCards",
   "file.exampleUmbra",
@@ -118,6 +120,7 @@ export const COMMANDS: readonly AppCommand[] = [
   { id: "file.exportSvg", labelKey: "shortcut.exportSvg", menuLabelKey: "menu.exportSvg", group: "file", owner: "renderer", requires: "doc", menu: true },
   { id: "file.exportMatrix", labelKey: "shortcut.exportMatrix", menuLabelKey: "menu.exportMatrix", group: "file", owner: "renderer", requires: "doc", menu: true },
   { id: "file.closeDoc", labelKey: "shortcut.closeDoc", menuLabelKey: "menu.closeDoc", group: "file", owner: "renderer", default: "⌘W", requires: "doc", menu: true },
+  { id: "file.reopenTab", labelKey: "shortcut.reopenTab", menuLabelKey: "menu.reopenTab", group: "file", owner: "renderer", default: "⌘⇧T", menu: true },
   { id: "file.exampleLogin", labelKey: "example.login", group: "file", owner: "renderer" },
   { id: "file.exampleCards", labelKey: "example.cards", group: "file", owner: "renderer" },
   { id: "file.exampleUmbra", labelKey: "example.umbra", group: "file", owner: "renderer" },
@@ -156,6 +159,7 @@ export const COMMANDS: readonly AppCommand[] = [
   { id: "view.toggleGrid", labelKey: "menu.showGrid", group: "view", owner: "renderer", default: "⌘'", requires: "doc", menu: true },
   { id: "view.toggleSnap", labelKey: "menu.enableSnap", group: "view", owner: "renderer", default: "⌘⌥'", requires: "doc", menu: true },
   { id: "view.toggleGuides", labelKey: "menu.showGuides", group: "view", owner: "renderer", default: "⌘;", requires: "doc", menu: true },
+  { id: "view.panels", labelKey: "shortcut.togglePanels", menuLabelKey: "menu.togglePanels", group: "view", owner: "renderer", default: "⌘\\", requires: "doc", menu: true },
   { id: "view.present", labelKey: "menu.present", menuLabelKey: "menu.present", group: "view", owner: "renderer", default: "⌥⌘Enter", requires: "doc", menu: true },
 
   // 工具

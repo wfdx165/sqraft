@@ -7,6 +7,7 @@ import {
   type ExportMatrixRequest,
   type ExportMatrixResult,
   type ExportSettings,
+  type FileStat,
   type OpenFileResult,
   type OverwriteChoice,
   type SaveAsRequest,
@@ -18,6 +19,7 @@ import {
 import { mtimeChanged, mtimeOf, writeFileAtomic } from "./files";
 import { stageDocument } from "./doc-stream";
 import { basename, dirname, join } from "node:path";
+import { stat } from "node:fs/promises";
 import { logApp, logRenderer } from "./mcp/log";
 import {
   exportPreferences,
@@ -84,6 +86,21 @@ export function registerFileChannels(): void {
     }
   });
 
+  // 外部改动检测：只 stat，不读内容；单个失败按"不存在"回报，不整体失败
+  ipcMain.handle(CHANNELS.fileStat, async (_event, rawPaths: unknown): Promise<FileStat[]> => {
+    const paths = Array.isArray(rawPaths) ? rawPaths.filter((path): path is string => typeof path === "string") : [];
+    return Promise.all(
+      paths.map(async (path) => {
+        try {
+          const info = await stat(path);
+          return { path, exists: true, mtimeMs: info.mtimeMs };
+        } catch {
+          return { path, exists: false, mtimeMs: 0 };
+        }
+      }),
+    );
+  });
+
   ipcMain.handle(CHANNELS.fileOpenPath, async (_event, path: string): Promise<OpenFileResult> => {
     const started = Date.now();
     try {
@@ -133,6 +150,18 @@ export function registerFileChannels(): void {
   ipcMain.on(CHANNELS.appRendererReady, () => {
     logApp("info", "renderer ready");
     flushPendingOpen();
+  });
+
+  // Home 上的 ⌘W：关窗口仍由 close-guard 拦（有未保存改动时先问渲染层）
+  ipcMain.on(CHANNELS.appCloseWindow, () => {
+    const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+    logApp("info", "close window requested");
+    win?.close();
+  });
+
+  ipcMain.handle(CHANNELS.appRevealPath, async (_event, path: unknown) => {
+    if (typeof path !== "string" || !path) return;
+    shell.showItemInFolder(path);
   });
 
   ipcMain.handle(CHANNELS.recentList, async () =>
@@ -279,22 +308,32 @@ export function registerFileChannels(): void {
 
   // 同一时刻只允许一个"未保存"框：渲染层若有多个监听（dev 热更新残留）同时请求，
   // 复用同一个结果，避免多个 sheet 叠在一起、用户被迫连点几次。
-  ipcMain.handle(CHANNELS.dialogUnsaved, (event): Promise<UnsavedChoice> => {
+  ipcMain.handle(CHANNELS.dialogUnsaved, (event, rawNames: unknown): Promise<UnsavedChoice> => {
+    const names = Array.isArray(rawNames)
+      ? rawNames.filter((name): name is string => typeof name === "string" && name.trim().length > 0)
+      : [];
+    const many = names.length > 1;
     if (unsavedDialog) {
       if (!app.isPackaged) console.info("[close] 已有保存对话框，复用同一个结果");
-      logApp("info", "dialog/unsaved reused");
+      logApp("info", "dialog/unsaved reused", { names: names.length });
       return unsavedDialog;
     }
     if (!app.isPackaged) console.info("[close] 打开保存对话框");
-    logApp("info", "dialog/unsaved open");
+    logApp("info", "dialog/unsaved open", { names: names.length });
     const window = windowOf(event.sender);
     const options: Electron.MessageBoxOptions = {
       type: "warning",
-      buttons: [t("common.save"), t("common.dontSave"), t("common.cancel")],
+      buttons: many
+        ? [t("dialog.saveAll"), t("dialog.dontSaveAll"), t("common.cancel")]
+        : [t("common.save"), t("common.dontSave"), t("common.cancel")],
       defaultId: 0,
       cancelId: 2,
-      message: t("dialog.unsavedMessage"),
-      detail: t("dialog.unsavedDetail"),
+      message: many
+        ? t("dialog.unsavedMany", { count: names.length })
+        : names.length === 1
+          ? t("dialog.unsavedOne", { name: names[0]! })
+          : t("dialog.unsavedMessage"),
+      detail: many ? `${t("dialog.unsavedManyDetail")}\n\n${names.join("\n")}` : t("dialog.unsavedDetail"),
     };
     unsavedDialog = (window ? dialog.showMessageBox(window, options) : dialog.showMessageBox(options))
       .then((result) => {

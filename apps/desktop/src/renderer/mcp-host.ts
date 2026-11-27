@@ -4,7 +4,7 @@
  */
 import { reactive } from "vue";
 import { MUTATING_TOOLS, makeExecutor, toMCPManifest } from "@sqraft/ai-tools";
-import type { NodeId } from "@sqraft/core";
+import type { DocStore, NodeId } from "@sqraft/core";
 import type { McpClientInfo, McpStatus } from "../shared/ipc";
 import {
   beginAgentActivity,
@@ -18,6 +18,10 @@ import {
   setAgentTargets,
 } from "./canvas/agent-activity";
 import { docStore, hooks, ui } from "./store";
+import { MAX_DOC_TABS, activeSession, docTabs, sessionState } from "./sessions";
+import { tabLabel } from "./tab-label";
+import { noActiveDocument } from "../shared/agent-text";
+import type { AppState } from "@sqraft/ai-tools";
 import {
   buildAgentChanges,
   captureAgentPreNames,
@@ -25,7 +29,6 @@ import {
   parseAgentDiagnostics,
   setAgentReport,
 } from "./agent-report";
-import { newDocument } from "./file-session";
 import { appInfo } from "./app-meta";
 import { measureText, textSizeOf } from "./text-metrics";
 import { putAsset } from "./assets";
@@ -241,13 +244,46 @@ export function installMcpHost(): void {
   // 服务可能比页面先就绪，也可能稍后才监听成功：挂载时主动取一次
   refreshMcpStatus();
 
+  /** `app_state` 的载荷：只读摘要，不含文档内容。 */
+  function appState(): AppState {
+    const active = activeSession();
+    const pageNode = ui.activePageId ? docStore.doc.nodes[ui.activePageId] : null;
+    const nameOf = (tab: typeof active) => (tab.kind === "home" ? "Home" : tabLabel(tab));
+    return {
+      active: {
+        tabId: active.id,
+        name: nameOf(active),
+        path: active.file.path,
+        dirty: active.kind === "doc" && active.store.isDirty,
+        externalChange: active.file.externalChange,
+        page: pageNode?.type === "page" ? { id: pageNode.id, name: pageNode.name } : null,
+        selection: ui.selection.flatMap((id) => {
+          const node = docStore.doc.nodes[id];
+          return node ? [{ id, name: node.name, type: node.type }] : [];
+        }),
+      },
+      // Home 只给摘要：agent 看到"还有哪些文件开着"就够了
+      tabs: sessionState.tabs.map((tab) => ({
+        tabId: tab.id,
+        name: nameOf(tab),
+        path: tab.file.path,
+        dirty: tab.kind === "doc" && tab.store.isDirty,
+        externalChange: tab.file.externalChange,
+        home: tab.kind === "home",
+        active: tab.id === sessionState.activeId,
+      })),
+      limit: MAX_DOC_TABS,
+    };
+  }
+
   const executor = makeExecutor(
-    docStore,
+    // 门面转发到活动标签，方法在调用时解析——切标签后不需要重建执行器
+    docStore as unknown as DocStore,
     (region) => hooks.getScreenshot(region),
     () => ui.activePageId,
     (node, style, text) => textSizeOf(node, style, text, docStore.doc),
     {
-      newDocument: () => newDocument(),
+      appState: () => appState(),
       appInfo: async () => {
         const info = await appInfo();
         return { name: info.name, version: info.version, platform: window.sqraft.platform };
@@ -346,7 +382,10 @@ export function installMcpHost(): void {
       let ok = false;
       let value: string | undefined;
       try {
-        if (!ui.docOpen) await newDocument();
+        // Home 上没有文档：除 app_info / app_state 外一律拒绝，且不隐式新建（ADR-0041）
+        if (!ui.docOpen && name !== "app_info" && name !== "app_state") {
+          throw new Error(noActiveDocument(docTabs().map(tabLabel)));
+        }
         if (mutates) beginAgentCall(name, clientLabel, args);
         value = await executor(name, args);
         ok = true;

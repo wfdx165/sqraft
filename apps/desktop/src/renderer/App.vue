@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref, watch, watchEffect } from "vue";
-import Toolbar from "./components/Toolbar.vue";
+import { onBeforeUnmount, onMounted, ref, watch, watchEffect, computed } from "vue";
+import TopBar from "./components/TopBar.vue";
+import ToolRail from "./components/ToolRail.vue";
 import PagesPanel from "./components/PagesPanel.vue";
 import InspectorPanel from "./components/InspectorPanel.vue";
 import CanvasView from "./components/CanvasView.vue";
@@ -8,6 +9,7 @@ import DesignSystemPanel from "./components/DesignSystemPanel.vue";
 import ComponentsPanel from "./components/ComponentsPanel.vue";
 import WelcomeView from "./components/WelcomeView.vue";
 import ConnectionStatus from "./components/ConnectionStatus.vue";
+import ExternalChangeBanner from "./components/ExternalChangeBanner.vue";
 import AboutPanel from "./components/AboutPanel.vue";
 import SettingsHost from "./components/SettingsHost.vue";
 import ExportMatrixDialog from "./components/ExportMatrixDialog.vue";
@@ -15,10 +17,11 @@ import Presenter from "./components/Presenter.vue";
 import ContextMenu from "./components/ContextMenu.vue";
 import Toast from "./components/Toast.vue";
 import TokenPicker from "./components/TokenPicker.vue";
+import ShortcutsOverlay from "./components/ShortcutsOverlay.vue";
 import { exportMatrixUi, hooks, ui } from "./store";
 import { bindingRev, installShortcuts, keyOf, registerShortcuts, runAction, type ActionId } from "./shortcuts";
 import { openSettings, settingsUi } from "./settings";
-import { closeDocument, installFileSession, newDocument, syncTitle } from "./file-session";
+import { closeDocument, installFileSession, newDocument, openDocument, saveDocument, saveDocumentAs, syncTitle } from "./file-session";
 import { installMcpHost } from "./mcp-host";
 import { installMcpClientsSync } from "./mcp-clients";
 import { paletteUi, togglePalette } from "./palette";
@@ -30,6 +33,7 @@ import { checkForUpdates, installUpdates } from "./update";
 import { locale, t } from "./i18n";
 import { togglePresenter } from "./presenter";
 import { menuStateOf } from "./menu-state";
+import { panelWidths, persistPanelWidths, setPanelWidth, togglePanels, type PanelSide } from "./focus";
 
 /** 菜单里出现的动作：键位同步给主进程，点击回送到渲染层同一个执行器。 */
 const MENU_ACTIONS: ActionId[] = [
@@ -44,6 +48,7 @@ const MENU_ACTIONS: ActionId[] = [
   "file.exportSvg",
   "file.exportMatrix",
   "file.closeDoc",
+  "file.reopenTab",
   "edit.copy",
   "edit.cut",
   "edit.undo",
@@ -57,11 +62,47 @@ const MENU_ACTIONS: ActionId[] = [
   "view.toggleGrid",
   "view.toggleSnap",
   "view.toggleGuides",
+  "view.panels",
   "view.present",
 ];
 
 const aboutOpen = ref(false);
 const platform = window.sqraft.platform;
+
+/* ---------- 面板宽度与折叠 ---------- */
+/** 左右面板一起显隐：一个开关，没有单侧折叠。 */
+const panelsShown = computed(() => ui.panels.open);
+/** 工具竖条用的偏移：面板宽度 + 14px 边距；收起时为 0（竖条落到 12px） */
+const appStyle = computed(() => ({
+  "--left-w": `${panelsShown.value ? panelWidths.left + 14 : 0}px`,
+  "--right-w": `${panelsShown.value ? panelWidths.right + 14 : 0}px`,
+}));
+const leftHandleStyle = computed(() => ({ left: `${14 + panelWidths.left - 3}px` }));
+const rightHandleStyle = computed(() => ({ right: `${14 + panelWidths.right - 3}px` }));
+
+/* ---------- 面板宽度 ---------- */
+let resizing: { side: PanelSide; startX: number; startWidth: number } | null = null;
+
+function onResizeMove(e: PointerEvent): void {
+  if (!resizing) return;
+  const delta = resizing.side === "left" ? e.clientX - resizing.startX : resizing.startX - e.clientX;
+  setPanelWidth(resizing.side, resizing.startWidth + delta);
+}
+
+function endResize(): void {
+  if (!resizing) return;
+  resizing = null;
+  window.removeEventListener("pointermove", onResizeMove);
+  persistPanelWidths();
+}
+
+/** 拖动面板边缘：实时改宽度，松手才落 localStorage。 */
+function startResize(side: PanelSide, e: PointerEvent): void {
+  e.preventDefault();
+  resizing = { side, startX: e.clientX, startWidth: panelWidths[side] };
+  window.addEventListener("pointermove", onResizeMove);
+  window.addEventListener("pointerup", endResize, { once: true });
+}
 
 /**
  * 菜单的可点状态：没有文档时大部分动作无处落地，演示中渲染层会丢弃所有动作。
@@ -125,7 +166,17 @@ onMounted(() => {
   // 文档级动作放在根组件：欢迎页没有工具栏，也要能 ⌘N / ⌘W
   uninstallDoc = registerShortcuts({
     "file.new": () => void newDocument(),
-    "file.closeDoc": () => void closeDocument(),
+    "file.open": () => void openDocument(),
+    "file.save": () => void saveDocument("action"),
+    "file.saveAs": () => void saveDocumentAs("action"),
+    "file.closeDoc": () => {
+      // Home 上 ⌘W 等于关窗（macOS 惯例）；关闭仍走 CloseGuard 的未保存检查
+      if (!ui.docOpen) {
+        window.sqraft.app.closeWindow();
+        return;
+      }
+      void closeDocument();
+    },
     "edit.paste": () => void pasteFromClipboard(),
     // 复制/剪切/全选放在根组件：欢迎页也要能复制文本（画布不在时走原生）
     "edit.copy": () => void copySelectionAction(),
@@ -138,6 +189,10 @@ onMounted(() => {
       exportMatrixUi.open = true;
     },
     "view.present": () => togglePresenter(),
+    "view.panels": () => {
+      // Home 上没有面板：按钮已禁用，键位也走同一道闸门
+      if (ui.docOpen) togglePanels();
+    },
     "palette.open": () => togglePalette(),
     "file.exampleLogin": () => void openExample("login"),
     "file.exampleCards": () => void openExample("cards"),
@@ -151,6 +206,7 @@ onMounted(() => {
   });
 });
 onBeforeUnmount(() => {
+  window.removeEventListener("pointermove", onResizeMove);
   uninstall();
   uninstallMenu();
   uninstallDoc();
@@ -167,29 +223,44 @@ watchEffect(() => {
 </script>
 
 <template>
-  <div class="app" :data-platform="platform">
-    <div class="drag-strip" />
-    <template v-if="ui.docOpen">
-      <CanvasView />
-      <Toolbar class="float toolbar rise-in" />
-      <aside class="float left glass rise-in" style="animation-delay: 40ms">
-        <div class="tabs">
-          <button :class="{ on: ui.tab === 'pages' }" @click="ui.tab = 'pages'">{{ t("panel.pages") }}</button>
-          <button :class="{ on: ui.tab === 'components' }" @click="ui.tab = 'components'">{{ t("panel.components") }}</button>
-          <button :class="{ on: ui.tab === 'tokens' }" @click="ui.tab = 'tokens'">{{ t("panel.designSystem") }}</button>
-        </div>
-        <div class="tab-body">
-          <PagesPanel v-show="ui.tab === 'pages'" />
-          <ComponentsPanel v-show="ui.tab === 'components'" />
-          <DesignSystemPanel v-show="ui.tab === 'tokens'" />
-        </div>
-      </aside>
-      <aside class="float right glass rise-in" style="animation-delay: 80ms">
-        <InspectorPanel />
-      </aside>
-    </template>
-    <WelcomeView v-else @open-mcp-setup="openSettings('mcp')" />
-    <ConnectionStatus v-if="ui.docOpen" />
+  <div class="app" :data-platform="platform" :style="appStyle">
+    <TopBar @about="aboutOpen = true" />
+    <div class="workspace">
+      <template v-if="ui.docOpen">
+        <CanvasView />
+        <ToolRail />
+        <aside v-show="panelsShown" class="float left glass rise-in" :style="{ width: `${panelWidths.left}px`, animationDelay: '40ms' }">
+          <div class="tabs">
+            <button :class="{ on: ui.tab === 'pages' }" @click="ui.tab = 'pages'">{{ t("panel.pages") }}</button>
+            <button :class="{ on: ui.tab === 'components' }" @click="ui.tab = 'components'">{{ t("panel.components") }}</button>
+            <button :class="{ on: ui.tab === 'tokens' }" @click="ui.tab = 'tokens'">{{ t("panel.designSystem") }}</button>
+          </div>
+          <div class="tab-body">
+            <PagesPanel v-show="ui.tab === 'pages'" />
+            <ComponentsPanel v-show="ui.tab === 'components'" />
+            <DesignSystemPanel v-show="ui.tab === 'tokens'" />
+          </div>
+        </aside>
+        <div
+          v-show="panelsShown"
+          class="resizer"
+          :style="leftHandleStyle"
+          @pointerdown="startResize('left', $event)"
+        />
+        <aside v-show="panelsShown" class="float right glass rise-in" :style="{ width: `${panelWidths.right}px`, animationDelay: '80ms' }">
+          <InspectorPanel />
+        </aside>
+        <div
+          v-show="panelsShown"
+          class="resizer"
+          :style="rightHandleStyle"
+          @pointerdown="startResize('right', $event)"
+        />
+      </template>
+      <WelcomeView v-else @open-mcp-setup="openSettings('mcp')" />
+      <ConnectionStatus v-if="ui.docOpen" />
+      <ExternalChangeBanner v-if="ui.docOpen" />
+    </div>
     <Presenter v-if="ui.docOpen && ui.presenter" />
 
     <CommandPalette v-if="paletteUi.open" />
@@ -198,6 +269,7 @@ watchEffect(() => {
     <SettingsHost v-if="settingsUi.open" />
     <Toast />
     <TokenPicker />
+    <ShortcutsOverlay />
     <ContextMenu />
   </div>
 </template>
@@ -221,43 +293,35 @@ watchEffect(() => {
   z-index: 10;
 }
 
-/* macOS 内嵌标题栏：红绿灯占住左上角，给它们让位并留一块可拖拽区域 */
-.drag-strip {
-  display: none;
-}
-
-.app[data-platform="darwin"] .drag-strip {
-  display: block;
+/* 顶部模块固定 34px：画布、面板、欢迎页都在它下面的一块区域里 */
+.workspace {
   position: absolute;
-  top: 0;
-  left: 0;
-  width: 340px;
-  height: 46px;
-  z-index: 11;
-  -webkit-app-region: drag;
-}
-
-.app[data-platform="darwin"] .left,
-.app[data-platform="darwin"] .right {
-  top: 58px;
-}
-
-.toolbar {
-  top: 14px;
-  /* 在"画布区"居中，而不是在窗口里居中：左右面板各占一段固定宽度 */
-  left: calc(50% + (var(--left-w, 0px) - var(--right-w, 0px)) / 2);
-  translate: -50% 0;
-  max-width: calc(100vw - 28px - var(--left-w, 0px) - var(--right-w, 0px));
+  inset: 34px 0 0 0;
 }
 
 .left {
   top: 14px;
   bottom: 14px;
   left: 14px;
-  width: 300px;
   display: flex;
   flex-direction: column;
   overflow: hidden;
+}
+
+/* 面板边缘的 6px 热区：拖动改宽度 */
+.resizer {
+  position: absolute;
+  top: 14px;
+  bottom: 14px;
+  width: 6px;
+  z-index: 12;
+  cursor: col-resize;
+  border-radius: 3px;
+  transition: background var(--dur-fast) var(--ease);
+}
+
+.resizer:hover {
+  background: var(--accent-soft);
 }
 
 .tabs {
@@ -325,7 +389,6 @@ watchEffect(() => {
   top: 14px;
   bottom: 14px;
   right: 14px;
-  width: 276px;
   overflow: auto;
 }
 </style>

@@ -36,7 +36,7 @@ export const MUTATING_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 export const handlers: Record<string, Handler> = {
-  "document.new": document.handleDocumentNew,
+  "app_state": document.handleAppState,
   "app_info": document.handleAppInfo,
   "read_document": read.handleReadDocument,
   "search_nodes": read.handleSearchNodes,

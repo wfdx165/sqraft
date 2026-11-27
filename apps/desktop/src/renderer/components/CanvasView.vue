@@ -78,7 +78,7 @@ import { renderSvgAsync } from "../canvas/svg-export";
 import { imageRefsOf } from "../canvas/image-assets";
 import { ensureLinkedImage, linkedImage } from "../linked-images";
 import { showToast } from "../toast";
-import { RULER_SIZE, drawGuidesOverlay, drawRulers, guideAt } from "../canvas/rulers";
+import { drawGuidesOverlay, guideAt } from "../canvas/rulers";
 import {
   abortMultiScale,
   applyMultiScale,
@@ -247,8 +247,6 @@ function createFirstPage(): void {
 
 /** 多选缩放：拖拽中累积的比例（每次只下发增量） */
 let multiScale: MultiScaleState | null = null;
-/** 从标尺拖出参考线：axis = x 是竖线，y 是横线；world 是指针的世界坐标 */
-let guideDrag: { axis: "x" | "y"; world: { x: number; y: number } } | null = null;
 /** 视图开关（UI 偏好，跨文件跨启动保留） */
 const guidesVisible = ref(localStorage.getItem("sqraft.guides.v1") !== "0");
 const gridVisible = ref(localStorage.getItem("sqraft.grid.v1") !== "0");
@@ -540,9 +538,9 @@ function draw() {
   ctx.clearRect(0, 0, vp.width, vp.height);
 
   // 只读信息层：悬停容器子元素边界、选中量距、多选整体虚线框
-  // 框选与拖标尺参考线也属于手势（不写 drag），统一按 busy 收口
+  // 框选也属于手势（不写 drag），统一按 busy 收口
   const busyGesture =
-    Boolean(drag) || Boolean(marquee) || Boolean(guideDrag) ||
+    Boolean(drag) || Boolean(marquee) ||
     Boolean(pen.pathEdit) || Boolean(pen.draft) || Boolean(ui.cropNodeId) || Boolean(textEdit.value);
   paintInfoOverlays(ctx, vp, {
     editing,
@@ -587,14 +585,8 @@ function draw() {
   }
 
   const activePageNode = ui.activePageId ? docStore.doc.nodes[ui.activePageId] : null;
-  if (editing) {
-    drawRulers(ctx, vp, activePageNode ?? null, selectionWorldBounds());
-    if (guidesVisible.value) {
-      const preview = guideDrag
-        ? { axis: guideDrag.axis, world: guideDrag.axis === "x" ? guideDrag.world.x : guideDrag.world.y }
-        : null;
-      drawGuidesOverlay(ctx, vp, activePageNode ?? null, preview);
-    }
+  if (editing && guidesVisible.value) {
+    drawGuidesOverlay(ctx, vp, activePageNode ?? null);
   }
 
   if (marquee?.active) {
@@ -813,26 +805,6 @@ function startLabelRename(node: DocNode) {
     renameEl.value?.focus();
     renameEl.value?.select();
   });
-}
-
-/** 参考线写进页面（页面本地坐标；1px 内视为同一条） */
-function commitGuide(axis: "x" | "y", world: { x: number; y: number }): void {
-  // 指针在哪个页面就落到哪个页面，取不到才回落活动页
-  const pageId = pageAt(world.x, world.y) ?? ui.activePageId;
-  const page = pageId ? docStore.doc.nodes[pageId] : null;
-  if (!page || page.type !== "page") return;
-  const current = page.guides ?? { x: [], y: [] };
-  const local = axis === "x" ? world.x - page.x : world.y - page.y;
-  const list = axis === "x" ? [...current.x] : [...current.y];
-  if (list.some((value) => Math.abs(value - local) <= 1)) return;
-  list.push(Math.round(local * 10) / 10);
-  dispatch(
-    {
-      type: "node.update",
-      params: { nodeId: page.id, patch: { guides: axis === "x" ? { ...current, x: list } : { ...current, y: list } } },
-    },
-    "参考线",
-  );
 }
 
 function removeGuide(axis: "x" | "y", index: number): void {
@@ -1327,13 +1299,7 @@ function onPointerDown(e: PointerEvent) {
     offsetY: 0,
   };
 
-  // 标尺区按下：拖出参考线（横线来自顶部标尺，竖线来自左侧标尺）
-  if (e.button === 0 && ui.mode === "edit" && (sx < RULER_SIZE || sy < RULER_SIZE)) {
-    guideDrag = { axis: sy < RULER_SIZE ? "y" : "x", world: { x: w.x, y: w.y } };
-    dragging.value = true;
-    markDirty();
-    return;
-  }
+  // 标尺已移除（ADR-0041）：画布左上角不再是参考线的创建入口
 
   // 拖动模式：任意处拖动都是平移（包括页面与图层上方）
   if (ui.mode === "pan") {
@@ -1680,12 +1646,6 @@ function updateMoveDrag() {
 function onPointerMove(e: PointerEvent) {
   const pointerRect = canvasRef.value?.getBoundingClientRect();
   if (pointerRect) lastPointer = { x: e.clientX - pointerRect.left, y: e.clientY - pointerRect.top };
-  if (guideDrag) {
-    const world = screenToWorld(vp, e.clientX - (pointerRect?.left ?? 0), e.clientY - (pointerRect?.top ?? 0));
-    guideDrag = { axis: guideDrag.axis, world };
-    markDirty();
-    return;
-  }
   if (marquee) {
     marquee.x = e.clientX - (pointerRect?.left ?? 0);
     marquee.y = e.clientY - (pointerRect?.top ?? 0);
@@ -2044,19 +2004,6 @@ function onPointerUp(e: PointerEvent) {
     const sx = e.clientX - (rect?.left ?? 0);
     const sy = e.clientY - (rect?.top ?? 0);
     gradientGesture.end({ x: sx, y: sy }, e.pointerId);
-    return;
-  }
-  if (guideDrag) {
-    const rect = canvasRef.value?.getBoundingClientRect();
-    const sx = rect ? e.clientX - rect.left : 0;
-    const sy = rect ? e.clientY - rect.top : 0;
-    // 拖回标尺里松手 = 取消
-    const inRuler = sx < RULER_SIZE || sy < RULER_SIZE;
-    const pending = guideDrag;
-    guideDrag = null;
-    dragging.value = false;
-    if (!inRuler) commitGuide(pending.axis, pending.world);
-    markDirty();
     return;
   }
   if (marquee) {
@@ -2564,6 +2511,32 @@ onMounted(() => {
   };
   hooks.insertInstance = insertInstance;
   hooks.getViewport = () => ({ x: vp.x, y: vp.y, width: vp.width, height: vp.height, zoom: vp.zoom });
+  // 切标签：先把进行中的编辑落进**当前**文档，再交给会话层换 store
+  hooks.prepareTabSwitch = () => {
+    commitEditors();
+    if (pen.draft) finishDraft(pen, penDeps, false);
+    pen.pathEdit = null;
+    pen.vectorDrag = null;
+    pageRename.value = null;
+    ui.cropNodeId = null;
+    drag = null;
+    preview = null;
+    resizePreview = null;
+    vectorPreview = null;
+    guideLines = [];
+    gapMarks = [];
+    dragging.value = false;
+    clearHover();
+    markDirty();
+  };
+  // 切回来还原视口：不重新适配，否则用户刚调好的构图会跳
+  hooks.restoreViewport = ({ x, y, zoom }) => {
+    vp.x = x;
+    vp.y = y;
+    vp.zoom = zoom;
+    zoomPct.value = Math.round(zoom * 100);
+    markDirty();
+  };
   hooks.revealAgentActivity = () => {
     const pageId = agentActivity.pageId;
     const bounds = unionRects(agentActivity.rects);
@@ -2666,6 +2639,12 @@ onMounted(() => {
 });
 
 onBeforeUnmount(() => {
+  // 画布会随"回到 Home"被卸载：留下旧闭包会让下一次切标签在已卸载的画布上收尾/截图
+  hooks.prepareTabSwitch = () => {};
+  hooks.restoreViewport = () => {};
+  hooks.getViewport = () => null;
+  hooks.fitActivePage = () => {};
+  hooks.getScreenshot = async () => "";
   document.fonts.removeEventListener("loadingdone", bumpRenderEpoch);
   if (settleTimer) clearTimeout(settleTimer);
   backend?.clearEffectCache();

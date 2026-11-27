@@ -10,6 +10,12 @@ export const AGENT_TEXT = {
   rendererTimeout: "The renderer did not return a result in time.",
 } as const;
 
+/** 活动标签是 Home 时，文档类工具的统一拒绝文案（列出已打开的文档，便于 agent 请用户切过去）。 */
+export function noActiveDocument(openTabs: string[]): string {
+  const open = openTabs.length > 0 ? ` Open documents: ${openTabs.join(", ")}.` : "";
+  return `No document is open (the Home tab is active).${open} Ask the user to switch to a document tab.`;
+}
+
 /**
  * MCP `initialize` 里返回给客户端的全局工作规则。
  * 大多数客户端会把它当系统提示注入：这里写跨工具的流程，工具 description 只管参数。

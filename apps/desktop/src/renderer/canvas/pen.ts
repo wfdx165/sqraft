@@ -49,8 +49,11 @@ export function createPenState(): PenState {
   return { draft: null, penHover: null, pathEdit: null, vectorDrag: null };
 }
 
+/** 只需要读文档的依赖（门面与真实例都满足；多标签下门面会转发到活动标签）。 */
+type DocReader = Pick<DocStore, "doc">;
+
 export interface PenDeps {
-  docStore: DocStore;
+  docStore: DocReader;
   ui: { mode: string; tool: string; selection: NodeId[] };
   dispatch: (cmd: Command | Command[], label?: string) => void;
   select: (ids: NodeId[]) => void;
@@ -58,7 +61,7 @@ export interface PenDeps {
 }
 
 /** 路径默认名：路径 N（同类节点内不重复）。 */
-export function nextPathName(docStore: DocStore): string {
+export function nextPathName(docStore: DocReader): string {
   const base = t("node.path");
   const used = new Set(
     Object.values(docStore.doc.nodes)
@@ -71,7 +74,7 @@ export function nextPathName(docStore: DocStore): string {
 }
 
 /** 多边形默认名：sides=3 叫三角形，其余叫多边形，各自编号。 */
-export function nextPolygonName(docStore: DocStore, sides: number): string {
+export function nextPolygonName(docStore: DocReader, sides: number): string {
   const base = sides === 3 ? t("node.triangle") : t("node.polygon");
   const used = new Set(
     Object.values(docStore.doc.nodes)

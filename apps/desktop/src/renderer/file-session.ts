@@ -2,32 +2,80 @@
  * 当前文件的会话状态：路径、名字、磁盘时间戳、脏标记。
  * 磁盘上的文件只在 `saveDocument` 时变化——没有自动保存，也没有恢复快照。
  */
-import { reactive } from "vue";
-import { createEmptyDoc, firstPageId, type DocState } from "@sqraft/core";
-import { docStore, replaceDocument, ui } from "./store";
+import { reactive, watch } from "vue";
+import { createEmptyDoc, type DocState } from "@sqraft/core";
+import { activateTab, docStore, hooks, replaceDocument, ui } from "./store";
+import {
+  MAX_DOC_TABS,
+  activeSession,
+  closeTab,
+  createDocTab,
+  docTabs,
+  findDocTabByPath,
+  findTab,
+  rememberClosedPath,
+  sessionState,
+  takeClosedPath,
+  type TabSession,
+} from "./sessions";
 import { parseDoc, serializeDoc } from "./fileio";
 import { appInfo } from "./app-meta";
-import { allAssets, assetEntryName, loadAssets, resetAssets } from "./assets";
+import { assetEntryName, assetsForSave, loadAssets, resetAssets } from "./assets";
 import { resetLinkedImages } from "./linked-images";
 import { fontEntryName, fontTable, fontsForSave, loadFonts, registerDocFonts, resetFonts } from "./fonts";
 import { showToast } from "./toast";
 import { logError, logInfo, logWarn } from "./log";
 import { t } from "./i18n";
-import type { OpenedFile } from "../shared/ipc";
+import { tabLabel } from "./tab-label";
+import type { FileStat, OpenedFile } from "../shared/ipc";
+import { changeStateOf } from "./external-change";
 
 /** 保存入口来源：区分快捷键/菜单、工具栏、关窗流程，排查"点了没反应"时先看这里。 */
 export type SaveSource = "direct" | "action" | "toolbar" | "close" | "replace";
 
+/**
+ * 活动标签的文件状态。
+ *
+ * 字段本身住在 `sessionState` 的标签记录里，这里用访问器转发——工具栏与导出代码
+ * 仍然 import 同一个 `fileState`，不需要知道多标签的存在。
+ */
 export const fileState = reactive({
-  path: null as string | null,
-  name: "",
-  mtimeMs: 0,
+  get path(): string | null {
+    return activeSession().file.path;
+  },
+  set path(value: string | null) {
+    activeSession().file.path = value;
+  },
+  get name(): string {
+    return activeSession().file.name;
+  },
+  set name(value: string) {
+    activeSession().file.name = value;
+  },
+  get mtimeMs(): number {
+    return activeSession().file.mtimeMs;
+  },
+  set mtimeMs(value: number) {
+    activeSession().file.mtimeMs = value;
+  },
   /**
    * 自上次落盘以来是否有改动。
    * 这是渲染层（工具栏胶囊）的唯一真源：`docStore.isDirty` 本身不在响应式系统里，
    * 而保存走 `markSaved()` 不会 emit，靠 `ui.version` 触发重算会让圆点留在旧值上。
    */
-  dirty: false,
+  get dirty(): boolean {
+    return activeSession().file.dirty;
+  },
+  set dirty(value: boolean) {
+    activeSession().file.dirty = value;
+  },
+  /** 磁盘上的文件在别的程序里被改过（只标记，不抢焦点；检测见 05 票） */
+  get externalChange(): boolean {
+    return activeSession().file.externalChange;
+  },
+  set externalChange(value: boolean) {
+    activeSession().file.externalChange = value;
+  },
 });
 
 const bridge = window.sqraft;
@@ -54,16 +102,16 @@ function overLimitMessage(): string {
   return t("file.tooLarge", { mb: MAX_SAVE_BYTES / 1024 / 1024 });
 }
 
-/** 保存时把仓库里的图片一并写进 zip（不在文档里的孤儿资源也一并带上，避免撤销后丢图）。 */
 /** 保存用快照：字体表从字体仓库现算（字体是资产，不进撤销栈）。 */
-function snapshotForSave(): ReturnType<typeof docStore.snapshot> {
-  return { ...docStore.snapshot(), fonts: fontTable(docStore.doc) };
+function snapshotForSave(tab: TabSession): ReturnType<typeof docStore.snapshot> {
+  return { ...tab.store.snapshot(), fonts: fontTable(tab.store.doc) };
 }
 
-function saveEntries(): { name: string; bytes: Uint8Array }[] {
+function saveEntries(tab: TabSession): { name: string; bytes: Uint8Array }[] {
   return [
-    ...allAssets().map((asset) => ({ name: assetEntryName(asset), bytes: asset.bytes })),
-    ...fontsForSave(docStore.doc).map((font) => ({ name: fontEntryName(font), bytes: font.bytes })),
+    // 资源池是全局的（多标签共用）：只写**当前文档**引用到的位图，避免把别的标签的图带进文件
+    ...assetsForSave(tab.store.doc).map((asset) => ({ name: assetEntryName(asset), bytes: asset.bytes })),
+    ...fontsForSave(tab.store.doc).map((font) => ({ name: fontEntryName(font), bytes: font.bytes })),
   ];
 }
 
@@ -100,99 +148,218 @@ async function withinSaveLimit(estimated: number, source: SaveSource): Promise<b
   return false;
 }
 
-function suggestedName(): string {
-  return fileState.name || "untitled.sqraft";
+function suggestedName(tab: TabSession): string {
+  if (tab.file.name) return tab.file.name;
+  // 未命名带编号：两个未命名文档往同一文件夹存不会撞名
+  return tab.file.untitledIndex ? `untitled-${tab.file.untitledIndex}.sqraft` : "untitled.sqraft";
 }
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
 }
 
-/** 有未保存改动时先问"保存 / 不保存 / 取消"；返回是否继续替换当前文档。 */
-async function confirmReplaceCurrent(): Promise<boolean> {
-  if (!docStore.isDirty) return true;
-  const choice = await bridge.dialog.unsaved();
-  logInfo("replace: unsaved choice", { choice });
-  if (choice === "cancel") return false;
-  if (choice === "discard") return true;
-  return saveDocument("replace");
+/** 上限提示：只 toast，不关任何标签，也不弹对话框。 */
+function tabLimitReached(): boolean {
+  if (docTabs().length < MAX_DOC_TABS) return false;
+  showToast(t("tab.limit", { max: MAX_DOC_TABS }));
+  logInfo("tab: limit reached", { open: docTabs().length, max: MAX_DOC_TABS });
+  return true;
 }
 
 /**
- * 新建空稿：从欢迎页进入编辑态。
- * 有未保存改动时先问"保存 / 不保存 / 取消"——`replace` 会清空撤销栈，不问就再也找不回来了。
- * 返回是否真的新建（取消时当前文档原样保留）。
+ * 新建空稿：开一个新标签，不碰当前文档（多标签之后"新建"不再替换）。
+ * 到上限时只提示，返回 false。
  */
 export async function newDocument(): Promise<boolean> {
-  if (!(await confirmReplaceCurrent())) return false;
-  resetAssets();
-  resetLinkedImages();
-  resetFonts();
-  replaceDocument(createEmptyDoc());
-  fileState.path = null;
-  fileState.name = "";
-  fileState.mtimeMs = 0;
-  ui.docOpen = true;
-  // 换文档时演示模式必须显式退出：不能指望"页面被删"的 watcher 顺带收拾
+  if (tabLimitReached()) return false;
+  const tab = createDocTab(createEmptyDoc());
+  activateTab(tab.id);
   ui.presenter = null;
-  ui.activePageId = firstPageId(docStore.doc);
-  ui.expandedPageId = ui.activePageId;
-  ui.selection = [];
-  ui.instanceContext = [];
-  logInfo("document: new");
+  logInfo("document: new", { tab: tab.id });
   syncTitle();
   return true;
 }
 
 /**
  * 打开内置示例：没有文件路径，`⌘S` 时才另存。
- * 与新建一样先走未保存确认；载入路径也与新建保持一致（换文档必须清演示模式与上下文）。
+ * 与新建一样开新标签，不动当前文档。
  */
 export async function openGeneratedDocument(title: string, state: DocState): Promise<boolean> {
-  if (!(await confirmReplaceCurrent())) return false;
-  resetAssets();
-  resetLinkedImages();
-  resetFonts();
-  replaceDocument(state);
-  fileState.path = null;
-  fileState.name = title;
-  fileState.mtimeMs = 0;
-  ui.docOpen = true;
+  if (tabLimitReached()) return false;
+  const tab = createDocTab(state, { name: title });
+  activateTab(tab.id);
   ui.presenter = null;
-  ui.activePageId = firstPageId(docStore.doc);
-  ui.expandedPageId = ui.activePageId;
-  ui.selection = [];
-  ui.instanceContext = [];
-  logInfo("document: example", { title });
+  void registerDocFonts(state);
+  logInfo("document: example", { title, tab: tab.id });
   syncTitle();
   return true;
 }
 
-/** 关闭文档回到欢迎页（MCP 首次调用建空稿也走这里的新建入口）。 */
+/**
+ * 关闭一个文档标签：脏时问「保存 / 不保存 / 取消」，保存落在**这个标签**上（不是活动标签）。
+ * 返回是否真的关掉了。
+ */
+export async function closeTabById(id: string): Promise<boolean> {
+  const tab = findTab(id);
+  if (!tab || tab.kind !== "doc") return false;
+  const wasActive = id === sessionState.activeId;
+  // 只有活动标签有画布上的进行中编辑需要收尾
+  if (wasActive) hooks.prepareTabSwitch();
+  if (tab.store.isDirty) {
+    const choice = await bridge.dialog.unsaved([tabLabel(tab)]);
+    logInfo("close: unsaved choice", { tab: id, choice });
+    if (choice === "cancel") return false;
+    if (choice === "save" && !(await saveDocument("close", tab))) return false;
+  }
+  // 关掉之前记路径：⌘⇧T 只能恢复已保存的文件（未命名的内容已经确认丢弃）
+  rememberClosedPath(tab.file.path);
+  const next = closeTab(tab.id);
+  if (wasActive && next) activateTab(next);
+  ui.presenter = null;
+  // 资源跟着文档生命周期走：所有文档都关掉时才释放位图与 object URL
+  if (docTabs().length === 0) {
+    resetAssets();
+    resetLinkedImages();
+    resetFonts();
+  }
+  logInfo("document: closed", { tab: id, path: tab.file.path, next: next ?? undefined });
+  syncTitle();
+  return true;
+}
+
+/** 关掉当前标签；最后一个文档关掉后落回 Home。 */
 export async function closeDocument(): Promise<void> {
   if (!ui.docOpen) return;
-  if (!(await confirmReplaceCurrent())) return;
-  const path = fileState.path;
-  // 资源跟着文档生命周期走：回到欢迎页时位图与 object URL 都该释放
-  resetAssets();
-  resetLinkedImages();
-  resetFonts();
-  replaceDocument(createEmptyDoc());
-  fileState.path = null;
-  fileState.name = "";
-  fileState.mtimeMs = 0;
-  ui.docOpen = false;
-  ui.presenter = null;
-  ui.selection = [];
-  ui.instanceContext = [];
-  ui.cropNodeId = null;
-  logInfo("document: closed", { path });
-  syncTitle();
+  await closeTabById(activeSession().id);
+}
+
+/**
+ * ⇧⌘T：恢复最近关闭的标签（只认已保存的文件；未命名内容在关闭时已确认丢弃）。
+ * 文件已不在、标签到上限时由打开链路自己提示。
+ */
+export async function reopenClosedTab(): Promise<boolean> {
+  const path = takeClosedPath();
+  if (!path) {
+    showToast(t("tab.noReopen"));
+    return false;
+  }
+  const existing = findDocTabByPath(path);
+  if (existing) {
+    activateTab(existing.id);
+    return true;
+  }
+  return openDocumentPath(path);
+}
+
+/* ---------- 外部改动（ADR-0041） ---------- */
+let statTimer: ReturnType<typeof setTimeout> | null = null;
+
+function scheduleExternalCheck(delay = 300): void {
+  if (statTimer) clearTimeout(statTimer);
+  statTimer = setTimeout(() => {
+    statTimer = null;
+    void checkExternalChanges();
+  }, delay);
+}
+
+/** 批量 stat 所有已保存标签：只标记，不切标签、不弹窗。 */
+export async function checkExternalChanges(): Promise<void> {
+  const tabs = docTabs().filter((tab) => tab.file.path);
+  if (tabs.length === 0) return;
+  let stats: FileStat[];
+  try {
+    stats = await bridge.file.stat(tabs.map((tab) => tab.file.path!));
+  } catch (error) {
+    logWarn("external: stat failed", { error: errorText(error) });
+    return;
+  }
+  const byPath = new Map(stats.map((stat) => [stat.path, stat]));
+  let changed = 0;
+  for (const tab of tabs) {
+    const stat = byPath.get(tab.file.path!);
+    if (!stat) continue;
+    // 文件重新出现：上次的"忽略删除"失效
+    if (stat.exists) tab.file.ignoredMissing = false;
+    const next = changeStateOf(tab.file, stat);
+    if (next.externalChange === tab.file.externalChange && next.missing === tab.file.missing) continue;
+    tab.file.externalChange = next.externalChange;
+    tab.file.missing = next.missing;
+    changed += 1;
+  }
+  if (changed > 0) logInfo("external: marked", { changed });
+}
+
+/** 「保留当前版本」：收起横幅，并记住这次 mtime（或这次删除），不再反复提示。 */
+export async function keepExternalChanges(): Promise<void> {
+  const tab = activeSession();
+  if (tab.kind !== "doc" || !tab.file.path) return;
+  try {
+    const [stat] = await bridge.file.stat([tab.file.path]);
+    if (stat?.exists) {
+      tab.file.ignoredMtime = stat.mtimeMs;
+      tab.file.ignoredMissing = false;
+    } else {
+      tab.file.ignoredMissing = true;
+    }
+  } catch (error) {
+    logWarn("external: keep failed", { error: errorText(error) });
+  }
+  tab.file.externalChange = false;
+  tab.file.missing = false;
+  logInfo("external: keep", { tab: tab.id });
+}
+
+/**
+ * 「重新载入」：从磁盘重新读当前标签。有脏改动时仍走保存 / 不保存 / 取消，
+ * 载入后撤销栈清空（等价于重新打开这个文件）。
+ */
+export async function reloadActiveDocument(): Promise<boolean> {
+  const tab = activeSession();
+  if (tab.kind !== "doc" || !tab.file.path) return false;
+  if (tab.id !== sessionState.activeId) return false;
+  hooks.prepareTabSwitch();
+  if (tab.store.isDirty) {
+    const choice = await bridge.dialog.unsaved([tabLabel(tab)]);
+    logInfo("external: reload unsaved choice", { tab: tab.id, choice });
+    if (choice === "cancel") return false;
+    if (choice === "save" && !(await saveDocument("close", tab))) return false;
+  }
+  const result = await bridge.file.openPath(tab.file.path);
+  if (result.status === "canceled") return false;
+  if (result.status === "error") {
+    await bridge.dialog.error(result.message);
+    return false;
+  }
+  try {
+    const { state, files } = await parseDoc(await readOpenedFile(result.file));
+    loadAssets(files);
+    loadFonts(files);
+    replaceDocument(state);
+    tab.file.path = result.file.path;
+    tab.file.name = result.file.name;
+    tab.file.mtimeMs = result.file.mtimeMs;
+    tab.file.externalChange = false;
+    tab.file.missing = false;
+    tab.file.ignoredMtime = null;
+    tab.file.ignoredMissing = false;
+    const pageId = state.rootIds.find((id) => state.nodes[id]?.type === "page") ?? null;
+    ui.activePageId = pageId;
+    ui.expandedPageId = pageId;
+    ui.selection = [];
+    ui.instanceContext = [];
+    void registerDocFonts(state);
+    logInfo("external: reloaded", { tab: tab.id, path: result.file.path, nodes: Object.keys(state.nodes).length });
+    syncTitle();
+    return true;
+  } catch (error) {
+    logError("external: reload failed", { tab: tab.id, error: errorText(error) });
+    await bridge.dialog.error(t("file.openError", { detail: errorText(error) })).catch(() => undefined);
+    return false;
+  }
 }
 
 /** 打开系统对话框并载入文档；取消时什么都不变。 */
 export async function openDocument(): Promise<boolean> {
-  if (!(await confirmReplaceCurrent())) return false;
   const started = Date.now();
   const result = await bridge.file.open();
   logInfo("open: dialog result", { status: result.status, ms: Date.now() - started });
@@ -206,7 +373,6 @@ export async function openDocument(): Promise<boolean> {
 
 /** 按已知路径打开（最近列表 / 拖拽 / 双击文件 / 第二实例）。 */
 export async function openDocumentPath(path: string): Promise<boolean> {
-  if (!(await confirmReplaceCurrent())) return false;
   const started = Date.now();
   const result = await bridge.file.openPath(path);
   logInfo("open: path result", { path, status: result.status, ms: Date.now() - started });
@@ -230,28 +396,27 @@ async function readOpenedFile(file: OpenedFile): Promise<Uint8Array> {
 
 async function adoptFile(file: OpenedFile): Promise<boolean> {
   const started = Date.now();
+  // 同一路径已经在某个标签里打开：聚焦它，不再开第二份（两条保存链会互相覆盖）
+  const existing = findDocTabByPath(file.path);
+  if (existing) {
+    activateTab(existing.id);
+    logInfo("open: focus existing tab", { path: file.path, tab: existing.id });
+    return true;
+  }
+  if (tabLimitReached()) return false;
   try {
     const { state, files } = await parseDoc(await readOpenedFile(file));
-    // 先确认文件能解析，再丢弃当前文档的资源，避免打开失败后连旧图一起没了
-    resetAssets();
-    resetLinkedImages();
-    resetFonts();
+    // 资源是全局池（按内容哈希），换标签不重置：别的标签还在用
     loadAssets(files);
     loadFonts(files);
-    replaceDocument(state);
-    // 必须在 replace 之后：registerDocFonts 要遍历新文档的字体表，否则注册的是旧文档
+    const tab = createDocTab(state, { path: file.path, name: file.name, mtimeMs: file.mtimeMs });
+    activateTab(tab.id);
+    // 必须在激活之后：registerDocFonts 要遍历新文档的字体表
     void registerDocFonts(state);
-    ui.docOpen = true;
     ui.presenter = null;
-    fileState.path = file.path;
-    fileState.name = file.name;
-    fileState.mtimeMs = file.mtimeMs;
-    ui.activePageId = firstPageId(state);
-    ui.expandedPageId = ui.activePageId;
-    ui.selection = [];
-    ui.instanceContext = [];
     logInfo("open: adopted", {
       path: file.path,
+      tab: tab.id,
       nodes: Object.keys(state.nodes).length,
       assets: Object.keys(files).filter((name) => name.startsWith("assets/")).length,
       ms: Date.now() - started,
@@ -266,48 +431,52 @@ async function adoptFile(file: OpenedFile): Promise<boolean> {
 }
 
 /**
- * 渲染层保存互斥：进行中的保存期间再次触发（连按 ⌘S、关窗撞上手动保存）**复用同一次**，
+ * 渲染层保存互斥：同一个标签进行中的保存期间再次触发（连按 ⌘S、关窗撞上手动保存）**复用同一次**，
  * 不并发跑两条"序列化 + 写盘"。并发是两类事故的源头：
  * 第二次拿旧 mtime 比对 → 假 conflict 弹框；两条 zip 同时在内存 → 大文档双倍峰值。
- * 代价是并发期间产生的新改动要再按一次保存（这条记在 02-save-race-fixes 票里）。
+ * 多标签之间不共享锁：关后台标签时可能同时保存另一个标签，那是两个不同的文件。
  */
-let activeSave: Promise<boolean> | null = null;
+const activeSaves = new Map<string, Promise<boolean>>();
 
-function guardedSave(source: SaveSource, task: () => Promise<boolean>): Promise<boolean> {
-  if (activeSave) {
-    logWarn("save: in-flight, reusing", { source });
-    return activeSave;
+function guardedSave(tab: TabSession, source: SaveSource, task: () => Promise<boolean>): Promise<boolean> {
+  const inFlight = activeSaves.get(tab.id);
+  if (inFlight) {
+    logWarn("save: in-flight, reusing", { source, tab: tab.id });
+    return inFlight;
   }
   const run = task();
   const wrapped = run.finally(() => {
-    if (activeSave === wrapped) activeSave = null;
+    if (activeSaves.get(tab.id) === wrapped) activeSaves.delete(tab.id);
   });
-  activeSave = wrapped;
+  activeSaves.set(tab.id, wrapped);
   return wrapped;
 }
 
-/** 保存到当前文件；没有路径时等价于另存为。返回是否真的落盘。 */
-export function saveDocument(source: SaveSource = "direct"): Promise<boolean> {
-  return guardedSave(source, () => runSave(source));
+/** 保存到目标标签的文件（默认活动标签）；没有路径时等价于另存为。 */
+export function saveDocument(source: SaveSource = "direct", target?: TabSession): Promise<boolean> {
+  const tab = target ?? activeSession();
+  if (tab.kind !== "doc") return Promise.resolve(false);
+  return guardedSave(tab, source, () => runSave(source, tab));
 }
 
-async function runSave(source: SaveSource): Promise<boolean> {
-  if (!fileState.path) {
-    logInfo("save: no path, save-as", { source });
-    // 内部走 runSaveAs：套壳入口不能嵌套，否则会复用到自己（activeSave 还没赋值）
-    return runSaveAs(source);
+async function runSave(source: SaveSource, tab: TabSession): Promise<boolean> {
+  if (!tab.file.path) {
+    logInfo("save: no path, save-as", { source, tab: tab.id });
+    // 内部走 runSaveAs：套壳入口不能嵌套，否则会复用到自己（activeSaves 还没赋值）
+    return runSaveAs(source, "direct", tab);
   }
   const started = Date.now();
   try {
-    const entries = saveEntries();
+    const entries = saveEntries(tab);
     // 快照只取一次：体积估算与 zip 序列化共用，避免大文档多次全量 JSON 往返
-    const snapshot = snapshotForSave();
+    const snapshot = snapshotForSave(tab);
     const estimated = estimatedBytesOf(snapshot, entries);
     logInfo("save: start", {
       source,
-      path: fileState.path,
-      dirty: docStore.isDirty,
-      nodes: Object.keys(docStore.doc.nodes).length,
+      tab: tab.id,
+      path: tab.file.path,
+      dirty: tab.store.isDirty,
+      nodes: Object.keys(tab.store.doc.nodes).length,
       entries: entries.length,
       estimatedBytes: estimated,
     });
@@ -315,26 +484,27 @@ async function runSave(source: SaveSource): Promise<boolean> {
     await warnLargeSaveIfAny(estimated);
     const serializeStarted = Date.now();
     const bytes = await serializeDoc(snapshot, entries, await appVersionForManifest());
-    logInfo("save: serialized", { source, bytes: bytes.length, ms: Date.now() - serializeStarted });
+    logInfo("save: serialized", { source, tab: tab.id, bytes: bytes.length, ms: Date.now() - serializeStarted });
     if (bytes.length > MAX_SAVE_BYTES) {
       logWarn("save: over limit after zip", { source, bytes: bytes.length, limitBytes: MAX_SAVE_BYTES });
       await bridge.dialog.error(overLimitMessage());
       return false;
     }
     const result = await bridge.file.save({
-      path: fileState.path,
+      path: tab.file.path,
       bytes,
-      expectedMtimeMs: fileState.mtimeMs,
+      expectedMtimeMs: tab.file.mtimeMs,
     });
     logInfo("save: result", {
       source,
+      tab: tab.id,
       status: result.status,
       mtimeMs: result.status === "ok" ? result.mtimeMs : undefined,
-      expectedMtimeMs: fileState.mtimeMs,
+      expectedMtimeMs: tab.file.mtimeMs,
       bytes: bytes.length,
       ms: Date.now() - started,
     });
-    if (result.status === "ok") return markSaved(result.mtimeMs, source);
+    if (result.status === "ok") return markSaved(tab, result.mtimeMs, source);
     if (result.status === "error") {
       logError("save: error", { source, message: result.message, ms: Date.now() - started });
       await bridge.dialog.error(result.message);
@@ -342,13 +512,13 @@ async function runSave(source: SaveSource): Promise<boolean> {
     }
 
     const choice = await bridge.dialog.overwrite();
-    logInfo("save: conflict choice", { source, choice });
+    logInfo("save: conflict choice", { source, tab: tab.id, choice });
     if (choice === "cancel") return false;
-    if (choice === "save-as") return runSaveAs(source, "conflict");
+    if (choice === "save-as") return runSaveAs(source, "conflict", tab);
 
-    const forced = await bridge.file.save({ path: fileState.path, bytes, expectedMtimeMs: null });
-    logInfo("save: forced result", { source, status: forced.status });
-    if (forced.status === "ok") return markSaved(forced.mtimeMs, source);
+    const forced = await bridge.file.save({ path: tab.file.path, bytes, expectedMtimeMs: null });
+    logInfo("save: forced result", { source, tab: tab.id, status: forced.status });
+    if (forced.status === "ok") return markSaved(tab, forced.mtimeMs, source);
     if (forced.status === "error") {
       logError("save: forced error", { source, message: forced.message });
       await bridge.dialog.error(forced.message);
@@ -362,22 +532,33 @@ async function runSave(source: SaveSource): Promise<boolean> {
   }
 }
 
-/** 另存为：始终弹系统对话框，成功后切换当前文件。 */
-export function saveDocumentAs(source: SaveSource = "direct", reason: "direct" | "conflict" = "direct"): Promise<boolean> {
-  return guardedSave(source, () => runSaveAs(source, reason));
+/** 另存为：始终弹系统对话框，成功后把目标标签切到这个文件。 */
+export function saveDocumentAs(
+  source: SaveSource = "direct",
+  reason: "direct" | "conflict" = "direct",
+  target?: TabSession,
+): Promise<boolean> {
+  const tab = target ?? activeSession();
+  if (tab.kind !== "doc") return Promise.resolve(false);
+  return guardedSave(tab, source, () => runSaveAs(source, reason, tab));
 }
 
-async function runSaveAs(source: SaveSource, reason: "direct" | "conflict" = "direct"): Promise<boolean> {
+async function runSaveAs(
+  source: SaveSource,
+  reason: "direct" | "conflict" = "direct",
+  tab: TabSession,
+): Promise<boolean> {
   const started = Date.now();
   try {
-    const entries = saveEntries();
+    const entries = saveEntries(tab);
     // 同 saveDocument：快照复用给体积估算与 zip，别重复全量序列化
-    const snapshot = snapshotForSave();
+    const snapshot = snapshotForSave(tab);
     const estimated = estimatedBytesOf(snapshot, entries);
     logInfo("save-as: start", {
       source,
+      tab: tab.id,
       reason,
-      suggested: suggestedName(),
+      suggested: suggestedName(tab),
       entries: entries.length,
       estimatedBytes: estimated,
     });
@@ -385,15 +566,16 @@ async function runSaveAs(source: SaveSource, reason: "direct" | "conflict" = "di
     await warnLargeSaveIfAny(estimated);
     const serializeStarted = Date.now();
     const bytes = await serializeDoc(snapshot, entries, await appVersionForManifest());
-    logInfo("save-as: serialized", { source, bytes: bytes.length, ms: Date.now() - serializeStarted });
+    logInfo("save-as: serialized", { source, tab: tab.id, bytes: bytes.length, ms: Date.now() - serializeStarted });
     if (bytes.length > MAX_SAVE_BYTES) {
       logWarn("save-as: over limit after zip", { source, bytes: bytes.length, limitBytes: MAX_SAVE_BYTES });
       await bridge.dialog.error(overLimitMessage());
       return false;
     }
-    const result = await bridge.file.saveAs({ suggestedName: suggestedName(), bytes });
+    const result = await bridge.file.saveAs({ suggestedName: suggestedName(tab), bytes });
     logInfo("save-as: result", {
       source,
+      tab: tab.id,
       status: result.status,
       path: result.status === "ok" ? result.path : undefined,
       bytes: bytes.length,
@@ -405,9 +587,9 @@ async function runSaveAs(source: SaveSource, reason: "direct" | "conflict" = "di
       await bridge.dialog.error(result.message);
       return false;
     }
-    fileState.path = result.path;
-    fileState.name = result.name;
-    return markSaved(result.mtimeMs, source);
+    tab.file.path = result.path;
+    tab.file.name = result.name;
+    return markSaved(tab, result.mtimeMs, source);
   } catch (error) {
     logError("save-as: threw", { source, error: errorText(error), stack: errorStack(error) });
     await bridge.dialog.error(t("file.saveAsError", { detail: errorText(error) })).catch(() => undefined);
@@ -421,28 +603,36 @@ function errorStack(error: unknown): string[] | undefined {
   return error.stack.split("\n").slice(0, 12);
 }
 
-function markSaved(mtimeMs: number, source: SaveSource): boolean {
-  fileState.mtimeMs = mtimeMs;
-  docStore.markSaved();
-  logInfo("save: marked saved", { source, mtimeMs });
+function markSaved(tab: TabSession, mtimeMs: number, source: SaveSource): boolean {
+  tab.file.mtimeMs = mtimeMs;
+  tab.file.externalChange = false;
+  tab.file.missing = false;
+  tab.file.ignoredMtime = null;
+  tab.file.ignoredMissing = false;
+  tab.store.markSaved();
+  logInfo("save: marked saved", { source, tab: tab.id, mtimeMs });
   syncTitle();
   return true;
 }
 
 let lastDirty: boolean | null = null;
 let lastName = "";
+let lastActiveDirty: boolean | null = null;
 
-/** 把脏状态与文件名同步给主进程（用于窗口标题与关闭拦截）。 */
+/** 把脏状态与文件名同步给主进程（anyDirty 拦退出，active* 只影响窗口标题）。 */
 export function syncTitle(): void {
-  const name = ui.docOpen ? (fileState.name || t("common.untitled")) : "";
-  const dirty = ui.docOpen && docStore.isDirty;
-  // 先写响应式状态（工具栏胶囊读它），再决定要不要通知主进程
-  fileState.dirty = dirty;
-  if (dirty === lastDirty && name === lastName) return;
-  lastDirty = dirty;
+  const active = ui.docOpen ? activeSession() : null;
+  const name = active ? tabLabel(active) : "";
+  const activeDirty = Boolean(active && active.store.isDirty);
+  const anyDirty = docTabs().some((tab) => tab.store.isDirty);
+  // 先写响应式状态（顶部胶囊读它），再决定要不要通知主进程
+  fileState.dirty = activeDirty;
+  if (anyDirty === lastDirty && name === lastName && activeDirty === lastActiveDirty) return;
+  lastDirty = anyDirty;
   lastName = name;
-  logInfo("dirty changed", { dirty, name });
-  bridge.app.setDirty(dirty, name);
+  lastActiveDirty = activeDirty;
+  logInfo("dirty changed", { anyDirty, name, activeDirty });
+  bridge.app.setDirty({ anyDirty, activeName: name, activeDirty });
 }
 
 let installed = false;
@@ -474,12 +664,26 @@ export function installFileSession(): void {
     }),
   );
 
+  // 外部改动：窗口重新获焦时补一次，切标签时也补一次（2s 防抖）；没有后台轮询
+  if (typeof window.addEventListener === "function") {
+    const onWindowFocus = () => scheduleExternalCheck(300);
+    window.addEventListener("focus", onWindowFocus);
+    disposers.push(() => window.removeEventListener("focus", onWindowFocus));
+  }
+  disposers.push(
+    watch(
+      () => sessionState.activeId,
+      () => scheduleExternalCheck(200),
+    ),
+  );
+
   disposers.push(
     bridge.app.onCloseRequest(async ({ quit }) => {
+      const dirtyTabs = docTabs().filter((tab) => tab.store.isDirty);
       if (import.meta.env.DEV) {
-        console.info(`[close] request quit=${quit} dirty=${docStore.isDirty} busy=${closeState.busy}`);
+        console.info(`[close] request quit=${quit} dirty=${dirtyTabs.length} busy=${closeState.busy}`);
       }
-      logInfo("close: request", { quit, dirty: docStore.isDirty, busy: closeState.busy });
+      logInfo("close: request", { quit, dirty: dirtyTabs.length, busy: closeState.busy });
       if (closeState.busy) {
         logWarn("close: dropped, already busy", { quit });
         return;
@@ -487,25 +691,35 @@ export function installFileSession(): void {
       closeState.busy = true;
       let closed = false;
       try {
-        if (!docStore.isDirty) {
+        if (dirtyTabs.length === 0) {
           logInfo("close: clean, finish", { quit });
           bridge.app.finishClose(quit);
           closed = true;
           return;
         }
-        const choice = await bridge.dialog.unsaved();
-        logInfo("close: unsaved choice", { quit, choice });
+        // 活动标签上的进行中编辑先提交：否则"保存全部"会漏掉这几笔
+        if (ui.docOpen) hooks.prepareTabSwitch();
+        // 提交后脏集合可能变化（刚提交的文本编辑才算进文档）
+        const dirty = docTabs().filter((tab) => tab.store.isDirty);
+        const choice = await bridge.dialog.unsaved(dirty.map(tabLabel));
+        logInfo("close: unsaved choice", { quit, count: dirty.length, choice });
         if (choice === "cancel") return;
         if (choice === "discard") {
-          logInfo("close: discard", { quit });
+          logInfo("close: discard", { quit, count: dirty.length });
           bridge.app.finishClose(quit);
           closed = true;
           return;
         }
-        if (await saveDocument("close")) {
-          bridge.app.finishClose(quit);
-          closed = true;
+        // 保存全部：按标签顺序逐个落盘，第一个失败就停（已保存的保持已保存）
+        for (const tab of dirty) {
+          if (!(await saveDocument("close", tab))) {
+            logWarn("close: save failed, abort", { quit, tab: tab.id });
+            await bridge.dialog.error(t("file.closeSaveError", { detail: tabLabel(tab) })).catch(() => undefined);
+            return;
+          }
         }
+        bridge.app.finishClose(quit);
+        closed = true;
       } catch (error) {
         logError("close: threw", { quit, error: errorText(error), stack: errorStack(error) });
         await bridge.dialog.error(t("file.closeSaveError", { detail: errorText(error) })).catch(() => undefined);
@@ -528,5 +742,9 @@ export function installFileSession(): void {
  */
 import.meta.hot?.dispose(() => {
   for (const off of disposers.splice(0)) off();
+  if (statTimer) {
+    clearTimeout(statTimer);
+    statTimer = null;
+  }
   installed = false;
 });

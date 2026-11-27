@@ -94,9 +94,9 @@ const guard = new CloseGuard({
   quitApp: () => app.quit(),
 });
 
-function applyTitle(name: string): void {
+function applyTitle(name: string, dirty: boolean): void {
   if (!window || window.isDestroyed()) return;
-  window.setTitle(name ? `${name}${guard.isDirty ? " •" : ""} — Sqraft` : "Sqraft");
+  window.setTitle(name ? `${name}${dirty ? " •" : ""} — Sqraft` : "Sqraft");
 }
 
 /** 绑定窗口的关闭拦截；调用前 close 事件不会真正关闭窗口。 */
@@ -112,10 +112,13 @@ export function attachCloseGuard(win: BrowserWindow): void {
 }
 
 export function registerCloseChannels(): void {
-  ipcMain.on(CHANNELS.appSetDirty, (_event, payload: { dirty: boolean; name: string }) => {
-    guard.setDirty(payload.dirty);
-    applyTitle(payload.name);
-  });
+  ipcMain.on(
+    CHANNELS.appSetDirty,
+    (_event, payload: { anyDirty?: boolean; activeName?: string; activeDirty?: boolean }) => {
+      guard.setDirty(payload?.anyDirty === true);
+      applyTitle(payload?.activeName ?? "", payload?.activeDirty === true);
+    },
+  );
 
   ipcMain.on(CHANNELS.appFinishClose, (_event, payload: { quit: boolean }) => {
     guard.finishClose(payload.quit);

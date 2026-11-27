@@ -7,37 +7,43 @@ const PNG_1X1 =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=";
 
 describe("AI 工具：文档级操作与截图区域", () => {
-  it("document.new 交给宿主执行", async () => {
-    const store = new DocStore(createDocWithPage());
-    const calls: string[] = [];
-    const run = makeExecutor(store, async () => "", undefined, undefined, {
-      newDocument: async () => {
-        calls.push("new");
-        return true;
-      },
-    });
-    expect(await call(run, "document.new")).toEqual({ ok: true });
-    expect(calls).toEqual(["new"]);
-  });
-
-  it("document.new 把用户取消如实回报", async () => {
+  it("app_state 把工作台状态原样交给 agent", async () => {
     const store = new DocStore(createDocWithPage());
     const run = makeExecutor(store, async () => "", undefined, undefined, {
-      newDocument: async () => false,
+      appState: () => ({
+        active: {
+          tabId: "t1",
+          name: "首页.sqraft",
+          path: "/tmp/首页.sqraft",
+          dirty: true,
+          externalChange: false,
+          page: { id: "p1", name: "首页" },
+          selection: [{ id: "n1", name: "卡片", type: "frame" }],
+        },
+        tabs: [
+          { tabId: "home", name: "Home", path: null, dirty: false, home: true },
+          { tabId: "t1", name: "首页.sqraft", path: "/tmp/首页.sqraft", dirty: true, active: true },
+        ],
+        limit: 10,
+      }),
     });
-    expect(await call(run, "document.new")).toEqual({ ok: false, canceled: true });
+    const state = await call(run, "app_state");
+    expect(state).toMatchObject({
+      active: { tabId: "t1", dirty: true, page: { name: "首页" } },
+      limit: 10,
+    });
+    expect(state.tabs).toHaveLength(2);
   });
 
-  it("没有宿主时文档类工具给出可读错误", async () => {
+  it("没有宿主时 app_state 给出可读错误", async () => {
     const store = new DocStore(createDocWithPage());
     const run = makeExecutor(store, async () => "");
-    await expect(run("document.new", {})).rejects.toThrow(/不支持新建文档/);
+    await expect(run("app_state", {})).rejects.toThrow(/不支持 app_state/);
   });
 
   it("app_info 返回宿主版本与当前格式版本", async () => {
     const store = new DocStore(createDocWithPage());
     const run = makeExecutor(store, async () => "", undefined, undefined, {
-      newDocument: async () => true,
       appInfo: async () => ({ name: "Sqraft", version: "0.1.0", platform: "darwin" }),
     });
     const info = await call(run, "app_info");
@@ -47,9 +53,7 @@ describe("AI 工具：文档级操作与截图区域", () => {
 
   it("app_info 在没有宿主元信息时明确报错", async () => {
     const store = new DocStore(createDocWithPage());
-    const run = makeExecutor(store, async () => "", undefined, undefined, {
-      newDocument: async () => true,
-    });
+    const run = makeExecutor(store, async () => "");
     await expect(run("app_info", {})).rejects.toThrow(/不支持 app_info/);
   });
 
@@ -73,7 +77,6 @@ describe("AI 工具：导出与布局检查", () => {
     const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     const run = makeExecutor(store, async () => "", () => pageId, undefined, {
-      newDocument: async () => true,
       exportImage: async (request) =>
         request.format === "svg"
           ? {
@@ -102,7 +105,6 @@ describe("AI 工具：导出与布局检查", () => {
     const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     const run = makeExecutor(store, async () => "", () => pageId, undefined, {
-      newDocument: async () => true,
       importSvg: async () => ({
         ok: true,
         frameId: "frame-1",
@@ -136,7 +138,6 @@ describe("AI 工具：导出与布局检查", () => {
     ];
     for (const { failure, expected } of cases) {
       const run = makeExecutor(store, async () => "", () => pageId, undefined, {
-        newDocument: async () => true,
         importSvg: async () => failure,
       });
       await expect(run("import_svg", { svg: "<svg/>" })).rejects.toThrow(expected);
@@ -147,7 +148,6 @@ describe("AI 工具：导出与布局检查", () => {
     const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     const run = makeExecutor(store, async () => "", () => pageId, undefined, {
-      newDocument: async () => true,
       importSvg: async () => ({
         ok: false,
         reason: "empty-content",
@@ -166,7 +166,6 @@ describe("AI 工具：导出与布局检查", () => {
     const store = new DocStore(createDocWithPage());
     const pageId = firstPageId(store.doc)!;
     const run = makeExecutor(store, async () => "", () => pageId, undefined, {
-      newDocument: async () => true,
       importSvg: async () => ({
         ok: true,
         frameId: "frame-1",

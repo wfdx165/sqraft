@@ -49,7 +49,7 @@ export const FIXED_HINTS: { keys: string; labelKey: MessageKey }[] = [
 ];
 
 /** 系统菜单/角色占用，绑了也轮不到我们。 */
-const RESERVED = new Set(["⌘R", "⌘T", "⌘Q", "⌘M", "⌘H", "⌘⌥Esc", "⌘⇧W", "⌘⇧T", "⌘⌥I", "F12"]);
+const RESERVED = new Set(["⌘R", "⌘T", "⌘Q", "⌘M", "⌘H", "⌘⌥Esc", "⌘⇧W", "⌘⌥I", "F12"]);
 
 /** 输入焦点内仍然生效的命令（保存/打开/页面搜索不该被输入框吞掉）。 */
 const GLOBAL_ACTIONS = new Set<ActionId>([

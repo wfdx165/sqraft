@@ -7,6 +7,13 @@ import type { LanguagePreference, Locale, MessageKey } from "./i18n";
 import type { McpClientChannel, McpClientId, McpClientIssueCode } from "./mcp-clients";
 import type { CommandId } from "./commands";
 
+/** 磁盘文件的状态（外部改动检测用）：只 stat，不读内容。 */
+export interface FileStat {
+  path: string;
+  exists: boolean;
+  mtimeMs: number;
+}
+
 export interface OpenedFile {
   path: string;
   name: string;
@@ -287,9 +294,15 @@ export interface SqraftApi {
     exportMatrix(request: ExportMatrixRequest): Promise<ExportMatrixResult>;
     /** 读取上次的多倍率导出设置（对话框默认值） */
     exportSettings(): Promise<ExportSettings>;
+    /** 批量 stat 已保存的文档：外部改动检测只查 mtime，不读内容 */
+    stat(paths: string[]): Promise<FileStat[]>;
   };
   dialog: {
-    unsaved(): Promise<UnsavedChoice>;
+    /**
+     * 未保存确认框。`names` 给 1 个时问"这个文档"，给多个时问聚合的"保存全部 / 全部不保存"。
+     * 返回的 `save` 在聚合语义下表示"保存全部"。
+     */
+    unsaved(names?: string[]): Promise<UnsavedChoice>;
     overwrite(): Promise<OverwriteChoice>;
     error(message: string): Promise<void>;
   };
@@ -386,8 +399,8 @@ export interface SqraftApi {
     signalReady(): void;
     /** 主进程请求打开某个文件（recent / 拖拽 / 文件关联 / 第二实例） */
     onOpenRequest(handler: (path: string) => void): () => void;
-    /** 让主进程显示"已修改"标记并记住脏状态 */
-    setDirty(dirty: boolean, name: string): void;
+    /** 让主进程显示"已修改"标记并记住脏状态（anyDirty 拦退出，active* 只影响标题） */
+    setDirty(state: { anyDirty: boolean; activeName: string; activeDirty: boolean }): void;
     /** 渲染层日志：主进程统一格式化，写终端与平台日志目录（`app.getPath("logs")`） */
     log(level: AppLogLevel, event: string, fields?: Record<string, unknown>): void;
     /** 主进程请求关闭；渲染层处理完保存后调用 finishClose */
@@ -395,6 +408,10 @@ export interface SqraftApi {
     finishClose(quit: boolean): void;
     /** 用户在"保存 / 不保存 / 取消"里选了取消：解除挂起的关闭请求 */
     cancelClose(): void;
+    /** 请求关闭当前窗口（Home 上按 ⌘W）：仍走 CloseGuard 的未保存检查 */
+    closeWindow(): void;
+    /** 在系统文件管理器里定位一个文件（标签右键）；文件不存在时忽略 */
+    revealPath(path: string): Promise<void>;
   };
 }
 
@@ -408,6 +425,7 @@ export const CHANNELS = {
   prefsGradientPresets: "prefs:gradient-presets",
   prefsSetGradientPresets: "prefs:set-gradient-presets",
   fileOpenPath: "file:open-path",
+  fileStat: "file:stat",
   fileOpenRequest: "file:open-request",
   fileDropped: "file:dropped",
   dialogUnsaved: "dialog:unsaved",
@@ -455,4 +473,6 @@ export const CHANNELS = {
   appRequestClose: "app:request-close",
   appFinishClose: "app:finish-close",
   appCancelClose: "app:cancel-close",
+  appCloseWindow: "app:close-window",
+  appRevealPath: "app:reveal-path",
 } as const;

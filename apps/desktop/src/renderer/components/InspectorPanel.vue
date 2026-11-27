@@ -22,6 +22,7 @@ const {
   typeLabel,
   setName,
   setNum,
+  scrubNodeNumber,
   setRotation,
   setOpacity,
   toggleVisible,
@@ -249,9 +250,9 @@ const {
           </div>
         </div>
         <div class="grid">
-          <label>X</label><input class="mono" type="number" :value="fmt(node.x)" :disabled="readonly" @change="setNum('x', $event)" />
-          <label>Y</label><input class="mono" type="number" :value="fmt(node.y)" :disabled="readonly" @change="setNum('y', $event)" />
-          <label>W</label>
+          <label class="scrub" @pointerdown="scrubNodeNumber($event, 'x')">X</label><input class="mono" type="number" :value="fmt(node.x)" :disabled="readonly" @change="setNum('x', $event)" />
+          <label class="scrub" @pointerdown="scrubNodeNumber($event, 'y')">Y</label><input class="mono" type="number" :value="fmt(node.y)" :disabled="readonly" @change="setNum('y', $event)" />
+          <label class="scrub" @pointerdown="scrubNodeNumber($event, 'width')">W</label>
           <div class="field-with-select">
             <input class="mono" type="number" :value="fmt(node.width)" :disabled="readonly || node.type === 'group'" @change="setNum('width', $event)" />
             <select
@@ -266,7 +267,7 @@ const {
               <option v-if="supportsSizing">Fill</option>
             </select>
           </div>
-          <label>H</label>
+          <label class="scrub" @pointerdown="scrubNodeNumber($event, 'height')">H</label>
           <div class="field-with-select">
             <input class="mono" type="number" :value="fmt(node.height)" :disabled="readonly || node.type === 'group'" @change="setNum('height', $event)" />
             <select
@@ -1618,5 +1619,34 @@ select:disabled {
   margin: 4px 0 0;
   font-size: 11px;
   color: var(--danger, #d64545);
+}
+
+/* 字段标签可左右拖动调值 */
+label.scrub {
+  cursor: ew-resize;
+  user-select: none;
+  touch-action: none;
+}
+
+label.scrub:hover {
+  color: var(--accent);
+}
+
+/* 算式求值失败：抖一下，不写文档 */
+input.shake {
+  animation: input-shake 240ms var(--ease);
+}
+
+@keyframes input-shake {
+  0%,
+  100% {
+    transform: translateX(0);
+  }
+  25% {
+    transform: translateX(-3px);
+  }
+  75% {
+    transform: translateX(3px);
+  }
 }
 </style>
