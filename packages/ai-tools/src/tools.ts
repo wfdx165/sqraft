@@ -283,7 +283,7 @@ export interface ToolDefinition {
   readonly?: boolean;
 }
 
-export const tools: ToolDefinition[] = [
+const rawTools: ToolDefinition[] = [
   {
     name: "read_document",
     description:
@@ -908,7 +908,56 @@ export const tools: ToolDefinition[] = [
   {
     name: "app_state",
     description:
-      "当前工作台状态：活动标签（名称 / 绝对路径 / 脏标记 / 外部改动 / 活动页 / 选区摘要）、全部打开的标签与上限。agent 只能作用于活动标签，不能切换或关闭标签。活动标签是 Home 时，文档类工具会报错。",
+      "当前工作台状态：活动标签（名称 / 绝对路径 / 脏标记 / 外部改动 / 活动页 / 选区摘要）、全部打开的标签与上限。每个文档类工具都必须带 tabId（取这里的 active.tabId）：与活动标签不一致的调用直接报错，agent 不能切换或关闭标签。活动标签是 Home 时，文档类工具会报错。",
     input_schema: { type: "object", properties: {}, additionalProperties: false },
   },
 ];
+
+/** `app_info` / `app_state` 不作用于某一份文档，不需要 tabId。 */
+const TAB_FREE_TOOLS = new Set(["app_info", "app_state"]);
+
+/**
+ * 所有文档类工具的第一个参数：目标标签 id。
+ *
+ * 渲染层宿主在分派前校验它必须等于当前活动标签（ADR-0041）：用户切过标签后，
+ * agent 拿着旧上下文继续写会被明确拒绝，而不是落到"碰巧是活动标签"的文档上。
+ */
+const TAB_ID_SCHEMA = {
+  type: "string",
+  description:
+    "目标标签 id，取 app_state 的 active.tabId。必须等于当前活动标签：不一致时调用直接报错，工具不会替你切换标签。",
+};
+
+/**
+ * `tabId` 统一在这里注入，而不是在 30 多个 schema 里各写一遍：
+ * MCP `tools/list` 与 OpenAI 兼容导出都从这份数组派生，改一处两边同步。
+ */
+export const tools: ToolDefinition[] = rawTools.map((tool) => {
+  if (TAB_FREE_TOOLS.has(tool.name)) return tool;
+  const schema = tool.input_schema;
+  const properties = (schema.properties as Record<string, unknown> | undefined) ?? {};
+  const required = Array.isArray(schema.required) ? (schema.required as string[]) : [];
+  return {
+    ...tool,
+    // tabId 放首位：参数被折叠时最显眼，agent 也不容易漏
+    input_schema: {
+      ...schema,
+      properties: { tabId: TAB_ID_SCHEMA, ...properties },
+      required: ["tabId", ...required],
+    },
+  };
+});
+
+/** 作用于某一份文档的工具：Home 上不可用，调用必须带 tabId。 */
+const TAB_REQUIRED_TOOLS: ReadonlySet<string> = new Set(
+  tools.filter((tool) => !TAB_FREE_TOOLS.has(tool.name)).map((tool) => tool.name),
+);
+
+/**
+ * 这个工具是否作用于某一份文档（Home 上拒绝、调用必须带 `tabId`）。
+ *
+ * 未知工具返回 false：让执行器照旧报「未知工具」，不要抢在参数校验之前。
+ */
+export function requiresTabId(name: string): boolean {
+  return TAB_REQUIRED_TOOLS.has(name);
+}

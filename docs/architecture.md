@@ -298,7 +298,7 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 - 安全：只绑 `127.0.0.1`，拒绝带 `Origin` 的请求，`Host` 只接受本机；**无 token**——同机其他用户也能连，这是相对 Unix socket 的显式取舍；
 - 多客户端并存，所有工具调用进同一队列串行执行；单次调用 30s 超时；会话结束（`DELETE` / 过期）时排队中的调用直接丢弃；
 - **一次工具调用只执行一次**：渲染层的监听宿主登记在 `globalThis` 上，重复安装先摘掉旧监听，并按主进程分配的调用号去重（同号的重复投递静默丢弃）。dev 热更新会重新执行渲染层模块，少了这一层，旧实例的监听会和新实例一起处理同一条调用——`create_node` 会落两个节点（返回 id 之外多一个没有子节点的副本）；
-- **调用钉住标签**：每次 `tools/call` 在开始时捕获活动标签，执行器、导入、导出、变更清单都绑在那一份 `DocStore` 上，中途切标签不会把写入带到别的文档（`import_svg` / 带图节点这类 `await` 期间尤其重要）；`screenshot` 依赖当前画布，切走后明确报错而不是截另一份稿；agent 报告写回所属标签，切回来时由 `activateTab` 恢复；
+- **目标标签（`tabId`）**：除 `app_info` / `app_state` 外，所有工具都带必填 `tabId`，值取 `app_state` 的 `active.tabId`。渲染层在分派前校验：缺失、或不是当前活动标签（含已打开但未激活的标签、已关闭的 id）就整次调用报错、文档零改动——用户切过标签后，agent 拿着旧上下文继续写不会被静默落到"碰巧活动"的那份稿上。校验通过后这次调用钉住该标签：执行器、导入、导出、变更清单都绑在那一份 `DocStore` 上，中途再切标签也不会把写入带到别的文档（`import_svg` / 带图节点这类 `await` 期间尤其重要）；`screenshot` 依赖当前画布，切走后明确报错而不是截另一份稿；agent 报告写回所属标签，切回来时由 `activateTab` 恢复；
 - **参数契约**：执行器分派前按工具的 `input_schema` 校验，显式声明 `additionalProperties: false` 的层级出现未声明的键就整次调用失败——handler 不执行、不产生撤销步、文档零改动；错误点名键、路径（如 `effects[0].foo`）与该层可用参数，避免"返回 ok 但画布没动"。`oneOf` / `anyOf` 取最匹配的分支报错，没有 `additionalProperties` 的层级保持宽松；
 - 工具清单与执行器都在渲染进程（`@sqraft/ai-tools` 的唯一真源），主进程只转发；截图只取文档层画布，不含编辑器叠加层。
 
@@ -310,7 +310,7 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 
 **操作日志**：会话创建、`tools/list`、每次 `tools/call` 的耗时与错误都以 `[mcp]` 单行写终端（info/warn → stdout，error → stderr）并追加到 `app.getPath("logs")/sqraft.log`（macOS `~/Library/Logs/Sqraft/`），不经 `console`。同一份日志还有两种来源：主进程事件标 `[app]`（生命周期、文件类 IPC、对话框），渲染层上报标 `[renderer]`（快捷键分发、保存链路、未捕获错误）——渲染层拿不到文件系统，只经 `app:log` 白名单通道发"事件 + 字段"。参数只记摘要——长字符串截断、`data:image` 折叠成类型与体积，规则单点在 `src/main/mcp/log.ts`；落盘与轮转（10MB × 10 个文件）在 `src/main/log-file.ts`，写失败静默降级为仅终端。身份来自客户端 `initialize` 的 `clientInfo`（如 `c1 claude-code/2.1`）。排障用的端口与进程信息写在 `userData/mcp.json`（0600），那不是客户端发现机制。帮助菜单的「打开日志目录」直接定位到日志。
 
-工具清单（v1）：
+工具清单（v1）。除 `app_info` / `app_state` 外，下表每个工具都要求 `tabId`（见上一条），参数按各自的 `input_schema` 校验：
 
 | 工具 | 读/写 | 说明 |
 |---|---|---|
@@ -336,13 +336,13 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 | `export_as` | 读 | 页面或选区导出成数据：`format:"png"` 给 data URL（`scale` 1/2/4），`format:"svg"` 给源码；选区透明底，页面导出只画该页、不含根级母版；背景模糊与 angular/diamond 渐变节点会被栅格化并列进 `rasterized` |
 | `import_svg` | 写 | SVG 源码（≤5MB）导入成可编辑节点，包在一个 frame 里、一个撤销步；支持形状/路径/文本/本地 use/纯色与线性径向渐变；不支持的特性按元素栅格化并以图片节点落回原位，清单进 `rasterized` |
 | `screenshot` | 读 | 离屏重绘文档为 PNG（不含编辑器叠加层）；可选 `region` 只截文档坐标下的某块。`format="text"` 给纯文本替代视图：区域内节点的世界坐标、解析后的填充/描边颜色、文字与诊断（最多 200 个） |
-| `app_state` | 读 | 工作台状态：活动标签（名称 / 绝对路径 / 脏标记 / 外部改动 / 活动页 / 选区摘要）、全部标签与上限。agent 只能作用于活动标签，不能切标签、开文档、关标签；活动标签是 Home 时，文档类工具（含 `screenshot`、`export_as`）返回错误并列出已打开的标签名（ADR-0041） |
+| `app_state` | 读 | 工作台状态：活动标签（名称 / 绝对路径 / 脏标记 / 外部改动 / 活动页 / 选区摘要）、全部标签与上限。文档类工具的 `tabId` 从这里取；与活动标签不一致的调用直接报错。agent 不能切标签、开文档、关标签；活动标签是 Home 时，文档类工具（含 `screenshot`、`export_as`）返回错误并列出已打开的标签名（ADR-0041） |
 
 **画布反馈**：写工具执行期间，画布在 UI 叠加层给这次调用的改动画青色虚线框——只取最外层节点（建一棵子树只描根框），页面本身不描（整页虚线没有信息量），`delete_node` 改描父容器（父容器是页面时同样跳过）；调用结束 480ms 淡出。顶部模块右端的 agent 状态胶囊（保存状态左侧）同时显示「客户端 · 工具名」，跨页或改动在视口外时多一个跳转按钮（切页 + 飞行定位到改动包围盒；跨页切页按 `activatePage` 既有规则清空选区，不额外选中改动节点；一次调用跨多页时只指向第一处改动），调用结束后残留 5 秒再回落到连接数。只读工具与失败的写调用都不碰画布，后者不留下"刚改了…"的字样。状态住在非响应式的 `renderer/canvas/agent-activity.ts`，因此不进 `RenderBackend`、不进导出，也不进 `screenshot`。
 
 **撤销粒度**：一次工具调用里的多条命令通过 `DocStore.transact` 合并成单条撤销记录；事务失败时回滚，文档不会停在半成品状态。
 
-**写入诊断**：事务提交后对这次 `changed` 里的节点（`shallow`：只查节点自身；`changed` 已含每个被动到的节点，新建子树与布局回写都会逐个加进去）跑 `@sqraft/core` 的纯函数 `diagnose()`（`ZERO_SIZE` / `TEXT_NO_FILL` / `TEXT_OVERFLOW` / `TOKEN_MISSING` / `OUTSIDE_PARENT`），非空时并进同一响应（每调用最多扫 2000 节点、报 20 条）。只警告、不回滚、不新建撤销步；文本度量由渲染层注入。`initialize` 的 `instructions` 承载跨工具的工作规则（先搜索再读取、处理诊断、无视觉用文本视图、优先用自动布局表达结构）。
+**写入诊断**：事务提交后对这次 `changed` 里的节点（`shallow`：只查节点自身；`changed` 已含每个被动到的节点，新建子树与布局回写都会逐个加进去）跑 `@sqraft/core` 的纯函数 `diagnose()`（`ZERO_SIZE` / `TEXT_NO_FILL` / `TEXT_OVERFLOW` / `TOKEN_MISSING` / `OUTSIDE_PARENT`），非空时并进同一响应（每调用最多扫 2000 节点、报 20 条）。只警告、不回滚、不新建撤销步；文本度量由渲染层注入。`initialize` 的 `instructions` 承载跨工具的工作规则（先 `app_state` 取 `tabId`、先搜索再读取、处理诊断、无视觉用文本视图、优先用自动布局表达结构）。
 
 **布局建议**：写工具的返回体还可能在诊断之外带 `layoutHints`——不是诊断，不阻塞、不改文档。判断条件是某个**没有自动布局**的 frame/component，其全部子项（≥3、都可见、非矢量插画、非 fill）沿一条轴线等距排开、交叉轴对齐且都在容器内；此时给出可直接传给 `update_node` 的 `suggested`（direction / gap / padding / crossAlign），按它加上布局后求解结果与当前摆放一致。只在父容器本身也被这次调用改动（新建子项、换父级、`arrange_nodes` 对齐/分布）时出现，单独改子项内容不会重复提醒；`import_svg` 的产物是插画，不提示。
 

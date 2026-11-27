@@ -352,10 +352,13 @@ onBeforeUnmount(() => {
   color: var(--text);
 }
 
+/* 活动标签：淡靛底 + 靛蓝文字 + 细描边。顶栏本身接近白色，
+   只靠白底胶囊和浅阴影分不出来；这层底色与「更新」chip 同一套语言。
+   不改字重：只给活动态加粗会让标签变宽，切换时后面的标签跟着横向抖动。 */
 .tab.on {
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: 0 1px 3px var(--tint-12);
+  background: var(--accent-soft);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent-line);
 }
 
 .tab .name {

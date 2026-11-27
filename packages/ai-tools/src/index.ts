@@ -13,7 +13,7 @@ import { tools, type ToolDefinition } from "./tools";
 import { assertKnownArgs } from "./validate-args";
 import type { DocumentHost, ExecutorOptions, ScreenshotRegion, ToolContext, ToolExecutor } from "./types";
 
-export { tools };
+export { tools, requiresTabId } from "./tools";
 export type { ToolDefinition };
 export { MUTATING_TOOLS } from "./handlers";
 export { assertEffectTokens, assertNumberToken, assertToken } from "./args";

@@ -3,7 +3,7 @@
  * 没有打开文档时，第一次工具调用会先建一份空稿——agent 不该卡在欢迎页。
  */
 import { reactive, watch } from "vue";
-import { MUTATING_TOOLS, makeExecutor, toMCPManifest, type ToolExecutor } from "@sqraft/ai-tools";
+import { MUTATING_TOOLS, makeExecutor, requiresTabId, toMCPManifest, type ToolExecutor } from "@sqraft/ai-tools";
 import type { NodeId } from "@sqraft/core";
 import type { McpClientInfo, McpStatus } from "../shared/ipc";
 import {
@@ -20,7 +20,7 @@ import {
 import { hooks, ui } from "./store";
 import { MAX_DOC_TABS, activeSession, docTabs, sessionState, type TabSession } from "./sessions";
 import { tabLabel } from "./tab-label";
-import { noActiveDocument } from "../shared/agent-text";
+import { noActiveDocument, tabIdRequired, tabNotActive } from "../shared/agent-text";
 import type { AppState, DocumentHost } from "@sqraft/ai-tools";
 import {
   buildAgentChanges,
@@ -464,9 +464,28 @@ export function installMcpHost(): void {
       let ok = false;
       let value: string | undefined;
       try {
-        // Home 上没有文档：除 app_info / app_state 外一律拒绝，且不隐式新建（ADR-0041）
-        if (session.kind !== "doc" && name !== "app_info" && name !== "app_state") {
+        // 文档类工具 = 必须带 tabId 的工具；豁免名单在 ai-tools 里单点维护
+        const needsTab = requiresTabId(name);
+        // Home 上没有文档：文档类工具一律拒绝，且不隐式新建（ADR-0041）
+        if (session.kind !== "doc" && needsTab) {
           throw new Error(noActiveDocument(docTabs().map(tabLabel)));
+        }
+        // 文档类工具必须显式声明目标标签，且必须就是当前活动标签：
+        // 用户切过标签后，agent 拿旧上下文继续写会被拒绝，而不是落到碰巧活动的那份稿上（ADR-0041）。
+        if (session.kind === "doc" && needsTab) {
+          const requested = typeof args.tabId === "string" ? args.tabId.trim() : "";
+          if (!requested) {
+            throw new Error(tabIdRequired({ id: session.id, name: tabLabel(session) }));
+          }
+          if (requested !== session.id) {
+            throw new Error(
+              tabNotActive(
+                requested,
+                { id: session.id, name: tabLabel(session) },
+                docTabs().map((tab) => ({ id: tab.id, name: tabLabel(tab) })),
+              ),
+            );
+          }
         }
         if (mutates) beginAgentCall(session, name, clientLabel, args);
         value = await executorFor(session)(name, args);

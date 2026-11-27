@@ -65,8 +65,8 @@ function onlyListener(): (request: McpCallRequest) => Promise<void> {
   return [...listeners][0] as (request: McpCallRequest) => Promise<void>;
 }
 
-/** Home 上没有文档，文档类工具会被拒绝：每个跑工具的用例先开一个空文档标签。 */
-async function openDoc(): Promise<void> {
+/** Home 上没有文档，文档类工具会被拒绝：每个跑工具的用例先开一个空文档标签，返回它的 tabId。 */
+async function openDoc(): Promise<string> {
   const [{ createDocTab }, { activateTab }, { createEmptyDoc }] = await Promise.all([
     import("./sessions"),
     import("./store"),
@@ -74,6 +74,7 @@ async function openDoc(): Promise<void> {
   ]);
   const tab = createDocTab(createEmptyDoc());
   activateTab(tab.id);
+  return tab.id;
 }
 
 describe("MCP 宿主只执行一次", () => {
@@ -117,9 +118,9 @@ describe("MCP 宿主只执行一次", () => {
     const { docStore } = await import("./store");
     installMcpHost();
     const handle = onlyListener();
-    await openDoc();
+    const tabId = await openDoc();
 
-    const request: McpCallRequest = { id: 7, name: "create_node", args: { kind: "rect" } };
+    const request: McpCallRequest = { id: 7, name: "create_node", args: { kind: "rect", tabId } };
     await Promise.all([handle(request), handle(request)]);
 
     expect(responses).toHaveLength(1);
@@ -133,10 +134,10 @@ describe("MCP 宿主只执行一次", () => {
     const { docStore } = await import("./store");
     installMcpHost();
     const handle = onlyListener();
-    await openDoc();
+    const tabId = await openDoc();
 
-    await handle({ id: 1, name: "create_node", args: { kind: "rect" } });
-    await handle({ id: 2, name: "create_node", args: { kind: "ellipse" } });
+    await handle({ id: 1, name: "create_node", args: { kind: "rect", tabId } });
+    await handle({ id: 2, name: "create_node", args: { kind: "ellipse", tabId } });
 
     expect(responses).toHaveLength(2);
     expect(responses.every((entry) => entry.ok)).toBe(true);
@@ -148,16 +149,16 @@ describe("MCP 宿主只执行一次", () => {
     const { agentActivity } = await import("./canvas/agent-activity");
     installMcpHost();
     const handle = onlyListener();
-    await openDoc();
+    const tabId = await openDoc();
 
-    await handle({ id: 1, name: "read_document", args: {} });
+    await handle({ id: 1, name: "read_document", args: { tabId } });
     expect(mcpUi.activity).toBeNull();
     expect(agentActivity.rects).toHaveLength(0);
 
     await handle({
       id: 2,
       name: "create_node",
-      args: { kind: "rect" },
+      args: { kind: "rect", tabId },
       clientLabel: "c1 claude-code/2.1",
     });
 
@@ -213,13 +214,87 @@ describe("MCP 宿主只执行一次", () => {
     const { agentActivity } = await import("./canvas/agent-activity");
     installMcpHost();
     const handle = onlyListener();
-    await openDoc();
+    const tabId = await openDoc();
 
     // 节点不存在：工具抛错，事务回滚
-    await handle({ id: 1, name: "update_node", args: { nodeId: "nope", name: "改个名" } });
+    await handle({ id: 1, name: "update_node", args: { nodeId: "nope", name: "改个名", tabId } });
 
     expect(responses[0]?.ok).toBe(false);
     expect(mcpUi.activity).toBeNull();
     expect(agentActivity.rects).toHaveLength(0);
+  });
+});
+
+describe("文档工具的目标标签", () => {
+  beforeEach(() => {
+    resetHostState();
+    vi.resetModules();
+  });
+
+  it("缺 tabId 直接拒绝，读写工具都不跑，文档零改动", async () => {
+    const { installMcpHost } = await import("./mcp-host");
+    const { docStore } = await import("./store");
+    installMcpHost();
+    const handle = onlyListener();
+    const tabId = await openDoc();
+    const before = Object.keys(docStore.doc.nodes).length;
+
+    await handle({ id: 1, name: "create_node", args: { kind: "rect" } });
+    await handle({ id: 2, name: "read_document", args: {} });
+
+    expect(responses[0]?.ok).toBe(false);
+    expect(responses[0]?.error).toContain("tabId");
+    // 报错直接把活动标签写出来，agent 不必再查一次 app_state
+    expect(responses[0]?.error).toContain(tabId);
+    expect(responses[1]?.ok).toBe(false);
+    expect(responses[1]?.error).toContain("tabId");
+    expect(responses[1]?.error).toContain(tabId);
+    // 空文档不会因为这次调用被"补建页面"
+    expect(Object.keys(docStore.doc.nodes)).toHaveLength(before);
+  });
+
+  it("指向另一个打开的标签时报错，写明活动标签，两份文档都不动", async () => {
+    const { installMcpHost } = await import("./mcp-host");
+    const { createDocTab } = await import("./sessions");
+    const { createEmptyDoc } = await import("@sqraft/core");
+    installMcpHost();
+    const handle = onlyListener();
+    const activeId = await openDoc();
+    const other = createDocTab(createEmptyDoc());
+    const before = Object.keys(other.store.doc.nodes).length;
+
+    await handle({ id: 1, name: "create_node", args: { kind: "rect", tabId: other.id } });
+
+    expect(responses[0]?.ok).toBe(false);
+    expect(responses[0]?.error).toContain(other.id);
+    expect(responses[0]?.error).toContain(activeId);
+    expect(Object.keys(other.store.doc.nodes)).toHaveLength(before);
+  });
+
+  it("未知 tabId 列出手上打开的标签", async () => {
+    const { installMcpHost } = await import("./mcp-host");
+    installMcpHost();
+    const handle = onlyListener();
+    const tabId = await openDoc();
+
+    await handle({ id: 1, name: "create_node", args: { kind: "rect", tabId: "t-nope" } });
+
+    expect(responses[0]?.ok).toBe(false);
+    expect(responses[0]?.error).toContain("No open document tab");
+    expect(responses[0]?.error).toContain(tabId);
+  });
+
+  it("tabId 是当前活动标签时正常执行", async () => {
+    const { installMcpHost } = await import("./mcp-host");
+    const { docStore } = await import("./store");
+    installMcpHost();
+    const handle = onlyListener();
+    const tabId = await openDoc();
+
+    await handle({ id: 1, name: "create_node", args: { kind: "rect", tabId } });
+
+    expect(responses[0]?.ok).toBe(true);
+    // 空文档会先建一页：页 + 矩形
+    expect(Object.keys(docStore.doc.nodes)).toHaveLength(2);
   });
 });

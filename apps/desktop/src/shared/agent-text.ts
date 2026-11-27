@@ -19,10 +19,37 @@ export function noActiveDocument(openTabs: string[]): string {
 }
 
 /**
+ * 文档类工具没带 `tabId`：工具只作用于显式声明的标签，不隐式跟随活动标签。
+ * 直接把活动标签写进文案，agent 不用再调一次 `app_state` 才能重试。
+ */
+export function tabIdRequired(active: { id: string; name: string }): string {
+  return `tabId is required. Pass the active tab's id "${active.id}" (${active.name}) as tabId; tools never pick or switch the tab for you.`;
+}
+
+/**
+ * `tabId` 与当前活动标签不一致时的统一拒绝文案。
+ *
+ * 列出手上的文档标签，agent 要么改用正确的 id，要么请用户切过去——
+ * 不猜"用户大概想看哪一个"。
+ */
+export function tabNotActive(
+  requested: string,
+  active: { id: string; name: string },
+  open: { id: string; name: string }[],
+): string {
+  if (!open.some((tab) => tab.id === requested)) {
+    const list = open.map((tab) => `${tab.id} (${tab.name})`).join(", ");
+    return `No open document tab "${requested}". Open documents: ${list || "none"}. Call app_state for tab ids.`;
+  }
+  return `tabId "${requested}" is not the active tab (active: ${active.id} "${active.name}"). Ask the user to switch to it, then call app_state and retry.`;
+}
+
+/**
  * MCP `initialize` 里返回给客户端的全局工作规则。
  * 大多数客户端会把它当系统提示注入：这里写跨工具的流程，工具 description 只管参数。
  */
 export const AGENT_INSTRUCTIONS = [
+  "Call app_state first; every document tool call must carry the active tab's id as tabId. A call whose tabId is not the active tab fails without touching any document.",
   'Start with search_nodes when you need to find something, then read_document with scope:"subtree" on the hit id.',
   'read_document defaults to the active page at depth 1; ask for scope:"document" only when you need an overview.',
   "Every write result may carry diagnostics. Fix warnings before moving on.",
