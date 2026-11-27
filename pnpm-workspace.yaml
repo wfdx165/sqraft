@@ -1,3 +1,12 @@
 packages:
   - "packages/*"
   - "apps/*"
+
+# pnpm 11 起 `package.json` 的 `pnpm` 字段不再生效，构建设置只认这份文件；
+# 没列出来的依赖只要有安装脚本就会让 install 以 ERR_PNPM_IGNORED_BUILDS 失败。
+# 只放行确实需要跑脚本的三个：electron（下载运行时）、esbuild（装平台二进制）、
+# electron-winstaller（electron-builder 的传递依赖，选 7z 架构）。
+allowBuilds:
+  electron: true
+  electron-winstaller: true
+  esbuild: true
