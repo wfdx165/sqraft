@@ -354,6 +354,26 @@ export function imagePending(assetId: string): boolean {
 }
 
 /**
+ * 按屏幕需要的比例等一级位图（缩略图预载用：只解到 1/4、1/8 这类小级别，
+ * 不要像 `ensureAssetDecoded` 那样为一张小图解码整张原图）。失败返回 null。
+ */
+export async function ensureAssetFor(assetId: string, want: number): Promise<ResolvedImage | null> {
+  const record = records.get(assetId);
+  if (!record || failed.has(assetId)) return null;
+  const level = levelFor(record, want);
+  const hit = touch(cacheKey(assetId, level));
+  if (hit) return hit;
+  try {
+    const image = await ensureDecoded(record, level);
+    remember(record, level, image);
+    return image;
+  } catch {
+    failed.add(assetId);
+    return null;
+  }
+}
+
+/**
  * 等待一份资源的**原图**解码完成（导出前预载用：`imageFor` 只读缓存，未解码会落成占位）。
  * 超限/解码失败返回 null，不抛错。
  */

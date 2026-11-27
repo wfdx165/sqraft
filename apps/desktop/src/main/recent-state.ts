@@ -120,6 +120,16 @@ export async function touchRecentFile(path: string): Promise<void> {
   await savePreferences(preferencesFile(), preferences);
 }
 
+/** 从最近列表整体清空（欢迎页的「清空」）：菜单、偏好与 macOS 最近文档一起清。 */
+export async function clearRecentFiles(): Promise<void> {
+  if (recent.length === 0) return;
+  recent = [];
+  setRecentFiles(recent);
+  if (process.platform === "darwin") app.clearRecentDocuments();
+  preferences = { ...preferences, recentFiles: [] };
+  await savePreferences(preferencesFile(), preferences);
+}
+
 /** 从最近列表剔除（文件已被删除/移动时自愈）。 */
 export async function forgetRecentFile(path: string): Promise<void> {
   recent = removeRecent(recent, path);

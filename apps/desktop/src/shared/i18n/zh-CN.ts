@@ -188,10 +188,24 @@ export const zhCN = {
   "example.login": "登录页示例",
   "example.cards": "卡片列表示例",
   "example.umbra": "日食落地页示例",
+  "example.login.desc": "表单、按钮、投影",
+  "example.cards.desc": "三列卡片与自动布局",
+  "example.umbra.desc": "暗色落地页与渐变",
   "welcome.examples": "试试示例",
   "welcome.newDoc": "新建文档",
   "welcome.open": "打开…",
   "welcome.recent": "最近打开",
+  "welcome.recentEmpty": "打开过的文件会出现在这里",
+  "welcome.recentMissing": "文件已移动或删除",
+  "welcome.recentClear": "清空",
+  "welcome.recentClearConfirm": "确认清空？",
+  "welcome.prompts.idle": "接入后可以这样用",
+  "welcome.prompts.active": "试试让它做点什么",
+  "time.justNow": "刚刚",
+  "time.minutesAgo": "{count} 分钟前",
+  "time.hoursAgo": "{count} 小时前",
+  "time.yesterday": "昨天",
+  "time.daysAgo": "{count} 天前",
   "mcp.clientGeneric": "通用",
 
   // 欢迎页 / 连接状态里的 MCP 状态
@@ -903,6 +917,7 @@ export const zhCN = {
   "file.openError": "无法打开这个文件：{detail}",
   "file.saveError": "保存失败：{detail}",
   "file.saveAsError": "另存为失败：{detail}",
+  "file.saveAsConflict": "「{name}」已在另一个标签中打开，这次没有保存。请换个文件名，或先关闭那个标签。",
   "file.closeSaveError": "关闭前保存失败：{detail}",
 
   // 资源 / 剪贴板 / 图片错误

@@ -24,6 +24,8 @@ import { linkedPreviewUrl, linkedVersion } from "../linked-images";
 interface Row {
   node: DocNode;
   depth: number;
+  /** 搜索时：这一行自己的名字/文字命中（祖先可能只是路径，不算命中） */
+  match?: boolean;
 }
 
 const pages = computed(() => {
@@ -141,16 +143,17 @@ const searchRows = computed<Row[]>(() => {
     if (!visible.has(id)) return;
     const node = docStore.doc.nodes[id];
     if (!node) return;
-    out.push({ node, depth });
+    const match = node.name.toLowerCase().includes(q) || (node.text ?? "").toLowerCase().includes(q);
+    out.push({ node, depth, match });
     for (const child of [...node.children].reverse()) build(child, depth + 1);
   };
   for (const child of [...page.children].reverse()) build(child, 0);
   return out;
 });
 
-/** 搜索框里回车：选中第一条命中的图层并把它带进视口。 */
+/** 搜索框里回车：选中第一条**自身命中**的图层（不是只作为路径出现的祖先），并把它带进视口。 */
 function selectFirstMatch(): void {
-  const row = searchRows.value[0];
+  const row = searchRows.value.find((item) => item.match) ?? searchRows.value[0];
   if (!row) return;
   select([row.node.id]);
   hooks.focusNode(row.node.id);

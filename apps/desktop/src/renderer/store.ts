@@ -6,7 +6,7 @@
  * 活动标签的**门面**；`ui` 里按标签记的字段也是转发到 `sessionState` 的访问器。
  * 63 个直接 import 的文件因此仍然按「只有一个 store / 一个 ui」的方式写。
  */
-import { reactive } from "vue";
+import { nextTick, reactive } from "vue";
 import {
   firstPageId,
   NUMERIC_TOKEN_CHANGED,
@@ -18,6 +18,7 @@ import {
   type NodeId,
 } from "@sqraft/core";
 import { agentReport, clearAgentReport, setAgentReport, type AgentChange, type AgentDiagnostic } from "./agent-report";
+import { resetAgentActivity } from "./canvas/agent-activity";
 import { panelsUi } from "./focus";
 import {
   activeSession,
@@ -234,6 +235,9 @@ export const ui = reactive({
   panels: panelsUi,
 });
 
+/** 切标签时 `emitAll` 会带全量 changed：那是换文档，不是一次编辑，跳过全量文本重排。 */
+let switchingTab = false;
+
 docStore.subscribe((_state, changed) => {
   ui.version += 1;
   if (ui.expandedPageId && !docStore.doc.nodes[ui.expandedPageId]) {
@@ -249,7 +253,7 @@ docStore.subscribe((_state, changed) => {
   // 数值 Token 改值（token 命令会带 NUMERIC_TOKEN_CHANGED 标记）可能改字号/行高：
   // 全量文本都要重算；普通编辑只需要修 auto-height 的高度。
   const tokenChanged = changed.has(NUMERIC_TOKEN_CHANGED as NodeId);
-  queueMicrotask(() => reflowText(tokenChanged));
+  if (!switchingTab) queueMicrotask(() => reflowText(tokenChanged));
 });
 
 let reflowing = false;
@@ -315,15 +319,20 @@ export function replaceDocument(state: DocState): void {
  * 顺序很重要：先把进行中的编辑落进**旧**文档（此时活动标签还是旧的），
  * 再把视口存进旧标签、换 activeId、重挂门面、恢复新标签的视口与 agent 清单，
  * 最后重放一次全量变更让 UI / 画布 / 标题一起刷新。
+ *
+ * 视口恢复放进 `nextTick`：从 Home 切回文档时画布还没挂载，`hooks.restoreViewport`
+ * 此刻还是空实现（`CanvasView.onBeforeUnmount` 摘掉的），同步调用会被吞掉。
+ * 等 DOM 更新、`onMounted` 装回 hooks 之后再恢复；期间又切走就放弃。
  */
 export function activateTab(id: string): void {
   if (id === sessionState.activeId) return;
   const next = sessionState.tabs.find((tab) => tab.id === id);
   if (!next) return;
 
-  hooks.prepareTabSwitch();
   const current = sessionState.tabs.find((tab) => tab.id === sessionState.activeId);
   if (current) {
+    // 关闭活动标签后 activeId 会短暂指向已删除的 id，这时没有"旧文档"要收尾
+    hooks.prepareTabSwitch();
     const viewport = hooks.getViewport();
     if (viewport) current.view.viewport = { x: viewport.x, y: viewport.y, zoom: viewport.zoom };
     current.view.agentReport = {
@@ -334,8 +343,9 @@ export function activateTab(id: string): void {
   }
 
   sessionState.activeId = id;
-  // 演示是窗口级：切标签绝不呈现后台标签的文档
+  // 演示是窗口级：切标签绝不呈现后台标签的文档；agent 描边也不能画到新文档上
   ui.presenter = null;
+  resetAgentActivity();
   docStore.rebind();
   setAgentReport(
     {
@@ -344,9 +354,18 @@ export function activateTab(id: string): void {
     },
     [...(next.view.agentReport.diagnostics as AgentDiagnostic[])],
   );
-  if (next.view.viewport) hooks.restoreViewport(next.view.viewport);
-  else hooks.fitActivePage();
-  docStore.emitAll();
+  const target = id;
+  void nextTick(() => {
+    if (sessionState.activeId !== target) return;
+    if (next.view.viewport) hooks.restoreViewport(next.view.viewport);
+    else hooks.fitActivePage();
+  });
+  switchingTab = true;
+  try {
+    docStore.emitAll();
+  } finally {
+    switchingTab = false;
+  }
 }
 
 export function undo(): void {

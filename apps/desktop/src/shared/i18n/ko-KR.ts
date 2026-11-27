@@ -188,10 +188,24 @@ export const koKR: Record<keyof typeof zhCN, string> = {
   "example.login": "로그인 예제",
   "example.cards": "카드 그리드 예제",
   "example.umbra": "개기일식 페이지 예제",
+  "example.login.desc": "폼, 버튼, 그림자",
+  "example.cards.desc": "3열 카드와 자동 레이아웃",
+  "example.umbra.desc": "그라데이션 다크 랜딩 페이지",
   "welcome.examples": "예제 사용해 보기",
   "welcome.newDoc": "새 문서",
   "welcome.open": "열기…",
   "welcome.recent": "최근 항목",
+  "welcome.recentEmpty": "연 파일이 여기에 표시됩니다",
+  "welcome.recentMissing": "파일이 이동되었거나 삭제되었습니다",
+  "welcome.recentClear": "비우기",
+  "welcome.recentClearConfirm": "모두 지울까요?",
+  "welcome.prompts.idle": "연결 후 이렇게 사용할 수 있어요",
+  "welcome.prompts.active": "무언가 만들어 보게 하기",
+  "time.justNow": "방금",
+  "time.minutesAgo": "{count}분 전",
+  "time.hoursAgo": "{count}시간 전",
+  "time.yesterday": "어제",
+  "time.daysAgo": "{count}일 전",
   "mcp.clientGeneric": "범용",
 
   // MCP 상태
@@ -903,6 +917,7 @@ export const koKR: Record<keyof typeof zhCN, string> = {
   "file.openError": "이 파일을 열 수 없습니다: {detail}",
   "file.saveError": "저장하지 못했습니다: {detail}",
   "file.saveAsError": "다른 이름으로 저장하지 못했습니다: {detail}",
+  "file.saveAsConflict": "“{name}” 파일이 다른 탭에서 열려 있어 저장하지 않았습니다. 다른 이름을 사용하거나 해당 탭을 먼저 닫으세요.",
   "file.closeSaveError": "닫기 전 저장하지 못했습니다: {detail}",
 
   // 자산 / 클립보드 / 이미지 오류

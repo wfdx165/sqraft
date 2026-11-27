@@ -10,6 +10,7 @@ import { handlers, MUTATING_TOOLS } from "./handlers";
 import { attachDiagnostics } from "./diagnostics";
 import { attachLayoutHints } from "./layout-hints";
 import { tools, type ToolDefinition } from "./tools";
+import { assertKnownArgs } from "./validate-args";
 import type { DocumentHost, ExecutorOptions, ScreenshotRegion, ToolContext, ToolExecutor } from "./types";
 
 export { tools };
@@ -28,6 +29,9 @@ export type {
   ToolExecutor,
 } from "./types";
 export type { Command } from "@sqraft/core";
+
+/** 工具名 → input_schema：只在执行器里用来拦未知参数，不参与分派。 */
+const inputSchemas = new Map(tools.map((tool) => [tool.name, tool.input_schema]));
 
 export function makeExecutor(
   store: DocStore,
@@ -55,6 +59,8 @@ export function makeExecutor(
   return async (name, args = {}) => {
     const handler = handlers[name];
     if (!handler) throw new Error(`未知工具: ${name}`);
+    // 未知键必须在这里失败：handler 会挑着读，静默丢掉就成了"报成功但没改"
+    assertKnownArgs(name, inputSchemas.get(name), args);
     if (!MUTATING_TOOLS.has(name)) return handler(ctx, args);
 
     // 诊断要的是「这次事务动了什么」：apply 的 changed 集合比人工列举可靠

@@ -2,7 +2,7 @@
  * 把一份 SVG 源插成页面里的 frame（GUI 拖入与 agent `import_svg` 共用）。
  * 解析失败 → fallback（调用方决定按图片插入还是报错）；成功时整份一个撤销步。
  */
-import { createNode, type NodeId } from "@sqraft/core";
+import { createNode, type DocStore, type NodeId } from "@sqraft/core";
 import type { SvgImportFailureReason, SvgImportWarning } from "@sqraft/ai-tools";
 import { docStore } from "../store";
 import { parseSvg } from "./svg-import";
@@ -30,8 +30,12 @@ export interface SvgInsertRequest {
   y?: number;
 }
 
-export async function insertSvgFrame(request: SvgInsertRequest): Promise<SvgInsertOutcome> {
-  const page = docStore.doc.nodes[request.pageId];
+export async function insertSvgFrame(
+  request: SvgInsertRequest,
+  // MCP 传入发起调用时的标签 store；GUI 拖入不传，继续走活动标签门面
+  store: Pick<DocStore, "doc" | "apply"> = docStore,
+): Promise<SvgInsertOutcome> {
+  const page = store.doc.nodes[request.pageId];
   if (!page || page.type !== "page") return { status: "error", message: "page not found" };
 
   const outcome = await parseSvg(request.text);
@@ -53,7 +57,7 @@ export async function insertSvgFrame(request: SvgInsertRequest): Promise<SvgInse
   for (const node of nodes) node.parentId = frame.id;
   frame.children = nodes.map((node) => node.id);
   // 一个 SVG 一个撤销步（root + 全部子节点一次创建）
-  docStore.apply({ type: "node.create", params: { nodes: [frame, ...nodes], parentId: page.id } }, "导入 SVG");
+  store.apply({ type: "node.create", params: { nodes: [frame, ...nodes], parentId: page.id } }, "导入 SVG");
   return {
     status: "ok",
     result: { frameId: frame.id, width: frame.width, height: frame.height, rasterized, missingFonts, warnings },

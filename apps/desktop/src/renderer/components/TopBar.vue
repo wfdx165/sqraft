@@ -13,7 +13,8 @@ import { docTabs, moveTab, sessionState, type TabSession } from "../sessions";
 import { keyLabel, registerShortcuts, runAction } from "../shortcuts";
 import { tabLabel } from "../tab-label";
 import { openContextMenu, type ContextMenuItem } from "../context-menu";
-import { openSettings } from "../settings";
+import { openSettings, settingsUi } from "../settings";
+import { paletteUi } from "../palette";
 import { enterPresenter } from "../presenter";
 import { t } from "../i18n";
 import {
@@ -157,6 +158,15 @@ function present(): void {
 /* ---------- ⌘1..9 ---------- */
 function onKeyDown(e: KeyboardEvent): void {
   if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey) return;
+  // 模态 / 演示 / 输入框里不抢 ⌘1..9：它们各有自己的键盘语义
+  if (settingsUi.open || paletteUi.open || ui.presenter || e.isComposing) return;
+  const focused = document.activeElement as HTMLElement | null;
+  if (
+    focused &&
+    (focused.tagName === "INPUT" || focused.tagName === "TEXTAREA" || focused.isContentEditable)
+  ) {
+    return;
+  }
   if (!/^[1-9]$/.test(e.key)) return;
   const target = sessionState.tabs[Number(e.key) - 1];
   if (!target) return;

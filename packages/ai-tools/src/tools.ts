@@ -89,7 +89,7 @@ const STYLE_SCHEMA: Record<string, unknown> = {
   truncate: { type: "boolean" },
   effects: {
     description:
-      "节点效果列表，从下到上依次施加：投影 drop-shadow、内阴影 inner-shadow、图层模糊 layer-blur、背景模糊 backdrop-blur。传 [] 清空。阴影颜色只能用 fillToken 引用 Token（禁止字面量）。",
+      "节点效果列表，从下到上依次施加：投影 drop-shadow、内阴影 inner-shadow、图层模糊 layer-blur、背景模糊 backdrop-blur。传 [] 清空。阴影颜色优先用 fillToken 引用 Token，也可以给 color 字面量。",
     type: "array",
     items: {
       oneOf: [
@@ -102,9 +102,10 @@ const STYLE_SCHEMA: Record<string, unknown> = {
             y: { type: "number", description: "偏移 Y（文档单位）" },
             blur: { type: "number", description: "模糊半径（文档单位，≥0）" },
             spread: { type: "number", description: "扩散（文档单位，可为负）" },
-            fillToken: { type: "string", description: "阴影颜色的 Token 名，如 color/shadow" },
+            fillToken: { type: "string", description: "阴影颜色的 Token 名，如 color/shadow；与 color 二选一，Token 优先" },
+            color: { type: "string", description: "阴影颜色的字面量，如 #1a1a1a；与 fillToken 二选一" },
           },
-          required: ["type", "fillToken"],
+          required: ["type"],
           additionalProperties: false,
         },
         {

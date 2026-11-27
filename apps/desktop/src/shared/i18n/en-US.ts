@@ -188,10 +188,24 @@ export const enUS: Record<keyof typeof zhCN, string> = {
   "example.login": "Login example",
   "example.cards": "Card grid example",
   "example.umbra": "Totality page example",
+  "example.login.desc": "Forms, buttons, shadows",
+  "example.cards.desc": "Three-column cards with auto layout",
+  "example.umbra.desc": "Dark landing page with gradients",
   "welcome.examples": "Try an example",
   "welcome.newDoc": "New Document",
   "welcome.open": "Open…",
   "welcome.recent": "Recent",
+  "welcome.recentEmpty": "Files you open will show up here",
+  "welcome.recentMissing": "File moved or deleted",
+  "welcome.recentClear": "Clear",
+  "welcome.recentClearConfirm": "Clear all?",
+  "welcome.prompts.idle": "What you can ask once connected",
+  "welcome.prompts.active": "Try asking for something",
+  "time.justNow": "just now",
+  "time.minutesAgo": "{count} min ago",
+  "time.hoursAgo": "{count} h ago",
+  "time.yesterday": "yesterday",
+  "time.daysAgo": "{count} days ago",
   "mcp.clientGeneric": "Generic",
 
   // MCP status
@@ -903,6 +917,7 @@ export const enUS: Record<keyof typeof zhCN, string> = {
   "file.openError": "Could not open this file: {detail}",
   "file.saveError": "Save failed: {detail}",
   "file.saveAsError": "Save As failed: {detail}",
+  "file.saveAsConflict": "“{name}” is already open in another tab, so nothing was saved. Choose a different name, or close that tab first.",
   "file.closeSaveError": "Save before closing failed: {detail}",
 
   // Assets / clipboard / image errors

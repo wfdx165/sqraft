@@ -3,7 +3,7 @@
  * `.sqraft` 的内部结构（zip / 版本迁移）由渲染层负责，这里只搬字节。
  */
 import { mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
-import { basename, dirname, join } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 
 export interface FileSnapshot {
   path: string;
@@ -37,6 +37,18 @@ export async function mtimeOf(path: string): Promise<number | null> {
 export function mtimeChanged(expected: number | null, current: number | null): boolean {
   if (expected === null || current === null) return false;
   return Math.round(expected) !== Math.round(current);
+}
+
+/**
+ * 判断两个路径是否指向同一个文件（另存为时防止两个标签共用一个文件）。
+ * macOS / Windows 的默认文件系统大小写不敏感，按小写比较；Linux 保持原样。
+ */
+export function samePath(a: string, b: string, platform: NodeJS.Platform = process.platform): boolean {
+  const normalize = (path: string): string => {
+    const absolute = resolve(path);
+    return platform === "win32" || platform === "darwin" ? absolute.toLowerCase() : absolute;
+  };
+  return normalize(a) === normalize(b);
 }
 
 /**

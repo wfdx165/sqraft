@@ -538,7 +538,6 @@ describe("AI 工具：自动布局与排版", () => {
       opacity: 0.5,
       fontSize: 24,
       fontWeight: 700,
-      textAlignment: "center",
       textAlign: "center",
       lineHeight: 32,
       lineHeightUnit: "px",

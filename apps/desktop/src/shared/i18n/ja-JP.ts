@@ -188,10 +188,24 @@ export const jaJP: Record<keyof typeof zhCN, string> = {
   "example.login": "ログイン画面の例",
   "example.cards": "カードグリッドの例",
   "example.umbra": "皆既日食ページの例",
+  "example.login.desc": "フォーム・ボタン・シャドウ",
+  "example.cards.desc": "3 列カードと自動レイアウト",
+  "example.umbra.desc": "グラデーションのダークランディング",
   "welcome.examples": "例を試す",
   "welcome.newDoc": "新規ドキュメント",
   "welcome.open": "開く…",
   "welcome.recent": "最近使った項目",
+  "welcome.recentEmpty": "開いたファイルがここに表示されます",
+  "welcome.recentMissing": "ファイルが移動または削除されました",
+  "welcome.recentClear": "クリア",
+  "welcome.recentClearConfirm": "すべて消去？",
+  "welcome.prompts.idle": "接続後にできること",
+  "welcome.prompts.active": "何か作らせてみる",
+  "time.justNow": "たった今",
+  "time.minutesAgo": "{count} 分前",
+  "time.hoursAgo": "{count} 時間前",
+  "time.yesterday": "昨日",
+  "time.daysAgo": "{count} 日前",
   "mcp.clientGeneric": "汎用",
 
   // MCP ステータス
@@ -903,6 +917,7 @@ export const jaJP: Record<keyof typeof zhCN, string> = {
   "file.openError": "このファイルを開けません：{detail}",
   "file.saveError": "保存に失敗しました：{detail}",
   "file.saveAsError": "別名で保存に失敗しました：{detail}",
+  "file.saveAsConflict": "「{name}」は別のタブで開かれているため保存しませんでした。別の名前を付けるか、そのタブを閉じてから再試行してください。",
   "file.closeSaveError": "閉じる前の保存に失敗しました：{detail}",
 
   // アセット / クリップボード / 画像エラー

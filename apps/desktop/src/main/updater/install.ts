@@ -122,6 +122,8 @@ export interface ScriptOptions extends InstallPaths {
   expectedTeam?: string;
   /** 启动看门狗轮询次数（每次 0.5s） */
   waitTicks?: number;
+  /** 当前进程架构：替换前用 lipo 校验新包能不能跑（缺省取 process.arch） */
+  expectedArch?: string;
 }
 
 /**
@@ -155,6 +157,7 @@ LOG=${shellQuote(options.logPath)}
 APPNAME=${shellQuote(options.appName)}
 VERSION=${shellQuote(options.version)}
 EXPECTED_TEAM=${shellQuote(options.expectedTeam ?? "")}
+EXPECTED_ARCH=${shellQuote(options.expectedArch ?? process.arch)}
 PID=${options.pid}
 WAIT_TICKS=${waitTicks}
 
@@ -179,6 +182,24 @@ fi
 if [ ! -d "$STAGING/$APPNAME" ]; then
   log "解包后找不到 $APPNAME，保留旧版本"
   rm -rf "$STAGING"
+  exit 1
+fi
+
+# 架构校验（ADR-0046）：清单里的 mac-arm64 / mac-x64 标错时，绝不把起不来的包换上去。
+# universal 包同时含两种架构，按"包含期望架构"判断即可。
+BIN="$STAGING/$APPNAME/Contents/MacOS/Sqraft"
+ARCHS=$(/usr/bin/lipo -archs "$BIN" 2>/dev/null || true)
+GOT_ARCH=""
+if [ "$EXPECTED_ARCH" = "x64" ]; then
+  case " $ARCHS " in *" x86_64 "*) GOT_ARCH=x64 ;; esac
+elif [ "$EXPECTED_ARCH" = "arm64" ]; then
+  case " $ARCHS " in *" arm64 "*) GOT_ARCH=arm64 ;; esac
+fi
+if [ -n "$EXPECTED_ARCH" ] && [ "$GOT_ARCH" != "$EXPECTED_ARCH" ]; then
+  log "新包架构为 \${ARCHS:-未知}，与当前 $EXPECTED_ARCH 不一致，保留旧版本"
+  rm -rf "$STAGING"
+  rm -f "$ZIP"
+  printf '%s\\n' "$VERSION" > "$FAILED"
   exit 1
 fi
 

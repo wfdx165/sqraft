@@ -52,9 +52,10 @@ packages/render/src/
 └── renderer.ts   文档树遍历与绘制序（命中检测在 apps/desktop/src/renderer/canvas/hit.ts）
 
 packages/ai-tools/src/
-├── index.ts      执行器装配：按工具名分派、写工具事务 + 诊断接线
+├── index.ts      执行器装配：按工具名分派、按 schema 拦未知参数、写工具事务 + 诊断接线
 ├── tools.ts      工具清单（JSON Schema + 描述，唯一真源）
 ├── args.ts       参数解析与校验
+├── validate-args.ts 未知参数校验（只查 additionalProperties: false 的层级）
 ├── serialize.ts  read_document / search_nodes 的序列化与作用域工具
 ├── diagnostics.ts 写工具诊断接线
 ├── shared.ts     统一 re-export（handlers 用）
@@ -274,7 +275,7 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 - 打开文件 = 载入快照 + 重放增量（确定性命令保证重放安全）；
 - 保存时若增量超过阈值则折叠为新快照；
 - 读取走快速路径（ADR-0033）：按中央目录取条目，图片（存储条目）是原缓冲区的零拷贝视图，`doc.json` 用原生 `DecompressionStream` 解压（不是 Worker，不受 CSP 限制），认不出的结构退回 `unzipSync`；
-- 保存一律**同步压缩**（`zipSync`，`fileio.ts`）：不依赖 Web Worker——打包版 CSP 不放行 `blob:`，fflate 异步 API 用的 blob worker 被拦后回调永不触发（保存曾因此静默挂死）。代价是文档很大时 UI 有可感知停顿：预检上限 300MB 兜住极端体积（超限弹窗并给出降体积建议），预估超 20MB 先 toast 预告再压缩；
+- 保存一律**同步压缩**（`zipSync`，`fileio.ts`）：不依赖 Web Worker——打包版 CSP 不放行 `blob:`，fflate 异步 API 用的 blob worker 被拦后回调永不触发（保存曾因此静默挂死）。代价是文档很大时 UI 有可感知停顿：预检上限 1GB 兜住极端体积（超限弹窗并给出降体积建议），预估超 20MB 先 toast 预告再压缩；
 - `formatVersion` 单调递增，读取端只向前兼容；**遇到比自己新的格式版本直接拒绝**并提示升级（ADR-0029），迁移走显式迁移函数、只在渲染层执行。
 
 ## 11. 存储层
@@ -297,6 +298,8 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 - 安全：只绑 `127.0.0.1`，拒绝带 `Origin` 的请求，`Host` 只接受本机；**无 token**——同机其他用户也能连，这是相对 Unix socket 的显式取舍；
 - 多客户端并存，所有工具调用进同一队列串行执行；单次调用 30s 超时；会话结束（`DELETE` / 过期）时排队中的调用直接丢弃；
 - **一次工具调用只执行一次**：渲染层的监听宿主登记在 `globalThis` 上，重复安装先摘掉旧监听，并按主进程分配的调用号去重（同号的重复投递静默丢弃）。dev 热更新会重新执行渲染层模块，少了这一层，旧实例的监听会和新实例一起处理同一条调用——`create_node` 会落两个节点（返回 id 之外多一个没有子节点的副本）；
+- **调用钉住标签**：每次 `tools/call` 在开始时捕获活动标签，执行器、导入、导出、变更清单都绑在那一份 `DocStore` 上，中途切标签不会把写入带到别的文档（`import_svg` / 带图节点这类 `await` 期间尤其重要）；`screenshot` 依赖当前画布，切走后明确报错而不是截另一份稿；agent 报告写回所属标签，切回来时由 `activateTab` 恢复；
+- **参数契约**：执行器分派前按工具的 `input_schema` 校验，显式声明 `additionalProperties: false` 的层级出现未声明的键就整次调用失败——handler 不执行、不产生撤销步、文档零改动；错误点名键、路径（如 `effects[0].foo`）与该层可用参数，避免"返回 ok 但画布没动"。`oneOf` / `anyOf` 取最匹配的分支报错，没有 `additionalProperties` 的层级保持宽松；
 - 工具清单与执行器都在渲染进程（`@sqraft/ai-tools` 的唯一真源），主进程只转发；截图只取文档层画布，不含编辑器叠加层。
 
 **客户端配置写入**（ADR-0036）：配置面板可以勾选六个客户端，把名为 `sqraft` 的条目写进它们的用户级配置。每个客户端只有一条写路径：Claude Code / Codex 走官方非交互命令（显式 user scope），Cursor / VS Code / Zed / OpenCode 走文件 adapter（JSONC 用 `jsonc-parser` 做范围编辑，保留注释）。写前备份到 `userData/mcp-backups/`，同目录临时文件 + rename，写后回读校验、失败还原；只增删 `sqraft` 这一条，不碰其它服务器与注释。所有权清单 `userData/mcp-clients.json` 记录写过谁，端口漂移时只同步清单内条目。渲染层只传 client id，路径与命令由主进程按白名单解析。四态（已连接 / 已写入 / 未接入 / 未检测到）由会话 label、回读结果与 App/配置目录检测共同推导。OpenCode 的 CLI 没有 `remove`，因此整体走文件 adapter。
@@ -377,9 +380,9 @@ assets/            图片位图（按内容哈希命名，level: 0 不压缩）
 
 - **进程**：主进程（MCP 宿主、文件 IO、窗口/菜单/生命周期）＋ 渲染进程（文档真源、命令层、渲染器、AI 工具执行器）＋ preload（白名单桥）。主进程不持有 `DocState`。
 - **IPC**：通道名与请求/响应类型集中在 `shared/ipc`，preload 只暴露 `window.sqraft` 一个对象；渲染层拿不到 `require` 与任意 IPC。安全基线见 ADR-0019。
-- **文件**：主进程负责系统对话框、字节搬运、原子写与 mtime 比对；`.sqraft` 的序列化/解析/迁移只在渲染层。全手动保存，无自动写回、无崩溃恢复。
+- **文件**：主进程负责系统对话框、字节搬运、原子写与 mtime 比对；`.sqraft` 的序列化/解析/迁移只在渲染层。全手动保存，无自动写回、无崩溃恢复。另存为在写盘**之前**比对其它标签已占用的路径（`samePath`，macOS / Windows 忽略大小写）：命中就返回 `conflict`、不改文件，避免两个标签指向同一份稿、互相覆盖。
 - **窗口**：单窗口多标签（Home + 文档标签，ADR-0041）；**每次启动把窗口铺满它上次所在那块屏的工作区**（不是 macOS 全屏模式，菜单栏与 Dock 仍在）；`⌘W` 关闭当前标签、在 Home 上等于关窗，`⌘Q` 退出；多个脏标签时关窗/退出用一个聚合对话框（保存全部 / 全部不保存 / 取消），`CloseGuard` 的上报是 `{ anyDirty, activeName, activeDirty }`；单实例转发打开请求；窗口位置与最近列表存 `userData/preferences.json`。macOS 用 `hiddenInset` 标题栏（左上红绿灯 + 58px 留白 + 拖拽条）；Windows 用系统默认标题栏、菜单栏常显，应用内不留那段留白（ADR-0033），顶部模块在 Windows 上直接从 12px 起。快捷键在 Windows 上显示为 `Ctrl+Shift+Z` 形式，内部存储仍是同一套规范串。
-- **欢迎页（Home 标签）**：常驻标签栏第 1 位、不可关闭（ADR-0041）；以 MCP 接入为主位——服务状态（监听中 / 在线会话数）、能力一行（工具数动态取自 `@sqraft/ai-tools`）、可复制的接入片段（Claude Code / OpenCode / Cursor / 通用），然后才是新建/打开与最近 4 条。三态（未启动 / 等待接入 / 已连接）只改状态行与主按钮，见 ADR-0021 与 ADR-0026。
+- **欢迎页（Home 标签）**：常驻标签栏第 1 位、不可关闭（ADR-0041）；一张居中的玻璃卡分左右两栏。左栏是文档入口——品牌、新建 / 打开（带快捷键提示）、**最近 6 条（3×2，带当前活动页封面与相对时间，按文件修改时间排序，可两步清空）**、三个示例卡；右栏是 agent 接入——服务状态（监听中 / 在线会话数）、工具数、可复制的 endpoint、已检测客户端、三条提示词（未接入时作为「接入后可以这样用」的预览，复制始终可用）与设置深层链接。封面在保存 / 打开时由渲染层画成 480×300，主进程按「路径 + mtime」缓存在 `userData/thumbnails/`，旧文件打开后补一张，外部改过或已被移动的文件显示占位 / 置灰。三态（未启动 / 等待接入 / 已连接）见 ADR-0021 与 ADR-0026。
 - **菜单与快捷键**：系统级动作走菜单 role；文档编辑类动作仍由渲染层注册表独占，菜单点击只发送同一个动作 id（ADR-0011 的桌面补充）。
 - **MCP**：主进程协议层 + 本机 Streamable HTTP（`127.0.0.1:<port>`），详见 ADR-0026 与 §12。
 - **更新**（ADR-0029 / ADR-0033 / ADR-0049）：主进程负责检查（`releases/latest/download/latest.json`）：启动后 5 秒尝试查一次（受同一个 4 小时闸门约束，距上次成功不足 4 小时会跳过），运行期每 4 小时轮询、系统唤醒后补查，两次自动检查之间至少隔 4 小时（`CHECK_MIN_INTERVAL_MS`，`lastCheckAt` 只在成功检查后写）；就绪后轮询停链，手动「帮助 → 检查更新…」不受限制。设置里可关闭自动下载（`update.autoDownload`，关闭后只提示、走 `available`）；自动下载会等窗口失焦再开始（最多 30 分钟，期间状态为 `waiting`），7 天提醒同样等失焦再弹。macOS 会按 `process.arch` 下载对应架构的 zip（arm64 / x64）并校验 sha256、退出时用 detached 脚本替换 `.app`；备份 + 启动标记（60 秒）构成回滚：新版本没跑起来就换回旧包。Windows **只提示**：版本更新时状态置为 `available`，界面给「前往下载」打开 Releases 页面，不下载、不安装。清单可选 `minOS`（如 `"12.0"`）：0.1.2 起在可安装平台比较当前 macOS 版本，低于它或读不到系统版本时状态为 `incompatible`、不下载，界面提示并要求升级系统；此时「前往下载」打开 Releases 列表而不是 `/latest`（ADR-0049）。渲染层只显示状态、触发重启或打开下载页，不碰文件系统。只承诺 macOS arm64 / x64 的同架构就地更新；清单里没有当前架构的包时退化为「只提示、手动下载」（macOS 包自 2026-11 起用 Developer ID 签名并通过 Apple 公证，见 ADR-0034；替换脚本落位前校验新包签名与 Team）；只读位置（dmg 挂载点）提前拒绝。

@@ -2,9 +2,9 @@
  * 渲染层的 MCP 工具宿主：清单与执行器都来自 @sqraft/ai-tools（唯一真源）。
  * 没有打开文档时，第一次工具调用会先建一份空稿——agent 不该卡在欢迎页。
  */
-import { reactive } from "vue";
-import { MUTATING_TOOLS, makeExecutor, toMCPManifest } from "@sqraft/ai-tools";
-import type { DocStore, NodeId } from "@sqraft/core";
+import { reactive, watch } from "vue";
+import { MUTATING_TOOLS, makeExecutor, toMCPManifest, type ToolExecutor } from "@sqraft/ai-tools";
+import type { NodeId } from "@sqraft/core";
 import type { McpClientInfo, McpStatus } from "../shared/ipc";
 import {
   beginAgentActivity,
@@ -17,11 +17,11 @@ import {
   resetAgentActivity,
   setAgentTargets,
 } from "./canvas/agent-activity";
-import { docStore, hooks, ui } from "./store";
-import { MAX_DOC_TABS, activeSession, docTabs, sessionState } from "./sessions";
+import { hooks, ui } from "./store";
+import { MAX_DOC_TABS, activeSession, docTabs, sessionState, type TabSession } from "./sessions";
 import { tabLabel } from "./tab-label";
 import { noActiveDocument } from "../shared/agent-text";
-import type { AppState } from "@sqraft/ai-tools";
+import type { AppState, DocumentHost } from "@sqraft/ai-tools";
 import {
   buildAgentChanges,
   captureAgentPreNames,
@@ -31,8 +31,11 @@ import {
 } from "./agent-report";
 import { appInfo } from "./app-meta";
 import { measureText, textSizeOf } from "./text-metrics";
-import { putAsset } from "./assets";
+import { ensureAssetDecoded, imageFor, putAsset } from "./assets";
+import { ensureLinkedImage, linkedImage } from "./linked-images";
 import { putFont } from "./fonts";
+import { renderPngAsync, type ExportRequest } from "./canvas/export-image";
+import { renderSvgAsync } from "./canvas/svg-export";
 import { insertSvgFrame } from "./canvas/svg-insert";
 import { t } from "./i18n";
 import { agentErrorText } from "./errors";
@@ -92,8 +95,17 @@ export function refreshMcpStatus(): void {
 /** 写工具结束后，胶囊保留多久再回落到「已连接 N 个 agent」 */
 export const ACTIVITY_RESIDUE_MS = 5000;
 
-/** 当前调用窗口内累积的改动节点；只在写工具调用期间非空 */
-let collecting: Set<NodeId> | null = null;
+/** 一次写调用的收集窗口：订阅绑在调用开始时的标签 store 上，切标签也不会串。 */
+interface CallWindow {
+  sessionId: string;
+  tool: string;
+  label: string;
+  changes: Set<NodeId>;
+  off: () => void;
+}
+
+/** 只在写工具调用期间非空 */
+let collecting: CallWindow | null = null;
 /** `delete_node` 删掉的那个节点的父容器：删完就查不到归属了，只能在调用前记下来 */
 let deleteParent: NodeId | null = null;
 /** 调用前记下的节点名：删除后文档里查不到，变更清单只能靠它显示名字 */
@@ -117,10 +129,12 @@ function viewportWorldRect(): { x: number; y: number; width: number; height: num
 /**
  * 用当前累积的改动刷新描边与胶囊文案。
  * 调用期间每次文档变更都会走一次，所以描边是"边改边长出来"的，而不是结束后才出现。
+ * 只在目标标签仍是活动标签时绘制：切走的文档不该在别人身上画描边。
  */
-function publishAgentTargets(tool: string, label: string, running: boolean): void {
-  const doc = docStore.doc;
-  const ids = new Set<NodeId>(collecting ?? []);
+function publishAgentTargets(session: TabSession, tool: string, label: string, running: boolean): void {
+  if (sessionState.activeId !== session.id) return;
+  const doc = session.store.doc;
+  const ids = new Set<NodeId>(collecting?.changes ?? []);
   // 删除的节点已经不在文档里，改用删除前的父容器；父容器是页面时跳过（整页虚线没有信息量）
   if (deleteParent && doc.nodes[deleteParent]?.type !== "page") ids.add(deleteParent);
 
@@ -150,52 +164,78 @@ function clearActivityTimer(): void {
   activityTimer = null;
 }
 
-function beginAgentCall(tool: string, clientLabel: string | undefined, args: Record<string, unknown>): void {
+function beginAgentCall(
+  session: TabSession,
+  tool: string,
+  clientLabel: string | undefined,
+  args: Record<string, unknown>,
+): void {
   clearActivityTimer();
-  collecting = new Set<NodeId>();
+  collecting?.off();
+  const changes = new Set<NodeId>();
+  // 订阅钉在这个标签的 store 上：调用中途切标签，改动仍然只记到发起调用的文档
+  const off = session.store.subscribe((_state, ids) => {
+    for (const id of ids) changes.add(id);
+    if (sessionState.activeId !== session.id) return;
+    const activity = mcpUi.activity;
+    if (activity?.running) publishAgentTargets(session, activity.tool, activity.label, true);
+  });
+  collecting = { sessionId: session.id, tool, label: displayClientLabel(clientLabel), changes, off };
   deleteParent = null;
-  preNames = captureAgentPreNames(docStore.doc, tool, args);
+  preNames = captureAgentPreNames(session.store.doc, tool, args);
   // 不清清单：失败的调用没改文档，上一次成功的清单仍然准确；
   // 成功时由 finishAgentCall 覆盖（spec：保留到下一次调用覆盖）。
   const nodeId = args.nodeId;
   if (tool === "delete_node" && typeof nodeId === "string") {
-    deleteParent = docStore.doc.nodes[nodeId]?.parentId ?? null;
+    deleteParent = session.store.doc.nodes[nodeId]?.parentId ?? null;
   }
-  beginAgentActivity();
-  publishAgentTargets(tool, displayClientLabel(clientLabel), true);
-  hooks.requestRepaint();
+  if (sessionState.activeId === session.id) {
+    beginAgentActivity();
+    publishAgentTargets(session, tool, collecting.label, true);
+    hooks.requestRepaint();
+  } else {
+    mcpUi.activity = null;
+  }
 }
 
-function finishAgentCall(ok: boolean, value?: string): void {
+function finishAgentCall(session: TabSession, ok: boolean, value?: string): void {
+  const window = collecting;
+  const wasActive = sessionState.activeId === session.id;
   // 失败的调用已经回滚：不描边、不留"刚改了…"的假信息。
   // 但**不清变更清单**——它记的是上一次成功调用的改动，仍然准确。
   if (!ok) {
     collecting = null;
+    window?.off();
     deleteParent = null;
     preNames.clear();
     clearActivityTimer();
-    mcpUi.activity = null;
-    resetAgentActivity();
-    hooks.requestRepaint();
+    if (wasActive) {
+      mcpUi.activity = null;
+      resetAgentActivity();
+      hooks.requestRepaint();
+    }
     return;
   }
-  const activity = mcpUi.activity;
-  // 先按最终改动刷一次（此刻 collecting 还在），再清窗口
-  if (activity) publishAgentTargets(activity.tool, activity.label, false);
-  // 趁 collecting 还在，把"这次改了什么"落成清单；之后它只活在 agentReport 里，
-  // 保留到下一次调用覆盖或撤销清空（不再跟随 5 秒胶囊回落）
-  if (activity) {
-    setAgentReport(
-      buildAgentChanges(docStore.doc, collecting ?? [], preNames, activity.tool),
-      parseAgentDiagnostics(value),
-    );
+  if (window) {
+    // 先按最终改动刷一次（此刻 collecting 还在），再清窗口
+    if (wasActive) publishAgentTargets(session, window.tool, window.label, false);
+    const report = buildAgentChanges(session.store.doc, window.changes, preNames, window.tool);
+    const diagnostics = parseAgentDiagnostics(value);
+    // 报告永远写回它所属的标签：调用期间切走时，切回来由 activateTab 恢复
+    session.view.agentReport = { changes: report.changes, diagnostics, total: report.total };
+    if (wasActive) setAgentReport(report, diagnostics);
   }
   collecting = null;
+  window?.off();
   deleteParent = null;
   preNames.clear();
+  clearActivityTimer();
+  if (!wasActive) {
+    mcpUi.activity = null;
+    return;
+  }
   endAgentActivity();
   hooks.requestRepaint();
-  clearActivityTimer();
   activityTimer = setTimeout(() => {
     activityTimer = null;
     mcpUi.activity = null;
@@ -234,31 +274,31 @@ export function installMcpHost(): void {
   const bridge = window.sqraft;
   bridge.mcp.setTools(manifest);
   const offStatus = bridge.mcp.onStatus(applyStatus);
-  // 写工具调用窗口内累积改动节点：事务内每次 apply 都带真实的 changed（提交时那次是空集合）
-  const offDoc = docStore.subscribe((_state, changed) => {
-    if (!collecting) return;
-    for (const id of changed) collecting.add(id);
-    const activity = mcpUi.activity;
-    if (activity?.running) publishAgentTargets(activity.tool, activity.label, true);
-  });
+  // 切标签时收起上一条调用的胶囊与描边：它们属于发起调用的文档，不该跟着活动标签走
+  const stopTabWatch = watch(
+    () => sessionState.activeId,
+    () => {
+      mcpUi.activity = null;
+      resetAgentActivity();
+    },
+  );
   // 服务可能比页面先就绪，也可能稍后才监听成功：挂载时主动取一次
   refreshMcpStatus();
 
-  /** `app_state` 的载荷：只读摘要，不含文档内容。 */
-  function appState(): AppState {
-    const active = activeSession();
-    const pageNode = ui.activePageId ? docStore.doc.nodes[ui.activePageId] : null;
-    const nameOf = (tab: typeof active) => (tab.kind === "home" ? "Home" : tabLabel(tab));
+  /** `app_state` 的载荷：只读摘要，不含文档内容。`session` 是调用开始时钉住的标签。 */
+  function appState(session: TabSession): AppState {
+    const pageNode = session.view.activePageId ? session.store.doc.nodes[session.view.activePageId] : null;
+    const nameOf = (tab: TabSession) => (tab.kind === "home" ? "Home" : tabLabel(tab));
     return {
       active: {
-        tabId: active.id,
-        name: nameOf(active),
-        path: active.file.path,
-        dirty: active.kind === "doc" && active.store.isDirty,
-        externalChange: active.file.externalChange,
+        tabId: session.id,
+        name: nameOf(session),
+        path: session.file.path,
+        dirty: session.kind === "doc" && session.store.isDirty,
+        externalChange: session.file.externalChange,
         page: pageNode?.type === "page" ? { id: pageNode.id, name: pageNode.name } : null,
-        selection: ui.selection.flatMap((id) => {
-          const node = docStore.doc.nodes[id];
+        selection: session.view.selection.flatMap((id) => {
+          const node = session.store.doc.nodes[id];
           return node ? [{ id, name: node.name, type: node.type }] : [];
         }),
       },
@@ -276,29 +316,51 @@ export function installMcpHost(): void {
     };
   }
 
-  const executor = makeExecutor(
-    // 门面转发到活动标签，方法在调用时解析——切标签后不需要重建执行器
-    docStore as unknown as DocStore,
-    (region) => hooks.getScreenshot(region),
-    () => ui.activePageId,
-    (node, style, text) => textSizeOf(node, style, text, docStore.doc),
-    {
-      appState: () => appState(),
+  /** 导出请求的图片解析入口：与画布导出同一套，只是文档换成钉住的那份。 */
+  function exportRequest(request: { pageId?: NodeId; nodeIds?: NodeId[]; scale: number }): ExportRequest {
+    return {
+      pageId: request.pageId,
+      nodeIds: request.nodeIds,
+      scale: request.scale,
+      resolveImage: (assetId) => imageFor(assetId),
+      resolveLinkedImage: (url) => linkedImage(url),
+      ensureImage: ensureAssetDecoded,
+      ensureLinkedImage,
+    };
+  }
+
+  /**
+   * 宿主能力按调用所属的标签钉住：`import_svg` 要写回发起调用的文档，
+   * 导出也只读那一份，不跟着活动标签漂。
+   */
+  function hostFor(session: TabSession): DocumentHost {
+    return {
+      appState: () => appState(session),
       appInfo: async () => {
         const info = await appInfo();
         return { name: info.name, version: info.version, platform: window.sqraft.platform };
       },
-      activatePage: (pageId) => hooks.activatePage(pageId),
+      activatePage: (pageId) => {
+        if (sessionState.activeId === session.id) {
+          hooks.activatePage(pageId);
+          return;
+        }
+        // 后台标签：只改它自己的视图状态，等切过去时再适配
+        session.view.activePageId = pageId;
+        session.view.expandedPageId = pageId;
+        session.view.selection = [];
+        session.view.instanceContext = [];
+        session.view.cropNodeId = null;
+      },
       exportImage: async (request) => {
         if (request.format === "svg") {
-          const result = await hooks.renderExportSvg({ pageId: request.pageId, nodeIds: request.nodeIds });
+          const result = await renderSvgAsync(
+            session.store.doc,
+            exportRequest({ pageId: request.pageId, nodeIds: request.nodeIds, scale: 1 }),
+          );
           return { svg: result.svg, rasterized: result.rasterized };
         }
-        const image = await hooks.renderExport({
-          pageId: request.pageId,
-          nodeIds: request.nodeIds,
-          scale: request.scale,
-        });
+        const image = await renderPngAsync(session.store.doc, exportRequest(request));
         return { image, rasterized: [] };
       },
       importFont: async (fileName, dataBase64) => {
@@ -320,13 +382,16 @@ export function installMcpHost(): void {
       },
       importSvg: async (request) => {
         try {
-          const outcome = await insertSvgFrame({
-            text: request.svg,
-            name: "imported.svg",
-            pageId: request.pageId,
-            x: request.x,
-            y: request.y,
-          });
+          const outcome = await insertSvgFrame(
+            {
+              text: request.svg,
+              name: "imported.svg",
+              pageId: request.pageId,
+              x: request.x,
+              y: request.y,
+            },
+            session.store,
+          );
           if (outcome.status === "error") {
             // 只会是页面不存在（工具层已校验过），当成语法问题回报
             return { ok: false, reason: "invalid-svg" };
@@ -356,14 +421,29 @@ export function installMcpHost(): void {
           return { ok: false, reason: "invalid-svg" };
         }
       },
-    },
-    // 选区是画布 UI 状态：只读给 agent 看，改还是走显式 nodeId
-    () => [...ui.selection],
-    // agent 建的页面/组件默认名也跟随界面语言
-    (kind) => t(kind === "page" ? "node.page" : "node.component"),
-    // 诊断用的逐行字体宽度（core 不碰 canvas，度量一律注入）
-    { measureLine: measureText },
-  );
+    };
+  }
+
+  /** 每次调用按发起时的标签建执行器：store、活动页、选区、导出与导入都钉在那一份文档上。 */
+  function executorFor(session: TabSession): ToolExecutor {
+    return makeExecutor(
+      session.store,
+      (region) => {
+        // 截图依赖当前画布；调用期间切走了就明确失败，不截另一份稿
+        if (sessionState.activeId !== session.id) throw new Error(AGENT_TEXT.sessionChanged);
+        return hooks.getScreenshot(region);
+      },
+      () => session.view.activePageId,
+      (node, style, text) => textSizeOf(node, style, text, session.store.doc),
+      hostFor(session),
+      // 选区是画布 UI 状态：只读给 agent 看，改还是走显式 nodeId
+      () => [...session.view.selection],
+      // agent 建的页面/组件默认名也跟随界面语言
+      (kind) => t(kind === "page" ? "node.page" : "node.component"),
+      // 诊断用的逐行字体宽度（core 不碰 canvas，度量一律注入）
+      { measureLine: measureText },
+    );
+  }
 
   const offCall = bridge.mcp.onCall(async ({ id, name, args, clientLabel }) => {
     // 同一条调用被投递两次（旧实例漏摘的监听、主进程重复 send）：静默丢弃，
@@ -379,22 +459,24 @@ export function installMcpHost(): void {
       mcpUi.busy = true;
       // 只有会改文档的工具才在画布上留痕迹：只读工具没有视觉落点
       const mutates = MUTATING_TOOLS.has(name);
+      // 调用开始时就钉住标签：中途切标签也不会把写操作带到别的文档
+      const session = activeSession();
       let ok = false;
       let value: string | undefined;
       try {
         // Home 上没有文档：除 app_info / app_state 外一律拒绝，且不隐式新建（ADR-0041）
-        if (!ui.docOpen && name !== "app_info" && name !== "app_state") {
+        if (session.kind !== "doc" && name !== "app_info" && name !== "app_state") {
           throw new Error(noActiveDocument(docTabs().map(tabLabel)));
         }
-        if (mutates) beginAgentCall(name, clientLabel, args);
-        value = await executor(name, args);
+        if (mutates) beginAgentCall(session, name, clientLabel, args);
+        value = await executorFor(session)(name, args);
         ok = true;
         bridge.mcp.respond({ id, ok: true, value });
       } catch (error) {
         bridge.mcp.respond({ id, ok: false, error: agentErrorText(error) });
       } finally {
         mcpUi.busy = false;
-        if (mutates) finishAgentCall(ok, value);
+        if (mutates) finishAgentCall(session, ok, value);
       }
     } finally {
       inFlight.delete(id);
@@ -405,7 +487,8 @@ export function installMcpHost(): void {
     off: () => {
       offCall();
       offStatus();
-      offDoc();
+      stopTabWatch();
+      collecting?.off();
       collecting = null;
       deleteParent = null;
       preNames.clear();

@@ -178,7 +178,7 @@ export function closeTab(id: string): string | null {
   return (sessionState.tabs[Math.min(index, sessionState.tabs.length - 1)] ?? home).id;
 }
 
-/** 拖拽排序：把 from 移到 to 的位置。Home 固定在第 1 位。 */
+/** 拖拽排序：把 from 移到 to 的位置（两个方向语义一致：占据落点，目标让位）；Home 固定在第 1 位。 */
 export function moveTab(fromId: string, toId: string): void {
   const from = sessionState.tabs.findIndex((tab) => tab.id === fromId);
   const to = sessionState.tabs.findIndex((tab) => tab.id === toId);

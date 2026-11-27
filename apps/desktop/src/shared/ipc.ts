@@ -37,6 +37,8 @@ export interface SaveFileRequest {
   bytes: Uint8Array;
   /** 上次读/写时记录的磁盘时间戳；不一致说明文件被外部改过。 */
   expectedMtimeMs: number | null;
+  /** 欢迎页「最近打开」的封面（JPEG，约 480×300）；缺省表示这次不更新 */
+  thumbnail?: Uint8Array;
 }
 
 export type SaveFileResult =
@@ -47,12 +49,34 @@ export type SaveFileResult =
 export interface SaveAsRequest {
   suggestedName: string;
   bytes: Uint8Array;
+  /** 见 SaveFileRequest.thumbnail */
+  thumbnail?: Uint8Array;
+  /** 其它标签已占用的路径：主进程在写盘前比对，冲突就拒绝，避免两份标签指向同一个文件 */
+  otherPaths?: string[];
 }
 
 export type SaveAsResult =
   | { status: "canceled" }
+  /** 目标文件已经开在另一个标签里：这次没有写盘 */
+  | { status: "conflict"; path: string; name: string }
   | { status: "ok"; path: string; name: string; mtimeMs: number }
   | { status: "error"; message: string };
+
+/** 欢迎页「最近打开」的一条：文件可能已被移动或删除（mtimeMs = null）。 */
+export interface RecentEntry {
+  path: string;
+  name: string;
+  /** 磁盘时间戳；null = 文件不存在 */
+  mtimeMs: number | null;
+  /** 封面图 data URL；没有缓存（旧文件 / 外部改过）时为 null */
+  thumbnail: string | null;
+}
+
+export interface RecentThumbnailRequest {
+  path: string;
+  mtimeMs: number;
+  bytes: Uint8Array;
+}
 
 /** 多倍率导出的设置（偏好里持久化，也是对话框的默认值）。 */
 export interface ExportSettings {
@@ -332,7 +356,11 @@ export interface SqraftApi {
     onClientsSynced(handler: (event: McpClientsSyncEvent) => void): () => void;
   };
   recent: {
-    list(): Promise<{ path: string; name: string }[]>;
+    list(): Promise<RecentEntry[]>;
+    /** 打开文件后补一张封面（旧版保存的文件没有封面）；失败不影响打开 */
+    putThumbnail(request: RecentThumbnailRequest): Promise<void>;
+    /** 清空最近列表与封面缓存（文件本身不动） */
+    clear(): Promise<void>;
   };
   update: {
     /** 当前状态（渲染层挂载时取一次） */
@@ -458,6 +486,8 @@ export const CHANNELS = {
   /** 在访达里打开许可文本目录（关于面板的「开源许可」） */
   appShowLicenses: "app:show-licenses",
   recentList: "recent:list",
+  recentThumbnail: "recent:thumbnail",
+  recentClear: "recent:clear",
   updateState: "update:state",
   updateCheck: "update:check",
   updateRestart: "update:restart",

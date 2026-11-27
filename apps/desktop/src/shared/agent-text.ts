@@ -8,6 +8,8 @@ export const AGENT_TEXT = {
   busy: "Another tool call is still running. Try again shortly.",
   noWindow: "Sqraft window is not open; cannot run the tool.",
   rendererTimeout: "The renderer did not return a result in time.",
+  sessionChanged:
+    "The active document changed while the tool was running. Call app_state and retry on the tab you want to edit.",
 } as const;
 
 /** 活动标签是 Home 时，文档类工具的统一拒绝文案（列出已打开的文档，便于 agent 请用户切过去）。 */

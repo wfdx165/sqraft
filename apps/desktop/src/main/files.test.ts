@@ -2,7 +2,7 @@ import { mkdtemp, readFile, readdir, rm, stat, writeFile } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { mtimeChanged, mtimeOf, readFileSnapshot, writeFileAtomic } from "./files";
+import { mtimeChanged, mtimeOf, readFileSnapshot, samePath, writeFileAtomic } from "./files";
 
 const dirs: string[] = [];
 
@@ -102,5 +102,22 @@ describe("外部修改检测", () => {
     expect(snapshot.name).toBe("设计稿.sqraft");
     expect(new TextDecoder().decode(snapshot.bytes)).toBe("hello");
     expect(snapshot.mtimeMs).toBe((await stat(path)).mtimeMs);
+  });
+});
+
+describe("同一文件判断（另存为防重）", () => {
+  it("相对与绝对路径指向同一处", () => {
+    expect(samePath("./design.sqraft", "design.sqraft", "linux")).toBe(true);
+    expect(samePath("design.sqraft", join(process.cwd(), "design.sqraft"), "linux")).toBe(true);
+  });
+
+  it("macOS / Windows 大小写不敏感，Linux 敏感", () => {
+    expect(samePath("/Users/a/Design.sqraft", "/Users/a/design.sqraft", "darwin")).toBe(true);
+    expect(samePath("C:\\Design.sqraft", "c:\\design.sqraft", "win32")).toBe(true);
+    expect(samePath("/home/a/Design.sqraft", "/home/a/design.sqraft", "linux")).toBe(false);
+  });
+
+  it("不同文件不算同一个", () => {
+    expect(samePath("/a/one.sqraft", "/a/two.sqraft", "darwin")).toBe(false);
   });
 });

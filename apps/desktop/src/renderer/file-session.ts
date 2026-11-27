@@ -3,7 +3,7 @@
  * 磁盘上的文件只在 `saveDocument` 时变化——没有自动保存，也没有恢复快照。
  */
 import { reactive, watch } from "vue";
-import { createEmptyDoc, type DocState } from "@sqraft/core";
+import { createEmptyDoc, firstPageId, type DocState } from "@sqraft/core";
 import { activateTab, docStore, hooks, replaceDocument, ui } from "./store";
 import {
   MAX_DOC_TABS,
@@ -29,6 +29,7 @@ import { t } from "./i18n";
 import { tabLabel } from "./tab-label";
 import type { FileStat, OpenedFile } from "../shared/ipc";
 import { changeStateOf } from "./external-change";
+import { renderThumbnail, renderThumbnailAsync } from "./canvas/thumbnail";
 
 /** 保存入口来源：区分快捷键/菜单、工具栏、关窗流程，排查"点了没反应"时先看这里。 */
 export type SaveSource = "direct" | "action" | "toolbar" | "close" | "replace";
@@ -89,8 +90,12 @@ async function appVersionForManifest(): Promise<string> {
   }
 }
 
-/** 单文件体积上限：超过就提示而不是让 zip 卡死界面。 */
-const MAX_SAVE_BYTES = 300 * 1024 * 1024;
+/**
+ * 单文件体积上限：超过就提示而不是让 zip 卡死界面或把渲染进程撑爆。
+ * 1GB 是当前同步 zip + 整块 IPC 下的取舍：保存峰值约为「常驻资源 + zip 输出 + 主进程副本」，
+ * 1GB 的稿子在 16GB 机器上可过，8GB 机器仍可能吃紧（真正的大稿走链接图，字节不进文件）。
+ */
+const MAX_SAVE_BYTES = 1024 * 1024 * 1024;
 /** 大文档预告阈值：超过这个体量，zip 是可感知的同步卡顿，先提示一声再动手。 */
 const WARN_SAVE_BYTES = 20 * 1024 * 1024;
 
@@ -113,6 +118,34 @@ function saveEntries(tab: TabSession): { name: string; bytes: Uint8Array }[] {
     ...assetsForSave(tab.store.doc).map((asset) => ({ name: assetEntryName(asset), bytes: asset.bytes })),
     ...fontsForSave(tab.store.doc).map((font) => ({ name: fontEntryName(font), bytes: font.bytes })),
   ];
+}
+
+/**
+ * 「最近打开」的封面：保存 / 打开后顺手画当前活动页。
+ * 任何失败都只是没有封面，不能影响保存或打开——所以整段吞掉并记一行日志。
+ */
+function thumbnailOf(tab: TabSession): Uint8Array | undefined {
+  try {
+    const pageId = tab.view.activePageId ?? firstPageId(tab.store.doc);
+    return renderThumbnail(tab.store.doc, pageId) ?? undefined;
+  } catch (error) {
+    logWarn("thumbnail: render failed", { tab: tab.id, error: errorText(error) });
+    return undefined;
+  }
+}
+
+/** 旧版保存的文件没有封面：打开成功后补一张，失败静默（下次打开再试）。 */
+function backfillThumbnail(tab: TabSession): void {
+  const path = tab.file.path;
+  const mtimeMs = tab.file.mtimeMs;
+  if (!path || mtimeMs <= 0) return;
+  const pageId = tab.view.activePageId ?? firstPageId(tab.store.doc);
+  void renderThumbnailAsync(tab.store.doc, pageId)
+    .then(async (bytes) => {
+      if (!bytes) return;
+      await bridge.recent.putThumbnail({ path, mtimeMs, bytes });
+    })
+    .catch((error) => logWarn("thumbnail: backfill failed", { path, error: errorText(error) }));
 }
 
 /**
@@ -413,6 +446,7 @@ async function adoptFile(file: OpenedFile): Promise<boolean> {
     activateTab(tab.id);
     // 必须在激活之后：registerDocFonts 要遍历新文档的字体表
     void registerDocFonts(state);
+    backfillThumbnail(tab);
     ui.presenter = null;
     logInfo("open: adopted", {
       path: file.path,
@@ -490,10 +524,13 @@ async function runSave(source: SaveSource, tab: TabSession): Promise<boolean> {
       await bridge.dialog.error(overLimitMessage());
       return false;
     }
+    // 封面只画一次：冲突后重试写盘复用同一张，不再渲染
+    const thumbnail = thumbnailOf(tab);
     const result = await bridge.file.save({
       path: tab.file.path,
       bytes,
       expectedMtimeMs: tab.file.mtimeMs,
+      thumbnail,
     });
     logInfo("save: result", {
       source,
@@ -516,7 +553,7 @@ async function runSave(source: SaveSource, tab: TabSession): Promise<boolean> {
     if (choice === "cancel") return false;
     if (choice === "save-as") return runSaveAs(source, "conflict", tab);
 
-    const forced = await bridge.file.save({ path: tab.file.path, bytes, expectedMtimeMs: null });
+    const forced = await bridge.file.save({ path: tab.file.path, bytes, expectedMtimeMs: null, thumbnail });
     logInfo("save: forced result", { source, tab: tab.id, status: forced.status });
     if (forced.status === "ok") return markSaved(tab, forced.mtimeMs, source);
     if (forced.status === "error") {
@@ -572,7 +609,15 @@ async function runSaveAs(
       await bridge.dialog.error(overLimitMessage());
       return false;
     }
-    const result = await bridge.file.saveAs({ suggestedName: suggestedName(tab), bytes });
+    const otherPaths = docTabs()
+      .filter((item) => item.id !== tab.id && item.file.path)
+      .map((item) => item.file.path!);
+    const result = await bridge.file.saveAs({
+      suggestedName: suggestedName(tab),
+      bytes,
+      thumbnail: thumbnailOf(tab),
+      otherPaths,
+    });
     logInfo("save-as: result", {
       source,
       tab: tab.id,
@@ -582,6 +627,11 @@ async function runSaveAs(
       ms: Date.now() - started,
     });
     if (result.status === "canceled") return false;
+    if (result.status === "conflict") {
+      logWarn("save-as: target already open", { tab: tab.id, path: result.path });
+      await bridge.dialog.error(t("file.saveAsConflict", { name: result.name }));
+      return false;
+    }
     if (result.status === "error") {
       logError("save-as: error", { source, message: result.message });
       await bridge.dialog.error(result.message);

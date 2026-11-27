@@ -378,6 +378,8 @@ export function installOnQuit(): void {
         appName: basename(support.appPath ?? "Sqraft.app"),
         // 替换前让脚本校验新包签名与 Team（ADR-0034）；旧版本未签名时为空串，脚本跳过
         expectedTeam: support.appPath ? signingTeamOf(support.appPath) : "",
+        // 替换前再校验一次架构：清单标错时不要把起不来的包换上去（ADR-0046）
+        expectedArch: process.arch,
       });
       logApp("info", "update: installer spawned", { version: state.latestVersion });
     } catch (error) {

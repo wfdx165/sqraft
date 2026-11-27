@@ -21,6 +21,8 @@ import {
   type McpToolInfo,
   type OpenFileResult,
   type OverwriteChoice,
+  type RecentEntry,
+  type RecentThumbnailRequest,
   type SaveAsRequest,
   type SaveAsResult,
   type SaveFileRequest,
@@ -89,7 +91,10 @@ const api: SqraftApi = {
     status: () => ipcRenderer.invoke(CHANNELS.mcpStatusQuery) as Promise<McpStatus>,
   },
   recent: {
-    list: () => ipcRenderer.invoke(CHANNELS.recentList) as Promise<{ path: string; name: string }[]>,
+    list: () => ipcRenderer.invoke(CHANNELS.recentList) as Promise<RecentEntry[]>,
+    putThumbnail: (request: RecentThumbnailRequest) =>
+      ipcRenderer.invoke(CHANNELS.recentThumbnail, request) as Promise<void>,
+    clear: () => ipcRenderer.invoke(CHANNELS.recentClear) as Promise<void>,
   },
   update: {
     state: () => ipcRenderer.invoke(CHANNELS.updateState) as Promise<UpdateState>,

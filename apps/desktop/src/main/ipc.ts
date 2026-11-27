@@ -10,21 +10,29 @@ import {
   type FileStat,
   type OpenFileResult,
   type OverwriteChoice,
+  type RecentThumbnailRequest,
   type SaveAsRequest,
   type SaveAsResult,
   type SaveFileRequest,
   type SaveFileResult,
   type UnsavedChoice,
 } from "../shared/ipc";
-import { mtimeChanged, mtimeOf, writeFileAtomic } from "./files";
+import { mtimeChanged, mtimeOf, samePath, writeFileAtomic } from "./files";
 import { stageDocument } from "./doc-stream";
 import { basename, dirname, join } from "node:path";
 import { stat } from "node:fs/promises";
 import { logApp, logRenderer } from "./mcp/log";
 import {
+  THUMBNAIL_DIR,
+  pruneThumbnails,
+  recentEntries,
+  writeThumbnail,
+} from "./thumbnails";
+import {
   exportPreferences,
   gradientPresetPreferences,
   setGradientPresetPreferences,
+  clearRecentFiles,
   flushPendingOpen,
   forgetRecentFile,
   listRecentFiles,
@@ -42,6 +50,22 @@ const SQRAFT_FILTER = () => [{ name: t("fileFilter.sqraft"), extensions: ["sqraf
 
 function windowOf(sender: Electron.WebContents): BrowserWindow | undefined {
   return BrowserWindow.fromWebContents(sender) ?? undefined;
+}
+
+/** 封面缓存目录：userData/thumbnails（与链接图的 image-cache 分开）。 */
+function thumbnailDir(): string {
+  return join(app.getPath("userData"), THUMBNAIL_DIR);
+}
+
+/** 写封面失败不能影响保存：只记一行日志。 */
+async function rememberThumbnail(path: string, mtimeMs: number, bytes: Uint8Array | undefined): Promise<void> {
+  if (!bytes || bytes.length === 0) return;
+  try {
+    await writeThumbnail(thumbnailDir(), path, mtimeMs, bytes);
+    await pruneThumbnails(thumbnailDir(), listRecentFiles());
+  } catch (error) {
+    logApp("warn", "thumbnail write failed", { path, error: messageOf(error) });
+  }
 }
 
 function messageOf(error: unknown): string {
@@ -164,9 +188,24 @@ export function registerFileChannels(): void {
     shell.showItemInFolder(path);
   });
 
-  ipcMain.handle(CHANNELS.recentList, async () =>
-    listRecentFiles().map((path) => ({ path, name: path.split(/[\\/]/).pop() ?? path })),
+  ipcMain.handle(CHANNELS.recentList, async () => recentEntries(thumbnailDir(), listRecentFiles()));
+
+  ipcMain.handle(
+    CHANNELS.recentThumbnail,
+    async (_event, request: RecentThumbnailRequest): Promise<void> => {
+      if (!request || typeof request.path !== "string" || !request.path) return;
+      if (typeof request.mtimeMs !== "number" || !Number.isFinite(request.mtimeMs)) return;
+      await rememberThumbnail(request.path, request.mtimeMs, request.bytes);
+    },
   );
+
+  ipcMain.handle(CHANNELS.recentClear, async (): Promise<void> => {
+    const before = listRecentFiles().length;
+    await clearRecentFiles();
+    // 列表空了，封面也没有归属：一并删掉，别在 userData 里留孤儿
+    await pruneThumbnails(thumbnailDir(), []).catch(() => undefined);
+    logApp("info", "recent clear", { removed: before });
+  });
 
   ipcMain.on(CHANNELS.fileDropped, (_event, path: string) => {
     if (typeof path === "string" && path) {
@@ -191,6 +230,7 @@ export function registerFileChannels(): void {
         return { status: "conflict", mtimeMs: current ?? 0 };
       }
       const mtimeMs = await writeFileAtomic(request.path, request.bytes);
+      await rememberThumbnail(request.path, mtimeMs, request.thumbnail);
       logApp("info", "file/save ok", { path: request.path, bytes: size, mtimeMs, ms: Date.now() - started });
       return { status: "ok", mtimeMs };
     } catch (error) {
@@ -214,8 +254,18 @@ export function registerFileChannels(): void {
       return { status: "canceled" };
     }
     try {
+      // 另存为可能选到另一个标签已经在编辑的文件：两边各有撤销栈，后保存的会覆盖前一个。
+      // 在写盘之前拦住，文件保持原样，让用户换个名字或先关掉那个标签。
+      const otherPaths = Array.isArray(request.otherPaths)
+        ? request.otherPaths.filter((path): path is string => typeof path === "string" && path.length > 0)
+        : [];
+      if (otherPaths.some((path) => samePath(path, result.filePath))) {
+        logApp("warn", "file/save-as already open", { path: result.filePath, others: otherPaths.length });
+        return { status: "conflict", path: result.filePath, name: basename(result.filePath) };
+      }
       const mtimeMs = await writeFileAtomic(result.filePath, request.bytes);
       await touchRecentFile(result.filePath);
+      await rememberThumbnail(result.filePath, mtimeMs, request.thumbnail);
       logApp("info", "file/save-as ok", {
         path: result.filePath,
         bytes: request.bytes?.length ?? 0,

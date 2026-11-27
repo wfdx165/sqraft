@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import { computed } from "vue";
+import { computed, nextTick } from "vue";
 import { createEmptyDoc, createNode, firstPageId } from "@sqraft/core";
 import { activateTab, docStore, hooks, ui } from "./store";
 import { MAX_DOC_TABS, closeTab, createDocTab, docTabs, moveTab, resetSessions, sessionState } from "./sessions";
@@ -47,12 +47,15 @@ function openTab(offset: number) {
 describe("多标签会话", () => {
   beforeEach(reset);
 
-  it("3 个标签各切 30 次：选区 / 撤销栈 / 视口都不串", () => {
+  it("3 个标签各切 30 次：选区 / 撤销栈 / 视口都不串", async () => {
     const a = openTab(0);
+    await nextTick();
     view.x = 10;
     const b = openTab(100);
+    await nextTick();
     view.x = 200;
     const c = openTab(200);
+    await nextTick();
     view.x = 300;
 
     const expected = [
@@ -64,6 +67,8 @@ describe("多标签会话", () => {
     for (let i = 0; i < 30; i += 1) {
       for (const entry of expected) {
         activateTab(entry.tab.tabId);
+        // 视口恢复推迟到画布挂载之后（nextTick）
+        await nextTick();
         expect(ui.selection).toEqual([entry.tab.rectId]);
         expect(ui.activePageId).toBe(entry.tab.pageId);
         // 撤销栈跟着标签走：三个标签各建了两条记录
@@ -89,17 +94,44 @@ describe("多标签会话", () => {
     expect(ui.selection).toEqual([b.rectId]);
   });
 
-  it("首次激活走适配，之后用记住的视口", () => {
+  it("首次激活走适配，之后用记住的视口", async () => {
     const tab = createDocTab(createEmptyDoc());
     activateTab(tab.id);
+    await nextTick();
     expect(view).toEqual({ x: -200, y: -150, zoom: 1 });
 
     view.x = 42;
     view.y = 43;
     view.zoom = 2;
     activateTab("home");
+    await nextTick();
     activateTab(tab.id);
+    // 视口恢复推迟到画布挂载之后（nextTick），从 Home 回来也能还原
+    await nextTick();
     expect(view).toEqual({ x: 42, y: 43, zoom: 2 });
+  });
+
+  it("从 Home 切回文档时，视口恢复发生在 DOM 更新之后", async () => {
+    const tab = createDocTab(createEmptyDoc());
+    activateTab(tab.id);
+    await nextTick();
+    view.x = 7;
+    view.y = 8;
+    view.zoom = 1.5;
+    activateTab("home");
+    await nextTick();
+    const homeView = { ...view };
+
+    // 模拟画布卸载：hooks 在这段时间里是空实现
+    const restore = hooks.restoreViewport;
+    hooks.restoreViewport = () => {};
+    activateTab(tab.id);
+    // 同步阶段还没恢复（画布没挂载）
+    expect(view).toEqual(homeView);
+    // 挂载后恢复
+    hooks.restoreViewport = restore;
+    await nextTick();
+    expect(view).toEqual({ x: 7, y: 8, zoom: 1.5 });
   });
 
   it("Home 不可关，也不允许写文档", () => {
@@ -172,6 +204,45 @@ describe("多标签会话", () => {
 
     closeTab(a.id);
     expect(ids.value).toEqual([b.id]);
+  });
+
+  it("拖拽排序：向左与向右都占据落点标签的位置", () => {
+    const a = createDocTab(createEmptyDoc());
+    const b = createDocTab(createEmptyDoc());
+    const c = createDocTab(createEmptyDoc());
+
+    // A 拖到 C：占据 C 的位置，C 前移
+    moveTab(a.id, c.id);
+    expect(docTabs().map((tab) => tab.id)).toEqual([b.id, c.id, a.id]);
+
+    // 再拖回来：占据 B 的位置
+    moveTab(a.id, b.id);
+    expect(docTabs().map((tab) => tab.id)).toEqual([a.id, b.id, c.id]);
+  });
+
+  it("关闭活动标签后切到右邻，不再对 Home 多调一次 prepareTabSwitch", () => {
+    const a = createDocTab(createEmptyDoc());
+    const b = createDocTab(createEmptyDoc());
+    let calls = 0;
+    const previous = hooks.prepareTabSwitch;
+    hooks.prepareTabSwitch = () => {
+      calls += 1;
+    };
+    try {
+      activateTab(a.id);
+      calls = 0;
+      closeTab(a.id);
+      // activeId 仍短暂指向已删除的 a：这里不应该把 Home 当成"旧文档"收尾
+      activateTab(b.id);
+      expect(calls).toBe(0);
+
+      activateTab("home");
+      calls = 0;
+      activateTab(b.id);
+      expect(calls).toBe(1);
+    } finally {
+      hooks.prepareTabSwitch = previous;
+    }
   });
 
   it("未命名标签在创建时定编号：不重排、不回收", () => {
