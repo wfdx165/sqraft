@@ -45,6 +45,13 @@ not supported (the Windows installer must be built and checked on Windows):
 pnpm dist     # macOS: arm64 + x64 dmg + zip; Windows: Sqraft-Setup-<version>.exe
 ```
 
+The first `pnpm dist` on a machine also downloads the Electron runtime (one zip
+per target architecture, ~130 MB each) into electron-builder's own cache.
+`electron-builder.yml` points `electronDownload.mirror` at the npmmirror
+mirror, so this works without reaching github.com; if that mirror is unreachable
+from your network, override it there (a config value takes precedence over the
+`ELECTRON_MIRROR` environment variable).
+
 ## Project layout
 
 | Path | What lives there |
